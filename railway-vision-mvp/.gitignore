@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local generated certs/keys (regenerate via docker/scripts/generate_local_materials.sh)
+docker/certs/*
+!docker/certs/.gitkeep
+
+docker/keys/*
+!docker/keys/.gitkeep
+
+edge/keys/*
+!edge/keys/.gitkeep

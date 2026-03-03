@@ -1,0 +1,22 @@
+{
+  "input_schema": "image|video",
+  "inputs": {
+    "schema": "image|video"
+  },
+  "model_file_name": "scene_router.bin",
+  "model_format": "bin",
+  "model_hash": "42124197201de43d747e55d68fc595515f52e68c1e49079b43e7cf10165ab998",
+  "model_id": "scene_router",
+  "model_type": "router",
+  "output_schema": "json:bbox,text,confidence",
+  "outputs": {
+    "schema": "json:bbox,text,confidence"
+  },
+  "plugin_name": "heuristic_router",
+  "published_at": "2026-03-03T08:50:35.394299+00:00",
+  "publisher": "railway-platform",
+  "runtime": "python",
+  "schema_version": "1.0",
+  "task_type": "scene_router",
+  "version": "v1.0.1772527831"
+}

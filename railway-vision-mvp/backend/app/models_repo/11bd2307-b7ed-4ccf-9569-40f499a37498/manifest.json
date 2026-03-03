@@ -1,0 +1,22 @@
+{
+  "input_schema": "image|video",
+  "inputs": {
+    "schema": "image|video"
+  },
+  "model_file_name": "car_number_ocr.bin",
+  "model_format": "bin",
+  "model_hash": "fc0eaa9709a0e84a891974e1199e14b63a314c4680f4a4436e8861b8480a2ea9",
+  "model_id": "car_number_ocr",
+  "model_type": "expert",
+  "output_schema": "json:bbox,text,confidence",
+  "outputs": {
+    "schema": "json:bbox,text,confidence"
+  },
+  "plugin_name": "car_number_ocr",
+  "published_at": "2026-03-03T08:56:00.246131+00:00",
+  "publisher": "railway-platform",
+  "runtime": "python",
+  "schema_version": "1.0",
+  "task_type": "car_number_ocr",
+  "version": "v1.0.1772528144"
+}

@@ -1,0 +1,13 @@
+{
+  "input_schema": "image|video",
+  "model_file_name": "mobilenet_ssd_bundle.zip",
+  "model_format": "zip",
+  "model_hash": "3e01d7f88c0d87df9c710afc9b003302629311dde08b5b309746b06adc2e5a8f",
+  "model_id": "bolt_missing_detect",
+  "output_schema": "json:bbox,text,confidence",
+  "published_at": "2026-02-27T08:20:50.327380+00:00",
+  "publisher": "railway-platform",
+  "schema_version": "1.0",
+  "task_type": "bolt_missing_detect",
+  "version": "v1.0.1772180447"
+}

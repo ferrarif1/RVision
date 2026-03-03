@@ -1,0 +1,13 @@
+{
+  "input_schema": "image|video",
+  "model_file_name": "car_number_ocr.bin",
+  "model_format": "bin",
+  "model_hash": "923b69f1e62a1604f0dd8ad841ad8ddd6e218e06d3bc8ca5e9d139e40c09a19d",
+  "model_id": "car_number_ocr",
+  "output_schema": "json:bbox,text,confidence",
+  "published_at": "2026-02-27T08:10:54.214160+00:00",
+  "publisher": "railway-platform",
+  "schema_version": "1.0",
+  "task_type": "car_number_ocr",
+  "version": "v1.0.1772179851"
+}

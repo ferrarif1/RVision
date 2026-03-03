@@ -1,0 +1,119 @@
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    container_name: rv_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: railway_vision
+      POSTGRES_USER: railway
+      POSTGRES_PASSWORD: railway123
+    volumes:
+      - rv_pg_data:/var/lib/postgresql/data
+      - ../backend/app/db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    networks:
+      - rv_net
+
+  redis:
+    image: ${REDIS_IMAGE:-redis:7-alpine}
+    container_name: rv_redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - rv_redis_data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    networks:
+      - rv_net
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.11-slim}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
+    container_name: rv_backend
+    restart: unless-stopped
+    environment:
+      APP_NAME: railway-vision-mvp-backend
+      APP_ENV: dev
+      DATABASE_URL: postgresql+psycopg2://railway:railway123@postgres:5432/railway_vision
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: CHANGE_ME_IN_PROD
+      JWT_EXPIRES_MINUTES: 120
+      MODEL_REPO_PATH: /app/app/models_repo
+      ASSET_REPO_PATH: /app/app/uploads
+      MODEL_SIGNING_PUBLIC_KEY: /app/keys/model_sign_public.pem
+      AUDIT_EXPORT_ENABLED: "true"
+    volumes:
+      - ../backend/app/models_repo:/app/app/models_repo
+      - ../backend/app/uploads:/app/app/uploads
+      - ../docker/keys:/app/keys:ro
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    networks:
+      - rv_net
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        NGINX_BASE_IMAGE: ${NGINX_BASE_IMAGE:-nginx:1.27-alpine}
+    container_name: rv_frontend
+    restart: unless-stopped
+    volumes:
+      - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-8443}:443"
+    networks:
+      - rv_net
+
+  edge-agent:
+    build:
+      context: ../edge
+      dockerfile: Dockerfile
+      args:
+        PYTHON_BASE_IMAGE: ${EDGE_PYTHON_BASE_IMAGE:-python:3.11-slim}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
+    container_name: rv_edge_agent
+    restart: unless-stopped
+    profiles: ["edge"]
+    environment:
+      BACKEND_BASE_URL: https://frontend/api
+      EDGE_DEVICE_CODE: edge-01
+      EDGE_TOKEN: EDGE_TOKEN_CHANGE_ME
+      EDGE_POLL_SECONDS: 10
+      EDGE_CACHE_DIR: /app/cache
+      EDGE_DECRYPT_KEY_PATH: /app/keys/model_decrypt.key
+      EDGE_SIGN_PUBLIC_KEY_PATH: /app/keys/model_sign_public.pem
+      EDGE_INFERENCE_MODE: mock
+      EDGE_PLUGIN_MODULES: ${EDGE_PLUGIN_MODULES:-}
+      VERIFY_TLS: "false"
+    volumes:
+      - ../edge/cache:/app/cache
+      - ../edge/keys:/app/keys:ro
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - rv_net
+
+volumes:
+  rv_pg_data:
+  rv_redis_data:
+
+networks:
+  rv_net:
+    driver: bridge

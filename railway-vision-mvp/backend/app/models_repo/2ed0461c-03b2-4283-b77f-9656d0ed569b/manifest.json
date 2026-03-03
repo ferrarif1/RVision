@@ -1,0 +1,13 @@
+{
+  "input_schema": "image|video",
+  "model_file_name": "yolov8n.pt",
+  "model_format": "pt",
+  "model_hash": "bf7c31d17ec07bb9dee8e82fc3c2ecdb57aac8331f511652cba0b3e45bfe63f3",
+  "model_id": "smoke_1772521634",
+  "output_schema": "json:bbox,text,confidence",
+  "published_at": "2026-03-03T07:07:15.120690+00:00",
+  "publisher": "railway-platform",
+  "schema_version": "1.0",
+  "task_type": "bolt_missing_detect",
+  "version": "v1.0.0"
+}
