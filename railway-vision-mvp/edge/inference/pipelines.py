@@ -734,8 +734,18 @@ def _input_hash(local_asset_path: str) -> str:
 
 def _legacy_pipeline(task: dict[str, Any]) -> dict[str, Any]:
     model = task.get("model") or {}
+    models = task.get("models") if isinstance(task.get("models"), dict) else {}
     task_type = task.get("task_type")
     model_id = model.get("id")
+    if not model_id and models:
+        for candidate_id, candidate_meta in models.items():
+            if not isinstance(candidate_meta, dict):
+                continue
+            if candidate_meta.get("model_code") == task_type or candidate_meta.get("plugin_name") == task_type:
+                model_id = candidate_id
+                break
+        if not model_id:
+            model_id = next(iter(models.keys()), None)
     if not model_id:
         return {"router": {}, "experts": {task_type: []}, "fusion": {"strategy": "priority", "max_experts_per_task": 1}, "thresholds": {}}
     return {

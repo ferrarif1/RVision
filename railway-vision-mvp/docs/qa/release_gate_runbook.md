@@ -15,15 +15,15 @@
 
 1. 编译与基础解析检查
 2. 边缘推理 golden regression
-3. 角色权限与接口契约校验
-4. 审计关键链路校验
-5. demo 闭环的可运行性验证
+3. 训练控制面 smoke
+4. 角色权限与接口契约校验
+5. 审计关键链路校验
+6. demo 闭环的可运行性验证
 
 不在当前门禁范围内的能力要明确写出来：
 
-- 分布式训练控制面
-- 远程训练 worker 调度
-- 训练作业重试与产物回收
+- 真实训练执行引擎
+- 完整远程训练 worker 调度、重试与容量治理
 
 这些属于目标态能力，不能在发布决策时假设已经被验证。
 
@@ -42,6 +42,13 @@
 cd /Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp
 bash docker/scripts/quality_gate.sh
 ```
+
+该命令当前会执行：
+
+- 编译检查
+- 边缘推理 golden checks
+- 后端健康检查
+- `training_control_plane_smoke.py`
 
 ### 4.2 API Parity Regression
 
@@ -83,8 +90,9 @@ bash docker/scripts/go_no_go.sh --wait-seconds 180 --report-dir docs/qa/reports
 ### Runtime / Evidence
 
 1. golden checks 通过
-2. demo 闭环能到达终态
-3. 边缘回传后的运行记录、结果与审计能查询
+2. training control plane smoke 通过
+3. demo 闭环能到达终态
+4. 边缘回传后的运行记录、结果与审计能查询
 
 ## 6. Decision Rules
 

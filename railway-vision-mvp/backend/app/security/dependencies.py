@@ -6,7 +6,7 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
-from app.db.models import Device, User
+from app.db.models import Device, TrainingWorker, User
 from app.security.auth import decode_access_token, verify_password
 from app.security.roles import has_any_role
 
@@ -25,6 +25,13 @@ class AuthUser:
 
 @dataclass
 class EdgeDeviceContext:
+    id: str
+    code: str
+    name: str
+
+
+@dataclass
+class TrainingWorkerContext:
     id: str
     code: str
     name: str
@@ -81,3 +88,18 @@ def get_edge_device(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid edge credentials")
 
     return EdgeDeviceContext(id=device.id, code=device.code, name=device.name)
+
+
+def get_training_worker(
+    x_training_worker_code: str = Header(default=""),
+    x_training_worker_token: str = Header(default=""),
+    db: Session = Depends(get_db),
+) -> TrainingWorkerContext:
+    if not x_training_worker_code or not x_training_worker_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing training worker credentials")
+
+    worker = db.query(TrainingWorker).filter(TrainingWorker.worker_code == x_training_worker_code).first()
+    if not worker or worker.status == "INACTIVE" or not verify_password(x_training_worker_token, worker.auth_token_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid training worker credentials")
+
+    return TrainingWorkerContext(id=worker.id, code=worker.worker_code, name=worker.name)

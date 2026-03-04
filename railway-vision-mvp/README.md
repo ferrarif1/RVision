@@ -13,7 +13,8 @@
 当前实现与目标态要明确区分：
 
 - 当前已实装：边缘推理、Pipeline 编排、模型提交审批发布、结果回传、审计留痕。
-- 当前未实装：真正的分布式训练控制面、远程训练 worker 调度、训练作业管理。
+- 当前已部分实装：训练控制面最小闭环，包含训练作业对象、worker 注册、心跳、拉取作业、受控拉取训练资产/基线模型、候选模型自动回收入库、状态回传。
+- 当前未实装：真正的训练执行引擎、自动验证晋级、完整分布式调度与容量治理。
 - 目标态：平台部署在 `server1` 作为控制面，通过网络分配其他主机资源进行训练与微调。
 
 ## 1. 当前实现状态（MVP）
@@ -57,7 +58,8 @@
   - 模型发布支持记录交付方式（API / 本地解密 / 混合）与授权信息
 - 训练当前状态说明：
   - 当前 MVP 已支持训练/微调相关资产用途与模型提审元数据
-  - 当前 MVP 尚未实现真正的训练作业调度与远程训练主机编排
+  - 当前 MVP 已实现训练作业、远程 worker 接入、训练资产/基线模型受控分发、候选模型自动回收
+  - 当前 MVP 尚未实现真正的训练执行、自动验证晋级与容量调度
   - 相关目标架构见 `docs/cto/adr-0003-remote-training-control-plane.md`
 - 推理演示能力：
   - `car_number_ocr`：车号识别占位（EasyOCR可选 + 规则回退）
@@ -74,8 +76,8 @@
 
 ### 当前不应误判为已完成的能力
 
-- 分布式训练调度
-- 远程训练 worker 管理
+- 真实训练执行与失败重试
+- 训练数据分发与下载鉴权
 - 训练产物自动回收入库与晋级
 
 ## 2. 架构总览
@@ -104,6 +106,7 @@
 - 架构与数据流：[docs/architecture.md](docs/architecture.md)
 - 业务流转图：[docs/business_data_flow.md](docs/business_data_flow.md)
 - 项目组织图：[docs/project_organization.md](docs/project_organization.md)
+- 训练控制面：[docs/training_control_plane.md](docs/training_control_plane.md)
 - 职责权力清单：[docs/company_responsibilities.md](docs/company_responsibilities.md)
 - 模型包规范：[docs/model_package.md](docs/model_package.md)
 - 前端设计语言：[docs/frontend_design_language.md](docs/frontend_design_language.md)
@@ -148,6 +151,7 @@ bash docker/scripts/quality_gate.sh
 - 后端/边缘代码编译检查
 - 边缘推理 golden fixture 回归检查
 - 运行时健康检查（若容器已启动）
+- 训练控制面 smoke 检查，并归档 `docs/qa/reports/training_control_plane_latest.json`
 
 ### 方式D：发布 GO/NO-GO 门禁
 
@@ -200,6 +204,17 @@ bash docker/scripts/go_no_go.sh
 - `GET /results/{result_id}/screenshot`
 - `GET /results/export?task_id=`
 - `GET /audit`
+- `POST /training/jobs`
+- `GET /training/jobs`
+- `GET /training/jobs/{job_id}`
+- `POST /training/workers/register`
+- `GET /training/workers`
+- `POST /training/workers/heartbeat`
+- `POST /training/workers/pull-jobs`
+- `GET /training/workers/pull-asset`
+- `POST /training/workers/pull-base-model`
+- `POST /training/workers/upload-candidate`
+- `POST /training/workers/push-update`
 
 边缘端：
 

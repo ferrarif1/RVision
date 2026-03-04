@@ -20,6 +20,8 @@ from app.core.constants import MODEL_TYPE_EXPERT
 from app.core.constants import MODEL_STATUS_REGISTERED
 from app.core.constants import PIPELINE_STATUS_DRAFT
 from app.core.constants import TASK_STATUS_PENDING
+from app.core.constants import TRAINING_JOB_STATUS_PENDING
+from app.core.constants import TRAINING_WORKER_STATUS_ACTIVE
 from app.db.database import Base
 
 
@@ -76,6 +78,23 @@ class Device(Base):
     status = Column(String(32), nullable=False, default="ACTIVE")
     edge_token_hash = Column(String(255), nullable=False)
     last_seen_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class TrainingWorker(Base):
+    __tablename__ = "training_workers"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    worker_code = Column(String(128), unique=True, nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    status = Column(String(32), nullable=False, default=TRAINING_WORKER_STATUS_ACTIVE, index=True)
+    auth_token_hash = Column(String(255), nullable=False)
+    host = Column(String(255), nullable=True)
+    labels = Column(JSON, nullable=False, default=dict)
+    resources = Column(JSON, nullable=False, default=dict)
+    last_seen_at = Column(DateTime, nullable=True)
+    last_job_at = Column(DateTime, nullable=True)
+    created_by = Column(String(36), ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
@@ -151,6 +170,33 @@ class DataAsset(Base):
     meta = Column("metadata", JSON, nullable=False, default=dict)
     uploaded_by = Column(String(36), ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class TrainingJob(Base):
+    __tablename__ = "training_jobs"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    job_code = Column(String(128), unique=True, nullable=False, index=True)
+    owner_tenant_id = Column(String(36), ForeignKey("tenants.id"), nullable=True, index=True)
+    buyer_tenant_id = Column(String(36), ForeignKey("tenants.id"), nullable=True, index=True)
+    base_model_id = Column(String(36), ForeignKey("models.id", ondelete="SET NULL"), nullable=True, index=True)
+    status = Column(String(32), nullable=False, default=TRAINING_JOB_STATUS_PENDING, index=True)
+    training_kind = Column(String(32), nullable=False, default="finetune")
+    asset_ids = Column(JSON, nullable=False, default=list)
+    validation_asset_ids = Column(JSON, nullable=False, default=list)
+    target_model_code = Column(String(128), nullable=False)
+    target_version = Column(String(64), nullable=False)
+    worker_selector = Column(JSON, nullable=False, default=dict)
+    spec = Column(JSON, nullable=False, default=dict)
+    output_summary = Column(JSON, nullable=False, default=dict)
+    candidate_model_id = Column(String(36), ForeignKey("models.id", ondelete="SET NULL"), nullable=True, index=True)
+    assigned_worker_code = Column(String(128), nullable=True, index=True)
+    error_message = Column(Text, nullable=True)
+    requested_by = Column(String(36), ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    dispatch_count = Column(Integer, nullable=False, default=0)
 
 
 class InferenceTask(Base):

@@ -164,6 +164,46 @@ CREATE TABLE IF NOT EXISTS review_queue (
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS training_workers (
+  id VARCHAR(36) PRIMARY KEY,
+  worker_code VARCHAR(128) NOT NULL UNIQUE,
+  name VARCHAR(255) NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+  auth_token_hash VARCHAR(255) NOT NULL,
+  host VARCHAR(255) NULL,
+  labels JSONB NOT NULL DEFAULT '{}'::jsonb,
+  resources JSONB NOT NULL DEFAULT '{}'::jsonb,
+  last_seen_at TIMESTAMP NULL,
+  last_job_at TIMESTAMP NULL,
+  created_by VARCHAR(36) NOT NULL REFERENCES users(id),
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS training_jobs (
+  id VARCHAR(36) PRIMARY KEY,
+  job_code VARCHAR(128) NOT NULL UNIQUE,
+  owner_tenant_id VARCHAR(36) NULL REFERENCES tenants(id) ON DELETE SET NULL,
+  buyer_tenant_id VARCHAR(36) NULL REFERENCES tenants(id) ON DELETE SET NULL,
+  base_model_id VARCHAR(36) NULL REFERENCES models(id) ON DELETE SET NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+  training_kind VARCHAR(32) NOT NULL DEFAULT 'finetune',
+  asset_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  validation_asset_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  target_model_code VARCHAR(128) NOT NULL,
+  target_version VARCHAR(64) NOT NULL,
+  worker_selector JSONB NOT NULL DEFAULT '{}'::jsonb,
+  spec JSONB NOT NULL DEFAULT '{}'::jsonb,
+  output_summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+  candidate_model_id VARCHAR(36) NULL REFERENCES models(id) ON DELETE SET NULL,
+  assigned_worker_code VARCHAR(128) NULL,
+  error_message TEXT NULL,
+  requested_by VARCHAR(36) NOT NULL REFERENCES users(id),
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  started_at TIMESTAMP NULL,
+  finished_at TIMESTAMP NULL,
+  dispatch_count INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS audit_logs (
   id BIGSERIAL PRIMARY KEY,
   actor_user_id VARCHAR(36) NULL,
@@ -193,6 +233,12 @@ CREATE INDEX IF NOT EXISTS idx_tasks_pipeline_id ON inference_tasks(pipeline_id)
 CREATE INDEX IF NOT EXISTS idx_results_buyer_tenant_id ON inference_results(buyer_tenant_id);
 CREATE INDEX IF NOT EXISTS idx_inference_runs_task_id ON inference_runs(task_id);
 CREATE INDEX IF NOT EXISTS idx_review_queue_task_id ON review_queue(task_id);
+CREATE INDEX IF NOT EXISTS idx_training_workers_status ON training_workers(status);
+CREATE INDEX IF NOT EXISTS idx_training_jobs_status ON training_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_training_jobs_owner_tenant_id ON training_jobs(owner_tenant_id);
+CREATE INDEX IF NOT EXISTS idx_training_jobs_buyer_tenant_id ON training_jobs(buyer_tenant_id);
+CREATE INDEX IF NOT EXISTS idx_training_jobs_candidate_model_id ON training_jobs(candidate_model_id);
+CREATE INDEX IF NOT EXISTS idx_training_jobs_assigned_worker_code ON training_jobs(assigned_worker_code);
 CREATE INDEX IF NOT EXISTS idx_tenants_code ON tenants(tenant_code);
 
 INSERT INTO roles(name) VALUES ('platform_admin') ON CONFLICT(name) DO NOTHING;

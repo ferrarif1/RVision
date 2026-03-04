@@ -1,0 +1,23 @@
+{
+  "input_schema": {
+    "schema": "image|video"
+  },
+  "inputs": {
+    "schema": "image|video"
+  },
+  "model_file_name": "qa_candidate_c63787cf.bin",
+  "model_format": "bin",
+  "model_hash": "f406fce6589839e3c7e973a647b3dada5160915e6b1d158608f721378eb8e91e",
+  "model_id": "qa_candidate_c63787cf",
+  "model_type": "expert",
+  "output_schema": {
+    "schema": "json:bbox,text,confidence"
+  },
+  "outputs": {
+    "schema": "json:bbox,text,confidence"
+  },
+  "plugin_name": "bolt_missing_detect",
+  "runtime": "python",
+  "task_type": "bolt_missing_detect",
+  "version": "v1.1772586363"
+}

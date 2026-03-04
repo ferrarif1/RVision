@@ -24,8 +24,8 @@
 
 - 推理执行链路已实装，运行位置在边缘 Agent / 推理运行时。
 - Pipeline Registry、Orchestrator、Result Store / Audit 已可运行，并支撑 demo 与回归。
-- 训练 / 微调在当前 MVP 中主要是数据用途标记、模型提交、审批、发布和治理流程。
-- 真正的分布式训练控制面还没有落地；`server1` 统一调度远程训练主机是下一阶段目标架构，而不是当前能力。
+- 训练 / 微调在当前 MVP 中已具备最小控制面骨架：训练作业对象、worker 注册、心跳、作业拉取和状态回传。
+- 完整的训练执行、数据分发、产物晋级和容量治理仍未落地；`server1` 统一调度远程训练主机仍处于下一阶段演进中。
 
 ## Unified Business Thread
 
@@ -44,7 +44,7 @@
 - `Pipeline Registry`：一条 Pipeline = 主路由 + 专家映射 + 阈值 + 融合规则 + 人工复核规则。
 - `Orchestrator`：按 router 输出动态拉起专家推理，融合结果并写入运行记录。
 - `Result Store / Audit`：保存 pipeline 版本、阈值版本、输入摘要、输出摘要、耗时、哈希和审计记录。
-- `Training Control Plane`：目标态架构，负责受控训练任务调度、远程 worker 编排、训练产物回收与模型晋级；当前尚未实装。
+- `Training Control Plane`：当前已具备最小骨架，负责训练作业对象、远程 worker 接入与状态流转；完整训练执行、产物回收与模型晋级仍是后续阶段。
 
 ## Track Responsibilities
 
@@ -67,6 +67,8 @@
   平台总体架构、当前能力与目标态边界。
 - [business_data_flow.md](./business_data_flow.md)
   业务流、控制流、审计流与数据分级。
+- [training_control_plane.md](./training_control_plane.md)
+  训练控制面的当前最小实现与后续缺口。
 - [company_responsibilities.md](./company_responsibilities.md)
   平台、供应商、客户三方职责边界。
 - [model_package.md](./model_package.md)

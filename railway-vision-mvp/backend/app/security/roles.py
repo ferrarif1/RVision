@@ -10,6 +10,9 @@ from app.core.constants import PERMISSION_MODEL_SUBMIT
 from app.core.constants import PERMISSION_MODEL_VIEW
 from app.core.constants import PERMISSION_RESULT_READ
 from app.core.constants import PERMISSION_TASK_CREATE
+from app.core.constants import PERMISSION_TRAINING_JOB_CREATE
+from app.core.constants import PERMISSION_TRAINING_JOB_VIEW
+from app.core.constants import PERMISSION_TRAINING_WORKER_MANAGE
 
 ROLE_PLATFORM_ADMIN = "platform_admin"
 ROLE_PLATFORM_OPERATOR = "platform_operator"
@@ -96,6 +99,14 @@ TASK_READ_ROLES = (
 )
 RESULT_READ_ROLES = TASK_READ_ROLES
 AUDIT_READ_ROLES = (ROLE_PLATFORM_ADMIN, ROLE_PLATFORM_AUDITOR)
+TRAINING_JOB_CREATE_ROLES = (ROLE_PLATFORM_ADMIN, ROLE_PLATFORM_OPERATOR)
+TRAINING_JOB_READ_ROLES = (
+    ROLE_PLATFORM_ADMIN,
+    ROLE_PLATFORM_OPERATOR,
+    ROLE_PLATFORM_AUDITOR,
+    ROLE_SUPPLIER_ENGINEER,
+)
+TRAINING_WORKER_ADMIN_ROLES = (ROLE_PLATFORM_ADMIN,)
 
 
 def build_ui_capabilities(user_roles: list[str]) -> dict[str, bool]:
@@ -109,6 +120,9 @@ def build_ui_capabilities(user_roles: list[str]) -> dict[str, bool]:
         "task_create": has_any_role(user_roles, TASK_CREATE_ROLES),
         "result_read": has_any_role(user_roles, RESULT_READ_ROLES),
         "audit_read": has_any_role(user_roles, AUDIT_READ_ROLES),
+        "training_job_view": has_any_role(user_roles, TRAINING_JOB_READ_ROLES),
+        "training_job_create": has_any_role(user_roles, TRAINING_JOB_CREATE_ROLES),
+        "training_worker_manage": has_any_role(user_roles, TRAINING_WORKER_ADMIN_ROLES),
     }
 
 
@@ -136,6 +150,12 @@ def build_permissions(user_roles: list[str]) -> list[str]:
         permissions.append(PERMISSION_RESULT_READ)
     if caps["audit_read"]:
         permissions.append(PERMISSION_AUDIT_READ)
+    if caps["training_job_view"]:
+        permissions.append(PERMISSION_TRAINING_JOB_VIEW)
+    if caps["training_job_create"]:
+        permissions.append(PERMISSION_TRAINING_JOB_CREATE)
+    if caps["training_worker_manage"]:
+        permissions.append(PERMISSION_TRAINING_WORKER_MANAGE)
 
     # L3 read is intentionally strict.
     if has_any_role(user_roles, (ROLE_PLATFORM_ADMIN, ROLE_PLATFORM_AUDITOR, ROLE_ADMIN, ROLE_AUDITOR)):

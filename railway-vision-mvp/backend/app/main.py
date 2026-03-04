@@ -3,7 +3,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import assets, audit, auth, edge, models, pipelines, results, tasks, users
+from app.api import assets, audit, auth, edge, models, pipelines, results, tasks, training, users
 from app.core.config import get_settings
 from app.db.database import SessionLocal
 from app.services.bootstrap_service import bootstrap_defaults, initialize_database
@@ -44,6 +44,7 @@ app.include_router(models.router)
 app.include_router(pipelines.router)
 app.include_router(assets.router)
 app.include_router(tasks.router)
+app.include_router(training.router)
 app.include_router(results.router)
 app.include_router(audit.router)
 app.include_router(edge.router)

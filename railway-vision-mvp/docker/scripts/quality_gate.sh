@@ -13,9 +13,17 @@ PYTHONPATH="${ROOT_DIR}/edge" python -m inference.golden_checks
 echo "[info] quality gate: backend health (optional)"
 if curl -ksSf https://localhost:8443/api/health >/dev/null 2>&1; then
   echo "[ok] backend health endpoint reachable via frontend gateway"
+elif curl -sSf http://localhost:8000/health >/dev/null 2>&1; then
+  echo "[ok] backend health endpoint reachable at http://localhost:8000/health"
 else
   echo "[warn] health endpoint not reachable at https://localhost:8443/api/health"
   echo "[warn] start docker compose before full runtime checks"
+  echo "[warn] training control plane smoke skipped"
+  echo "[ok] quality gate passed"
+  exit 0
 fi
+
+echo "[info] quality gate: training control plane smoke"
+python3 "${ROOT_DIR}/docker/scripts/training_control_plane_smoke.py"
 
 echo "[ok] quality gate passed"
