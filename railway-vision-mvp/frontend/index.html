@@ -74,13 +74,14 @@
 
       <section id="mainView" class="hidden">
         <header class="topbar">
-          <div class="topbar-left">
+          <button class="topbar-home-link" type="button" onclick="switchPage('dashboard')" aria-label="返回主页">
             <div class="brand-icon" aria-hidden="true"></div>
             <div>
               <h1 class="topbar-title">VisionHub 控制台</h1>
-              <div class="topbar-sub">开始 / 模型 / 资产 / 执行 / 结果 / 更多</div>
+              <div class="topbar-sub">主页 / 模型 / 资产 / 执行 / 结果</div>
             </div>
-          </div>
+          </button>
+          <nav id="topbarNav" class="topbar-nav" aria-label="主导航"></nav>
           <div class="global-search">
             <span class="search-icon">⌕</span>
             <input id="globalSearch" placeholder="搜索模型ID、任务ID、资产ID、审计动作" aria-label="全局搜索" />
@@ -125,33 +126,39 @@
               <div class="asset-page-shell dashboard-page-shell stacking-shell">
                 <section class="stacking-hero">
                   <div class="stacking-kicker">开始</div>
-                  <h2 id="dashboardHeroTitle" class="stacking-hero-title">先看清 3 步，再开始操作。</h2>
-                  <p id="dashboardHeroDesc" class="stacking-hero-desc">先做什么，再做什么，最后得到什么，都在这里。</p>
+                  <h2 id="dashboardHeroTitle" class="stacking-hero-title">四条业务线，一眼看清谁在做什么。</h2>
+                  <p id="dashboardHeroDesc" class="stacking-hero-desc">从客户数据准备，到供应商迭代，到平台审批发布，再到授权设备执行，首页直接说明白。</p>
                   <div id="dashboardHeroActions" class="action-strip"></div>
                   <div class="stacking-footnote">* 数据基于当前账号可见范围。</div>
                 </section>
 
-                <div class="metric-grid stacking-metrics" id="dashboardMetrics">
-                  <div class="metric"><div class="metric-label">模型</div><div class="metric-value" id="mModels">-</div></div>
-                  <div class="metric"><div class="metric-label">任务</div><div class="metric-value" id="mTasks">-</div></div>
-                  <div class="metric"><div class="metric-label">成功</div><div class="metric-value" id="mSucceeded">-</div></div>
-                  <div class="metric"><div class="metric-label">告警</div><div class="metric-value" id="mAlerts">-</div></div>
-                </div>
-
                 <section class="stacking-section">
                   <div class="stacking-section-head">
-                    <h3 class="stacking-section-title">三步完成</h3>
-                    <p class="stacking-section-desc">先做什么，再做什么，最后得到什么。</p>
+                    <h3 class="stacking-section-title">四条业务线</h3>
+                    <p class="stacking-section-desc">四个角色的责任边界、下一步动作和对应页面都在这里。</p>
                   </div>
                   <div id="dashboardLanes" class="stacking-option-grid"></div>
                 </section>
 
                 <section class="stacking-section">
                   <div class="stacking-section-head">
-                    <h3 class="stacking-section-title">更多入口</h3>
-                    <p class="stacking-section-desc">常用流程之外的高级页面。</p>
+                    <h3 class="stacking-section-title">按当前角色开始</h3>
+                    <p class="stacking-section-desc">你现在最适合先做的页面和顺序。</p>
                   </div>
                   <div id="dashboardQuick" class="stacking-option-grid"></div>
+                </section>
+
+                <section class="stacking-section">
+                  <div class="stacking-section-head">
+                    <h3 class="stacking-section-title">当前概览</h3>
+                    <p class="stacking-section-desc">用来快速了解当前账号下的模型、任务和结果情况。</p>
+                  </div>
+                  <div class="metric-grid stacking-metrics" id="dashboardMetrics">
+                    <div class="metric"><div class="metric-label">模型</div><div class="metric-value" id="mModels">-</div></div>
+                    <div class="metric"><div class="metric-label">任务</div><div class="metric-value" id="mTasks">-</div></div>
+                    <div class="metric"><div class="metric-label">成功</div><div class="metric-value" id="mSucceeded">-</div></div>
+                    <div class="metric"><div class="metric-label">告警</div><div class="metric-value" id="mAlerts">-</div></div>
+                  </div>
                 </section>
 
                 <section class="stacking-section">
@@ -219,7 +226,7 @@
                             </select>
                           </div>
                         </div>
-                        <details class="advanced-block">
+                        <details class="advanced-block" data-expert-only="true">
                           <summary>高级配置</summary>
                           <div class="stack">
                             <label>插件标识</label>
@@ -366,7 +373,7 @@
                         <select id="pipelineRouterModelId">
                           <option value="">无主路由</option>
                         </select>
-                        <details class="advanced-block">
+                        <details class="advanced-block" data-expert-only="true">
                           <summary>高级配置</summary>
                           <div class="stack">
                             <label>专家映射(JSON)</label>
@@ -517,89 +524,107 @@
                 <section class="stacking-section">
                   <div class="stacking-section-head">
                     <h3 class="stacking-section-title">创建任务</h3>
-                    <p class="stacking-section-desc">填写参数后提交。</p>
+                    <p class="stacking-section-desc">默认只填流水线、资产 ID 和设备代码即可开始。</p>
                   </div>
                   <article class="card asset-upload-card">
                     <div class="stack asset-upload-form">
+                      <div class="compact-banner">
+                        <div class="compact-banner-title">先填 3 项，再创建任务。</div>
+                        <div class="compact-banner-desc">兼容模式、推荐模型和 JSON 配置都放在下方折叠区。</div>
+                      </div>
                       <div class="row-2">
-                        <div class="field-group">
-                          <label for="schedulerMode">执行入口</label>
-                          <select id="schedulerMode" onchange="updateTaskSchedulerMode()">
-                            <option value="pipeline" selected>Pipeline 编排（推荐）</option>
-                            <option value="master">主模型调度（兼容）</option>
-                            <option value="manual">手动指定模型（兼容）</option>
+                        <div class="field-group" id="taskPipelineField">
+                          <label for="taskPipelineId">流水线 <span class="required-mark">*</span></label>
+                          <select id="taskPipelineId">
+                            <option value="">加载后选择可用流水线</option>
                           </select>
                         </div>
+                        <div class="field-group">
+                          <label for="assetId">资产ID <span class="required-mark">*</span></label>
+                          <input id="assetId" placeholder="输入或自动回填" />
+                          <div class="muted-note">上传资产后会自动回填最近一次资产 ID。</div>
+                        </div>
+                      </div>
+                      <div class="row-2">
                         <div class="field-group">
                           <label for="deviceCode">设备代码</label>
                           <input id="deviceCode" value="edge-01" />
                         </div>
-                      </div>
-                      <div class="field-group">
-                        <label for="taskIntent">业务描述</label>
-                        <input id="taskIntent" placeholder="例如：车厢侧面车号与紧固件联合巡检，优先适配 edge-01" />
-                      </div>
-                      <div class="field-group" id="taskPipelineField">
-                        <label for="taskPipelineId">流水线</label>
-                        <select id="taskPipelineId">
-                          <option value="">加载后选择可用流水线</option>
-                        </select>
-                      </div>
-                      <div class="field-group" id="taskModelField">
-                        <label for="taskModelId">模型ID（手动模式必填）</label>
-                        <input id="taskModelId" placeholder="自动调度可留空；手动模式填写模型ID" />
-                      </div>
-                      <div class="field-group">
-                        <label for="assetId">资产ID</label>
-                        <input id="assetId" placeholder="输入或自动回填" />
-                      </div>
-                      <div class="row-2">
-                        <div class="field-group" id="taskTypeField">
-                          <label for="taskType">任务类型</label>
-                          <select id="taskType">
-                            <option value="">自动识别</option>
-                            <option value="car_number_ocr">车号识别</option>
-                            <option value="bolt_missing_detect">螺栓缺失</option>
-                          </select>
-                        </div>
                         <div class="field-group">
-                          <label for="taskCameraId">相机ID</label>
-                          <input id="taskCameraId" placeholder="例如：cam-yard-01" />
+                          <label for="taskIntent">业务描述</label>
+                          <input id="taskIntent" placeholder="例如：车厢侧面车号与紧固件联合巡检" />
+                          <div class="muted-note">可选。不填时系统按流水线和资产直接执行。</div>
                         </div>
                       </div>
-                      <div class="row-2">
-                        <div class="field-group">
-                          <label for="taskSceneHint">场景提示</label>
-                          <input id="taskSceneHint" placeholder="例如：wagon-side / bogie-close-up" />
-                        </div>
-                        <div class="field-group">
-                          <label for="taskDeviceType">设备类型</label>
-                          <input id="taskDeviceType" placeholder="例如：edge-gpu-box" />
-                        </div>
-                      </div>
-                      <details class="advanced-block">
-                        <summary>高级配置</summary>
-                        <div class="stack">
-                          <div class="field-group">
-                            <label for="taskContextJson">上下文(JSON)</label>
-                            <textarea id="taskContextJson">{"scene_hint":"","device_type":"","camera_id":"","job_id":"","timestamp":""}</textarea>
-                          </div>
-                          <div class="field-group">
-                            <label for="taskOptionsJson">执行选项(JSON)</label>
-                            <textarea id="taskOptionsJson">{"thresholds":{},"max_experts":2,"return_intermediate":true}</textarea>
-                          </div>
-                          <div class="field-group">
-                            <label for="policyJson">数据策略(JSON)</label>
-                            <textarea id="policyJson">{"upload_raw_video": false, "upload_frames": true, "desensitize_frames": false}</textarea>
-                          </div>
-                        </div>
-                      </details>
                       <div class="action-strip">
                         <button id="btnPipelineRefresh" class="ghost" onclick="loadPipelines()">刷新流水线</button>
-                        <button id="btnTaskRecommend" class="ghost" onclick="recommendTaskModel(this)">推荐模型</button>
+                        <button id="btnUseLastAsset" class="ghost" onclick="fillLastAssetId()">带入最近资产</button>
                         <button id="btnTaskCreate" onclick="createTask(this)">创建任务</button>
                       </div>
-                      <div class="muted-note" id="taskSchedulerHint">当前为 Pipeline 编排模式，优先选择流水线并填写上下文与执行选项。</div>
+                      <details id="taskAdvancedSettings" class="advanced-block">
+                        <summary>兼容与高级设置</summary>
+                        <div class="stack">
+                          <div class="row-2" data-compat-only="true">
+                            <div class="field-group">
+                              <label for="schedulerMode">执行入口</label>
+                              <select id="schedulerMode" onchange="updateTaskSchedulerMode()">
+                                <option value="pipeline" selected>Pipeline 编排（推荐）</option>
+                                <option value="master">主模型调度（兼容）</option>
+                                <option value="manual">手动指定模型（兼容）</option>
+                              </select>
+                            </div>
+                            <div class="field-group" id="taskModelField">
+                              <label for="taskModelId">模型ID</label>
+                              <input id="taskModelId" placeholder="仅手动模式需要填写模型ID" />
+                            </div>
+                          </div>
+                          <div class="row-2">
+                            <div class="field-group" id="taskTypeField">
+                              <label for="taskType">任务类型</label>
+                              <select id="taskType">
+                                <option value="">自动识别</option>
+                                <option value="car_number_ocr">车号识别</option>
+                                <option value="bolt_missing_detect">螺栓缺失</option>
+                              </select>
+                            </div>
+                            <div class="field-group">
+                              <label for="taskCameraId">相机ID</label>
+                              <input id="taskCameraId" placeholder="例如：cam-yard-01" />
+                            </div>
+                          </div>
+                          <div class="row-2">
+                            <div class="field-group">
+                              <label for="taskSceneHint">场景提示</label>
+                              <input id="taskSceneHint" placeholder="例如：wagon-side / bogie-close-up" />
+                            </div>
+                            <div class="field-group">
+                              <label for="taskDeviceType">设备类型</label>
+                              <input id="taskDeviceType" placeholder="例如：edge-gpu-box" />
+                            </div>
+                          </div>
+                          <div class="action-strip" data-compat-only="true">
+                            <button id="btnTaskRecommend" class="ghost" onclick="recommendTaskModel(this)">推荐模型</button>
+                          </div>
+                          <div class="muted-note" id="taskSchedulerHint">当前为 Pipeline 编排模式，优先选择流水线并填写资产 ID。</div>
+                          <details class="advanced-block" data-expert-only="true">
+                            <summary>专家配置</summary>
+                            <div class="stack">
+                              <div class="field-group">
+                                <label for="taskContextJson">上下文(JSON)</label>
+                                <textarea id="taskContextJson">{"scene_hint":"","device_type":"","camera_id":"","job_id":"","timestamp":""}</textarea>
+                              </div>
+                              <div class="field-group">
+                                <label for="taskOptionsJson">执行选项(JSON)</label>
+                                <textarea id="taskOptionsJson">{"thresholds":{},"max_experts":2,"return_intermediate":true}</textarea>
+                              </div>
+                              <div class="field-group">
+                                <label for="policyJson">数据策略(JSON)</label>
+                                <textarea id="policyJson">{"upload_raw_video": false, "upload_frames": true, "desensitize_frames": false}</textarea>
+                              </div>
+                            </div>
+                          </details>
+                        </div>
+                      </details>
                     </div>
                   </article>
                 </section>
@@ -615,10 +640,26 @@
                 <section id="taskResultSection" class="stacking-section asset-result hidden" aria-live="polite">
                   <div class="stacking-section-head">
                     <h3 class="stacking-section-title">任务已创建</h3>
-                    <p class="stacking-section-desc">可直接查看任务状态。</p>
+                    <p class="stacking-section-desc">任务 ID、执行入口和下一步会显示在这里。</p>
                   </div>
                   <div class="output" id="taskOut"></div>
                   <div class="mask-tip hidden" id="taskOutMaskTip">部分 L3 字段已脱敏</div>
+                </section>
+
+                <section id="taskInlineStatusSection" class="stacking-section asset-result hidden" aria-live="polite">
+                  <div class="stacking-section-head">
+                    <h3 class="stacking-section-title">任务进度</h3>
+                    <p class="stacking-section-desc">创建后会自动跟踪当前任务状态。</p>
+                  </div>
+                  <div class="output" id="taskInlineStatusOut"></div>
+                </section>
+
+                <section id="taskInlineResultSection" class="stacking-section asset-result hidden" aria-live="polite">
+                  <div class="stacking-section-head">
+                    <h3 class="stacking-section-title">结果预览</h3>
+                    <p class="stacking-section-desc">任务完成后会在这里显示首批结果。</p>
+                  </div>
+                  <div class="output" id="taskInlineResultOut"></div>
                 </section>
               </div>
             </section>

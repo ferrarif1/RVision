@@ -46,10 +46,10 @@
       const PAGE_META = {
         dashboard: {
           title: "开始",
-          desc: "先完成当前角色最常见的 3 步。",
+          desc: "先看清四条业务线，再按当前角色进入对应页面。",
           steps: [
-            { title: "看清路径", desc: "先看当前角色最常见的 3 步。" },
-            { title: "进入操作", desc: "从常用入口进入模型、资产、执行或结果页面。" },
+            { title: "看清四条线", desc: "先知道客户、供应商、平台和设备分别做什么。" },
+            { title: "按角色开始", desc: "从当前角色最适合的入口进入操作。" },
           ],
         },
         models: {
@@ -81,11 +81,11 @@
         },
         tasks: {
           title: "执行",
-          desc: "选择流水线并创建一次执行任务。",
+          desc: "默认只需流水线、资产 ID 和设备代码。",
           steps: [
             { title: "选择流水线", desc: "默认使用 Pipeline。" },
-            { title: "填写关键输入", desc: "只填资产、场景和设备。" },
-            { title: "创建任务", desc: "系统会固化版本和策略。" },
+            { title: "填写关键输入", desc: "先填资产 ID 和设备代码。" },
+            { title: "创建任务", desc: "创建后会自动跟踪状态和结果。" },
           ],
         },
         "task-monitor": {
@@ -133,6 +133,53 @@
         { title: "更多", pages: SECONDARY_NAV_IDS },
       ];
 
+      const BUSINESS_LINES = [
+        {
+          code: "01",
+          role: "客户用户",
+          title: "上传资产",
+          desc: "客户用户上传图片或视频资产，资产可用于训练、微调、测试验收或推理。",
+          next: "上传后拿到资产 ID，再进入执行页创建任务。",
+          page: "assets",
+          action: "进入资产",
+          perm: PERMISSIONS.ASSET_UPLOAD,
+          tags: ["图片", "视频", "训练", "微调", "测试验收", "推理"],
+        },
+        {
+          code: "02",
+          role: "供应商",
+          title: "提交候选成果模型",
+          desc: "供应商上传初始算法与可选预训练模型，在平台受控环境内结合客户数据反复微调，形成候选成果模型并提交审批。",
+          next: "先进入模型页提交模型包，再等待平台审批。",
+          page: "models",
+          action: "进入模型",
+          perm: PERMISSIONS.MODEL_VIEW,
+          tags: ["初始算法", "预训练模型", "微调", "候选成果模型"],
+        },
+        {
+          code: "03",
+          role: "平台管理员",
+          title: "验证并发布模型",
+          desc: "平台管理员结合客户测试数据验证模型有效性，审批并发布模型。",
+          next: "审批通过后继续配置交付方式和发布范围。",
+          page: "models",
+          action: "进入审批发布",
+          perm: PERMISSIONS.MODEL_VIEW,
+          tags: ["测试数据", "审批", "发布", "交付"],
+        },
+        {
+          code: "04",
+          role: "授权设备",
+          title: "授权后执行与调用",
+          desc: "授权客户设备通过模型 API 或授权密钥使用加密模型，本地运行时完成解密。",
+          next: "客户在执行页选择流水线，设备按授权方式调用已发布能力。",
+          page: "tasks",
+          action: "进入执行",
+          perm: PERMISSIONS.TASK_CREATE,
+          tags: ["模型 API", "授权密钥", "加密模型", "本地解密"],
+        },
+      ];
+
       const state = {
         token: localStorage.getItem("rv_token") || "",
         user: null,
@@ -151,6 +198,7 @@
         auditRows: [],
         taskMonitorAuto: false,
         taskMonitorTimer: null,
+        taskFollowTimer: null,
         modelPage: 1,
         drawerLastFocus: null,
       };
@@ -281,6 +329,37 @@
         return "platform";
       }
 
+      function usesSimpleExecutionFlow() {
+        return roleFamily() === "buyer";
+      }
+
+      function canSeeExpertConfig() {
+        const family = roleFamily();
+        return family === "platform" || family === "supplier";
+      }
+
+      function canUseCompatibilityModes() {
+        return roleFamily() !== "buyer";
+      }
+
+      function openTaskAdvancedSettings(open = true) {
+        const details = document.getElementById("taskAdvancedSettings");
+        if (!details) return;
+        details.open = !!open;
+      }
+
+      function stopTaskFollowAuto() {
+        if (state.taskFollowTimer) {
+          window.clearInterval(state.taskFollowTimer);
+          state.taskFollowTimer = null;
+        }
+      }
+
+      function isTerminalTaskStatus(status) {
+        const value = String(status || "").toUpperCase();
+        return ["SUCCEEDED", "FAILED", "ERROR", "CANCELLED"].includes(value);
+      }
+
       function nextAllowedPage(pageId = state.page) {
         const index = FLOW_STEPS.findIndex((item) => item.id === pageId);
         if (index < 0) return "";
@@ -313,6 +392,27 @@
           <strong>${escapeHtml(stage.title)}</strong>
           <p>${escapeHtml(meta.desc)}</p>
           ${next ? `<div class="sidebar-note-tail">下一步：${escapeHtml(next.title)}</div>` : ""}`;
+      }
+
+      function topbarPageLabel(pageId) {
+        if (pageId === "dashboard") return "主页";
+        return pageConfig(pageId)?.label || pageId;
+      }
+
+      function buildTopbarNav() {
+        const root = document.getElementById("topbarNav");
+        if (!root) return;
+        const pages = PRIMARY_NAV_IDS.filter((pageId) => hasPermission(pageConfig(pageId)?.perm));
+        root.innerHTML = pages
+          .map(
+            (pageId) => `<button class="topbar-nav-btn" type="button" data-page="${pageId}" aria-current="false">${escapeHtml(
+              topbarPageLabel(pageId)
+            )}</button>`
+          )
+          .join("");
+        root.querySelectorAll(".topbar-nav-btn").forEach((btn) => {
+          btn.onclick = () => switchPage(btn.dataset.page, { updateHash: true });
+        });
       }
 
       function renderPageCommandBar(pageId) {
@@ -1203,6 +1303,9 @@
         if (state.page === "task-monitor" && pageId !== "task-monitor" && state.taskMonitorAuto) {
           stopTaskMonitorAuto();
         }
+        if (state.page === "tasks" && pageId !== "tasks") {
+          stopTaskFollowAuto();
+        }
         state.page = pageId;
 
         document.querySelectorAll(".page").forEach((el) => el.classList.remove("active"));
@@ -1213,7 +1316,7 @@
           page.setAttribute("aria-hidden", "false");
         }
 
-        document.querySelectorAll(".nav-btn, .minimal-nav-btn").forEach((el) => {
+        document.querySelectorAll(".nav-btn, .minimal-nav-btn, .topbar-nav-btn").forEach((el) => {
           el.classList.toggle("active", el.dataset.page === pageId);
           el.setAttribute("aria-current", el.dataset.page === pageId ? "page" : "false");
         });
@@ -1244,6 +1347,7 @@
       function buildNav() {
         const nav = document.getElementById("navList");
         if (nav) nav.innerHTML = "";
+        buildTopbarNav();
 
         if (nav) {
           nav.innerHTML = NAV_GROUPS.map((group) => {
@@ -1343,6 +1447,8 @@
         const canSubmit = hasPermission(PERMISSIONS.MODEL_SUBMIT);
         const canApprove = hasPermission(PERMISSIONS.MODEL_APPROVE);
         const canRelease = hasPermission(PERMISSIONS.MODEL_RELEASE);
+        const expertVisible = canSeeExpertConfig();
+        const compatVisible = canUseCompatibilityModes();
 
         document.getElementById("modelSubmitCard").classList.toggle("hidden", !canSubmit);
         document.getElementById("modelReleaseCard").classList.toggle("hidden", !(canApprove || canRelease));
@@ -1350,6 +1456,21 @@
         document.getElementById("pipelineRegisterCard")?.classList.toggle("hidden", !canRelease);
         document.getElementById("pipelineReleaseCard")?.classList.toggle("hidden", !canRelease);
         document.getElementById("pipelineReadonlyCard")?.classList.toggle("hidden", !!canRelease);
+        document.querySelectorAll("[data-expert-only='true']").forEach((el) => el.classList.toggle("hidden", !expertVisible));
+        document.querySelectorAll("[data-compat-only='true']").forEach((el) => el.classList.toggle("hidden", !compatVisible));
+        document.body.dataset.roleFamily = roleFamily();
+        const taskAdvancedSummary = document.querySelector("#taskAdvancedSettings > summary");
+        if (taskAdvancedSummary) {
+          taskAdvancedSummary.textContent = usesSimpleExecutionFlow() ? "补充上下文（可选）" : "兼容与高级设置";
+        }
+        if (!compatVisible) {
+          const schedulerMode = document.getElementById("schedulerMode");
+          if (schedulerMode) schedulerMode.value = "pipeline";
+        }
+        if (usesSimpleExecutionFlow()) {
+          openTaskAdvancedSettings(false);
+        }
+        updateTaskSchedulerMode();
 
         const healthBadge = document.getElementById("healthBadge");
         healthBadge.textContent = "系统就绪";
@@ -1410,6 +1531,7 @@
 
       function logout() {
         stopTaskMonitorAuto();
+        stopTaskFollowAuto();
         state.token = "";
         state.user = null;
         state.permissions = new Set();
@@ -1436,6 +1558,7 @@
         if (mode) mode.value = "manual";
         document.getElementById("taskModelId").value = modelId;
         document.getElementById("modelId").value = modelId;
+        openTaskAdvancedSettings(true);
         updateTaskSchedulerMode();
         renderModelSummary();
         renderModelLifecycle();
@@ -1449,6 +1572,16 @@
           const el = document.getElementById(id);
           if (el) el.value = taskId || "";
         });
+      }
+
+      function fillLastAssetId() {
+        if (!state.lastAssetId) {
+          toast("当前还没有最近上传的资产", "warn");
+          focusField("assetFile");
+          return;
+        }
+        document.getElementById("assetId").value = state.lastAssetId;
+        toast("已带入最近上传资产", "ok");
       }
 
       function focusGlobalSearch() {
@@ -1729,7 +1862,7 @@
               const source = modelSourceTypeLabel(meta.model_source_type);
               const dataset = meta.dataset_label ? `<div class="muted-note">数据批次：${escapeHtml(safe(meta.dataset_label))}</div>` : "";
               const round = meta.training_round ? `<div class="muted-note">微调轮次：${escapeHtml(safe(meta.training_round))}</div>` : "";
-              return `<article class="minimal-item">
+	              return `<article class="minimal-item">
             <div class="minimal-head">
               <div>
                 <div class="minimal-kicker">模型</div>
@@ -1742,11 +1875,11 @@
             <div class="muted-note">${escapeHtml(safe(row.plugin_name || "-"))} · ${escapeHtml(safe(row.runtime || "-"))}</div>
             ${dataset}
             ${round}
-            <div class="inline-actions">
-                <button class="ghost btn-auto" onclick="showModelDetail('${escapeHtml(safe(row.id))}')">详情</button>
-                <button class="ghost btn-auto" onclick="selectModelForTask('${escapeHtml(safe(row.id))}')">用于任务</button>
-              </div>
-          </article>`;
+	            <div class="inline-actions">
+	                <button class="ghost btn-auto" onclick="showModelDetail('${escapeHtml(safe(row.id))}')">详情</button>
+	                ${hasPermission(PERMISSIONS.TASK_CREATE) ? `<button class="ghost btn-auto" onclick="selectModelForTask('${escapeHtml(safe(row.id))}')">用于任务</button>` : ""}
+	              </div>
+	          </article>`;
             }
           )
           .join("");
@@ -2065,7 +2198,7 @@
             const taskCount = Object.keys(row.expert_map || {}).length;
             const releaseInfo = `设备 ${((row.target_devices || []).length && row.target_devices.join(", ")) || "全部"} / 客户 ${((row.target_buyers || []).length && row.target_buyers.join(", ")) || "全部"}`;
             const modelCount = Array.isArray(row.models) ? row.models.length : 0;
-            return `<article class="minimal-item">
+	            return `<article class="minimal-item">
               <div class="minimal-head">
                 <div>
                   <div class="minimal-kicker">流水线</div>
@@ -2077,11 +2210,11 @@
               <div class="minimal-meta">${escapeHtml(safe(row.pipeline_code || "-"))} · v${escapeHtml(safe(row.version || "-"))} · ${taskCount} 个任务映射</div>
               <div class="muted-note">主路由：${escapeHtml(safe(row.router_model_code || row.router_model_id || "无"))} · 已绑定 ${modelCount} 个模型</div>
               <div class="muted-note">${escapeHtml(releaseInfo)} · 灰度 ${escapeHtml(safe(row.traffic_ratio ?? 100))}%</div>
-              <div class="inline-actions">
-                <button class="ghost btn-auto" onclick="showPipelineDetail('${escapeHtml(safe(row.id))}')">详情</button>
-                <button class="ghost btn-auto" onclick="selectPipelineForTask('${escapeHtml(safe(row.id))}')">用于任务</button>
-              </div>
-            </article>`;
+	              <div class="inline-actions">
+	                <button class="ghost btn-auto" onclick="showPipelineDetail('${escapeHtml(safe(row.id))}')">详情</button>
+	                ${hasPermission(PERMISSIONS.TASK_CREATE) ? `<button class="ghost btn-auto" onclick="selectPipelineForTask('${escapeHtml(safe(row.id))}')">用于任务</button>` : ""}
+	              </div>
+	            </article>`;
           })
           .join("");
         writeOutput("pipelineList", `<div class="minimal-section-head"><span>流水线列表</span><span>${filtered.length} 条</span></div><div class="minimal-list">${cards}</div>`);
@@ -2155,12 +2288,15 @@
         if (pipeline && !document.getElementById("taskIntent").value.trim()) {
           document.getElementById("taskIntent").value = `${pipelineDisplayName(pipeline)} 推理任务`;
         }
+        if (usesSimpleExecutionFlow()) {
+          openTaskAdvancedSettings(false);
+        }
         updateTaskSchedulerMode();
         toast("已回填流水线到任务页");
       }
 
       async function loadPipelines() {
-        if (!hasPermission(PERMISSIONS.MODEL_VIEW)) return;
+        if (!hasPermission(PERMISSIONS.MODEL_VIEW) && !hasPermission(PERMISSIONS.TASK_CREATE)) return;
         setPanelLoading("pipelineList", true);
         try {
           const deviceCode = document.getElementById("deviceCode")?.value.trim() || "";
@@ -2402,12 +2538,17 @@
       }
 
       function updateTaskSchedulerMode() {
-        const mode = document.getElementById("schedulerMode")?.value || "pipeline";
+        const modeInput = document.getElementById("schedulerMode");
+        if (modeInput && !canUseCompatibilityModes()) {
+          modeInput.value = "pipeline";
+        }
+        const mode = modeInput?.value || "pipeline";
         const modelInput = document.getElementById("taskModelId");
         const modelField = document.getElementById("taskModelField");
         const pipelineField = document.getElementById("taskPipelineField");
         const recommendBtn = document.getElementById("btnTaskRecommend");
         const hint = document.getElementById("taskSchedulerHint");
+        const advanced = document.getElementById("taskAdvancedSettings");
         const pipelineCount = Array.isArray(state.pipelines) ? state.pipelines.length : 0;
         if (modelField) modelField.classList.toggle("hidden", mode !== "manual");
         if (pipelineField) pipelineField.classList.toggle("hidden", mode !== "pipeline");
@@ -2421,11 +2562,14 @@
               ? "自动调度会选择模型，也可先查看推荐结果"
               : "Pipeline 编排模式下不需要填写模型ID";
         }
+        if (advanced && mode !== "pipeline") {
+          advanced.open = true;
+        }
         if (hint) {
           hint.textContent =
             mode === "pipeline"
               ? pipelineCount
-                ? "当前为 Pipeline 编排模式。先选流水线，再填资产 ID 和场景信息。"
+                ? "当前为 Pipeline 编排模式。默认只需要流水线、资产 ID 和设备代码。"
                 : "当前还没有可调用流水线。先到“更多 > 流水线”发布一条，再回来创建任务。"
               : mode === "master"
               ? "当前为主模型调度兼容模式。建议先生成推荐结果，再创建任务。"
@@ -2567,9 +2711,14 @@
 
       async function createTask(button) {
         setButtonLoading(button, true, "创建中");
+        stopTaskFollowAuto();
         const section = document.getElementById("taskResultSection");
         if (section) section.classList.remove("hidden");
+        document.getElementById("taskInlineStatusSection")?.classList.remove("hidden");
+        document.getElementById("taskInlineResultSection")?.classList.remove("hidden");
         setPanelLoading("taskOut", true);
+        setPanelLoading("taskInlineStatusOut", true);
+        setPanelLoading("taskInlineResultOut", true);
         try {
           const schedulerMode = document.getElementById("schedulerMode").value;
           const pipelineId = document.getElementById("taskPipelineId").value.trim();
@@ -2621,13 +2770,26 @@
           renderTaskOut(data, "ok");
           syncTaskIdInputs(data.id);
           state.lastTaskId = data.id;
+          startTaskFollowAuto(data.id);
           toast("任务创建成功", "ok");
         } catch (e) {
           renderTaskOut({ error: e.message }, "err");
+          renderTaskInlineStatus({ error: e.message }, "err");
+          renderStatePanel("taskInlineResultOut", {
+            tone: "warn",
+            title: "结果预览尚未开始",
+            message: "先修正表单后再重新创建任务。",
+            actions: [
+              { label: "返回资产ID", action: "focusField('assetId')", primary: true },
+              { label: "检查兼容设置", action: "openTaskAdvancedSettings(true)" },
+            ],
+          });
           toast(`任务创建失败：${e.message}`, "err");
         } finally {
           setButtonLoading(button, false);
           setPanelLoading("taskOut", false);
+          document.getElementById("taskInlineStatusOut")?.classList.remove("loading");
+          document.getElementById("taskInlineResultOut")?.classList.remove("loading");
         }
       }
 
@@ -2703,14 +2865,235 @@
         );
       }
 
-      async function fetchTaskStatus(taskId) {
+      function renderTaskInlineStatus(data, kind = "ok") {
+        const section = document.getElementById("taskInlineStatusSection");
+        if (section) section.classList.remove("hidden");
+        const payload = sanitizeForView(data);
+        if (kind === "err") {
+          renderErrorState(
+            "taskInlineStatusOut",
+            "自动跟踪失败",
+            payload.error || "-",
+            [
+              state.lastTaskId ? { label: "重试当前任务", action: `startTaskFollowAuto('${escapeHtml(safe(state.lastTaskId))}')`, primary: true } : null,
+              { label: "查看任务监控", action: "switchPage('task-monitor')" },
+            ],
+            "任务仍可在“更多 > 任务监控”中手动查询。"
+          );
+          return;
+        }
+
+        const run = payload.run || {};
+        const statusValue = String(payload.status || "").toUpperCase();
+        const statusCopy =
+          statusValue === "SUCCEEDED"
+            ? "任务已完成，结果预览已准备好。"
+            : isTerminalTaskStatus(statusValue)
+            ? payload.error_message || "任务未成功完成。"
+            : "正在自动跟踪执行进度。";
+
+        writeOutput(
+          "taskInlineStatusOut",
+          `<div class="asset-result-card">
+            <div class="banner ${statusClass(statusValue)}">
+              <div class="banner-title">任务状态 ${statusTag(payload.status)}</div>
+              <div class="banner-sub">${escapeHtml(statusCopy)}</div>
+            </div>
+            ${renderStepFlow(payload.status)}
+            ${kvGrid([
+              { label: "任务ID", value: payload.id || "-", mono: true },
+              { label: "任务类型", value: taskTypeLabel(payload.task_type) },
+              payload.pipeline_id ? { label: "流水线ID", value: payload.pipeline_id, mono: true } : null,
+              { label: "结果条数", value: payload.result_count ?? "-" },
+              { label: "创建时间", value: formatTime(payload.created_at) },
+              payload.finished_at ? { label: "结束时间", value: formatTime(payload.finished_at) } : null,
+            ].filter(Boolean))}
+            ${
+              run && Object.keys(run).length
+                ? `<div class="muted-note">运行摘要：router ${escapeHtml(safe(run.timings?.router_ms ?? "-"))} ms / 总耗时 ${escapeHtml(
+                    safe(run.timings?.total_ms ?? "-")
+                  )} ms / 审计哈希 ${escapeHtml(safe(run.audit_hash || "-"))}</div>`
+                : ""
+            }
+            <div class="action-strip">
+              ${actionButtonHtml("查看完整状态", `switchPage('task-monitor')`)}
+              ${
+                statusValue === "SUCCEEDED" && hasPermission(PERMISSIONS.RESULT_READ)
+                  ? actionButtonHtml("打开结果页", `switchPage('results')`)
+                  : ""
+              }
+            </div>
+          </div>`
+        );
+      }
+
+      function renderTaskInlineResults(items, taskId, options = {}) {
+        const { status = "", message = "", kind = "ok" } = options;
+        const section = document.getElementById("taskInlineResultSection");
+        if (section) section.classList.remove("hidden");
+        const rows = sanitizeForView(Array.isArray(items) ? items : []);
+        state.resultRows = rows;
+        const statusValue = String(status || "").toUpperCase();
+
+        if (!rows.length) {
+          if (statusValue === "SUCCEEDED" && kind === "err") {
+            renderErrorState(
+              "taskInlineResultOut",
+              "结果读取失败",
+              message || "-",
+              [
+                { label: "打开结果页重试", action: "switchPage('results')", primary: true },
+                { label: "查看任务监控", action: "switchPage('task-monitor')" },
+              ]
+            );
+            return;
+          }
+
+          const waiting = !isTerminalTaskStatus(statusValue) || !statusValue;
+          renderStatePanel("taskInlineResultOut", {
+            tone: waiting ? "empty" : "warn",
+            title: waiting ? "结果等待生成" : "当前没有可展示结果",
+            message: waiting ? "任务执行完成后，前 2 条结果会自动显示在这里。" : message || "该任务未返回可展示结果。",
+            tip: waiting ? "你可以留在当前页，系统会自动刷新。" : "如需更多排查信息，请打开任务监控或结果页。",
+            actions: [
+              waiting ? { label: "查看任务监控", action: "switchPage('task-monitor')", primary: true } : { label: "打开结果页", action: "switchPage('results')", primary: true },
+              { label: "重新创建任务", action: "focusField('assetId')" },
+            ],
+          });
+          return;
+        }
+
+        const previewRows = rows.slice(0, 2);
+        const metrics = summarizeResultMetrics(rows);
+        const cards = previewRows
+          .map((row) => {
+            const fields = resultFields(row.result_json || {});
+            return `<article class="result-item">
+              <div class="result-head">
+                <div class="result-title">结果ID <span class="mono">${escapeHtml(safe(row.id))}</span></div>
+                <div class="inline-actions">
+                  ${statusTag(row.alert_level)}
+                  <button class="ghost btn-auto" onclick="showResultDetail('${escapeHtml(safe(row.id))}')">详情</button>
+                </div>
+              </div>
+              ${kvGrid([
+                { label: "模型ID", value: row.model_id || "-", mono: true },
+                { label: "任务类型", value: taskTypeLabel(row.result_json?.task_type) },
+                { label: "阶段", value: row.result_json?.stage || "-" },
+                { label: "耗时(ms)", value: row.duration_ms ?? "-" },
+              ])}
+              ${kvGrid(fields)}
+              <img id="task-inline-img-${escapeHtml(safe(row.id))}" class="thumb hidden" alt="结果截图预览" />
+              <div id="task-inline-ph-${escapeHtml(safe(row.id))}" class="thumb-placeholder">加载截图中...</div>
+            </article>`;
+          })
+          .join("");
+
+        writeOutput(
+          "taskInlineResultOut",
+          `<div class="asset-result-card">
+            <div class="banner ok">
+              <div class="banner-title">已返回 ${metrics.count} 条结果</div>
+              <div class="banner-sub">当前页先展示前 ${previewRows.length} 条结果预览。</div>
+            </div>
+            ${kvGrid([
+              { label: "结果条数", value: metrics.count },
+              { label: "告警条数", value: metrics.alerts },
+              { label: "平均耗时(ms)", value: metrics.avgLatency },
+            ])}
+            <div class="action-strip">
+              ${
+                hasPermission(PERMISSIONS.RESULT_READ)
+                  ? actionButtonHtml("查看完整结果", `document.getElementById('resultTaskId').value='${escapeHtml(safe(taskId))}'; switchPage('results')`)
+                  : ""
+              }
+              ${actionButtonHtml("查看任务监控", `document.getElementById('monitorTaskId').value='${escapeHtml(safe(taskId))}'; switchPage('task-monitor')`)}
+            </div>
+            <div class="result-list">${cards}</div>
+          </div>`
+        );
+
+        previewRows.forEach((row) => {
+          loadPreviewImage(row.id, `task-inline-img-${row.id}`, `task-inline-ph-${row.id}`);
+        });
+      }
+
+      async function refreshTaskFollow(taskId, options = {}) {
+        const { initial = false } = options;
+        const statusSection = document.getElementById("taskInlineStatusSection");
+        const resultSection = document.getElementById("taskInlineResultSection");
+        if (statusSection) statusSection.classList.remove("hidden");
+        if (resultSection) resultSection.classList.remove("hidden");
+        if (initial) {
+          setPanelLoading("taskInlineStatusOut", true);
+          setPanelLoading("taskInlineResultOut", true);
+        }
+        try {
+          const task = await fetchTaskStatus(taskId, { render: false });
+          renderTaskInlineStatus(task, "ok");
+          const statusValue = String(task.status || "").toUpperCase();
+          if (statusValue === "SUCCEEDED") {
+            const results = await fetchResultsByTaskId(taskId);
+            renderTaskInlineResults(results, taskId, { status: statusValue, kind: "ok" });
+            stopTaskFollowAuto();
+            return;
+          }
+          if (isTerminalTaskStatus(statusValue)) {
+            renderTaskInlineResults([], taskId, {
+              status: statusValue,
+              kind: "warn",
+              message: task.error_message || "任务已结束，但没有可展示结果。",
+            });
+            stopTaskFollowAuto();
+            return;
+          }
+          renderTaskInlineResults([], taskId, { status: statusValue, kind: "pending" });
+        } catch (e) {
+          renderTaskInlineStatus({ error: e.message }, "err");
+          renderStatePanel("taskInlineResultOut", {
+            tone: "warn",
+            title: "结果预览已暂停",
+            message: e.message,
+            tip: "可以稍后重试，或直接打开任务监控页。",
+            actions: [
+              { label: "重新跟踪", action: `startTaskFollowAuto('${escapeHtml(safe(taskId))}')`, primary: true },
+              { label: "查看任务监控", action: "switchPage('task-monitor')" },
+            ],
+          });
+          stopTaskFollowAuto();
+        } finally {
+          document.getElementById("taskInlineStatusOut")?.classList.remove("loading");
+          document.getElementById("taskInlineResultOut")?.classList.remove("loading");
+        }
+      }
+
+      function startTaskFollowAuto(taskId) {
+        if (!taskId) return;
+        stopTaskFollowAuto();
+        refreshTaskFollow(taskId, { initial: true });
+        state.taskFollowTimer = window.setInterval(() => {
+          refreshTaskFollow(taskId);
+        }, 5000);
+      }
+
+      async function fetchTaskStatus(taskId, options = {}) {
+        const { render = true } = options;
         if (!taskId) throw new Error("请输入任务ID");
         const data = await api(`/tasks/${taskId}`);
         state.currentTask = data;
         state.lastTaskId = taskId;
         syncTaskIdInputs(taskId);
-        renderTaskStatus(data, "ok");
+        if (render) {
+          renderTaskStatus(data, "ok");
+        }
         return data;
+      }
+
+      async function fetchResultsByTaskId(taskId) {
+        if (!taskId) throw new Error("请输入任务ID");
+        state.lastTaskId = taskId;
+        syncTaskIdInputs(taskId);
+        return api(`/results?task_id=${encodeURIComponent(taskId)}`);
       }
 
       async function refreshTaskMonitorSilently() {
@@ -2928,8 +3311,8 @@
         const role = primaryRole();
         const blueprints = {
           platform_admin: {
-            title: "先准备能力，再发布，再验证结果。",
-            desc: "今天最短路径：审批模型，发布流水线，然后验证一次真实执行结果。",
+            title: "平台先审批发布，再验证交付结果。",
+            desc: "先审批模型，再发布流水线，最后验证结果与留痕。",
             steps: [
               { code: "01", title: "审批模型", desc: "先确认候选模型可发布。", action: "进入模型", page: "models", enabled: hasPermission(PERMISSIONS.MODEL_VIEW) },
               { code: "02", title: "发布流水线", desc: "把主路由、专家和规则发布给客户与设备。", action: "进入流水线", page: "pipelines", enabled: hasPermission(PERMISSIONS.MODEL_VIEW) },
@@ -2938,8 +3321,8 @@
             extras: ["audit", "assets"],
           },
           supplier_engineer: {
-            title: "先提交模型，再等审批，再看状态。",
-            desc: "今天最短路径：准备模型包，提交模型，然后确认状态是否进入审批。",
+            title: "供应商先提交模型，再跟进审批状态。",
+            desc: "先准备模型包，提交候选成果模型，再查看状态是否进入审批。",
             steps: [
               { code: "01", title: "准备模型包", desc: "确认模型包和版本信息完整。", action: "进入模型", page: "models", enabled: hasPermission(PERMISSIONS.MODEL_VIEW) },
               { code: "02", title: "提交模型", desc: "提交候选模型或主路由模型。", action: "提交模型", page: "models", enabled: hasPermission(PERMISSIONS.MODEL_VIEW) },
@@ -2948,8 +3331,8 @@
             extras: [],
           },
           buyer_operator: {
-            title: "先上传资产，再执行，最后查看结果。",
-            desc: "今天最短路径：上传一次资产，选择流水线创建任务，然后查看结果。",
+            title: "客户先上传资产，再执行，再查看结果。",
+            desc: "先上传资产，选择流水线创建任务，然后查看结果。",
             steps: [
               { code: "01", title: "上传资产", desc: "上传图片或视频并得到资产 ID。", action: "上传资产", page: "assets", enabled: hasPermission(PERMISSIONS.ASSET_UPLOAD) },
               { code: "02", title: "创建任务", desc: "选择流水线并发起执行。", action: "去执行", page: "tasks", enabled: hasPermission(PERMISSIONS.TASK_CREATE) },
@@ -2958,8 +3341,8 @@
             extras: ["pipelines", "task-monitor"],
           },
           buyer_auditor: {
-            title: "先定位任务，再看结果，再查留痕。",
-            desc: "今天最短路径：查询任务状态，查看结果，然后到审计确认关键动作。",
+            title: "客户审计先定位任务，再看结果和留痕。",
+            desc: "先查询任务状态，再查看结果，最后到审计确认关键动作。",
             steps: [
               { code: "01", title: "定位任务", desc: "先找到要复核的任务。", action: "任务监控", page: "task-monitor", enabled: hasPermission(PERMISSIONS.RESULT_READ) },
               { code: "02", title: "查看结果", desc: "核对结果、截图和摘要。", action: "查看结果", page: "results", enabled: hasPermission(PERMISSIONS.RESULT_READ) },
@@ -2970,7 +3353,7 @@
         };
 
         return blueprints[role] || {
-          title: "先完成常用 3 步，再进入更多页面。",
+          title: "先看清四条业务线，再进入常用页面。",
           desc: "从这里进入最常见的操作路径。",
           steps: [
             { code: "01", title: "查看模型", desc: "确认当前可用模型。", action: "进入模型", page: "models", enabled: hasPermission(PERMISSIONS.MODEL_VIEW) },
@@ -2981,26 +3364,38 @@
         };
       }
 
+      function isActiveBusinessLine(lineCode) {
+        const family = roleFamily();
+        if (family === "buyer") return lineCode === "01" || lineCode === "04";
+        if (family === "supplier") return lineCode === "02";
+        return lineCode === "03";
+      }
+
       function renderDashboardHeroCopy() {
         const blueprint = dashboardBlueprint();
         const title = document.getElementById("dashboardHeroTitle");
         const desc = document.getElementById("dashboardHeroDesc");
-        if (title) title.textContent = blueprint.title;
-        if (desc) desc.textContent = blueprint.desc;
+        if (title) title.textContent = "四条业务线，一眼看清谁在做什么。";
+        if (desc) desc.textContent = `${blueprint.desc} 首页会直接显示客户、供应商、平台管理员和授权设备各自的职责。`;
       }
 
       function renderDashboardBusinessLanes() {
         const root = document.getElementById("dashboardLanes");
         if (!root) return;
-        const lanes = dashboardBlueprint().steps;
+        const lanes = BUSINESS_LINES;
 
         root.innerHTML = lanes
           .map(
-            (item) => `<article class="stacking-path-card business-lane-card">
-              <div class="stacking-card-kicker">步骤 ${escapeHtml(item.code)}</div>
+            (item) => `<article class="stacking-path-card business-lane-card ${isActiveBusinessLine(item.code) ? "is-active" : ""}">
+              <div class="stacking-card-kicker">${escapeHtml(item.code)} / ${escapeHtml(item.role)}</div>
+              ${isActiveBusinessLine(item.code) ? `<div class="business-line-current">当前角色相关</div>` : ""}
               <h3>${escapeHtml(item.title)}</h3>
               <p>${escapeHtml(item.desc)}</p>
-              <button class="ghost btn-auto" ${item.enabled ? `onclick="switchPage('${item.page}')"` : "disabled"}>${escapeHtml(item.enabled ? item.action : "当前角色不可操作")}</button>
+              <div class="business-line-tags">${(item.tags || []).map((tag) => `<span class="business-line-tag">${escapeHtml(tag)}</span>`).join("")}</div>
+              <div class="path-hint">下一步：${escapeHtml(item.next)}</div>
+              <button class="ghost btn-auto" ${hasPermission(item.perm) ? `onclick="switchPage('${item.page}')"` : "disabled"}>${escapeHtml(
+                hasPermission(item.perm) ? item.action : "当前角色不可直接操作"
+              )}</button>
             </article>`
           )
           .join("");
@@ -3009,25 +3404,26 @@
       function renderDashboardQuickActions() {
         const quick = document.getElementById("dashboardQuick");
         if (!quick) return;
-        const selected = (dashboardBlueprint().extras || [])
-          .filter((id) => hasPermission(pageConfig(id)?.perm))
-          .map((id) => ({
-            id,
-            code: flowStep(id).code,
-            title: pageConfig(id).label,
-            desc: PAGE_META[id]?.desc || flowStep(id).desc,
-            action: `进入${pageConfig(id).label}`,
+        const blueprint = dashboardBlueprint();
+        const selected = (blueprint.steps || [])
+          .filter((item) => item.enabled)
+          .map((item) => ({
+            id: item.page,
+            code: item.code,
+            title: item.title,
+            desc: item.desc,
+            action: item.action,
           }));
 
         if (!selected.length) {
-          renderEmpty("dashboardQuick", "当前角色没有额外入口。");
+          renderEmpty("dashboardQuick", "当前角色还没有可直接开始的页面。");
           return;
         }
 
         quick.innerHTML = selected
           .map(
-            (item, index) => `<article class="stacking-path-card">
-            <div class="stacking-card-kicker">第 ${index + 1} 步 / ${escapeHtml(item.code)}</div>
+            (item) => `<article class="stacking-path-card">
+            <div class="stacking-card-kicker">步骤 ${escapeHtml(item.code)}</div>
             <h3>${escapeHtml(item.title)}</h3>
             <p>${escapeHtml(item.desc)}</p>
             <button class="ghost btn-auto" onclick="switchPage('${item.id}')">${escapeHtml(item.action)}</button>
@@ -3117,9 +3513,7 @@
         try {
           if (!validateRequiredField("resultTaskId", "请输入任务ID")) throw new Error("请输入任务ID");
           const taskId = document.getElementById("resultTaskId").value.trim();
-          state.lastTaskId = taskId;
-          syncTaskIdInputs(taskId);
-          const data = await api(`/results?task_id=${encodeURIComponent(taskId)}`);
+          const data = await fetchResultsByTaskId(taskId);
           renderResults(data, "ok");
           toast("结果查询成功", "ok");
         } catch (e) {
@@ -3395,6 +3789,24 @@
           [
             { label: "填写资产ID", action: "focusField('assetId')", primary: true },
             { label: "选择执行入口", action: "focusField('schedulerMode')" },
+          ]
+        );
+        renderEmpty(
+          "taskInlineStatusOut",
+          "创建任务后，系统会在这里自动显示当前状态。",
+          "还没有开始跟踪任务",
+          [
+            { label: "创建任务", action: "document.getElementById('btnTaskCreate').click()", primary: true },
+            { label: "查看任务监控", action: "switchPage('task-monitor')" },
+          ]
+        );
+        renderEmpty(
+          "taskInlineResultOut",
+          "任务完成后，这里会自动展示首批结果预览。",
+          "还没有结果预览",
+          [
+            { label: "先创建任务", action: "document.getElementById('btnTaskCreate').click()", primary: true },
+            { label: "打开结果页", action: "switchPage('results')" },
           ]
         );
         renderEmpty(

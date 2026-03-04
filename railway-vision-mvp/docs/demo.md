@@ -27,6 +27,12 @@ bash docker/scripts/bootstrap_demo.sh
 - 平台管理员结合客户测试数据验证模型有效性，审批并发布模型。
 - 授权客户设备通过模型 API 或授权密钥使用加密模型，本地运行时完成解密。
 
+需要注意：
+
+- 这个 demo 真实覆盖的是“模型提审发布 + Pipeline 编排推理 + 结果回传”。
+- 它不会在 demo 过程中真的执行一次训练或微调作业。
+- `training / finetune` 在当前 demo 中体现为资产与模型治理语义，而不是训练引擎。
+
 完成后直接打开：
 
 - `https://localhost:8443`

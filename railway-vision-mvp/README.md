@@ -10,6 +10,12 @@
 - 平台管理员结合客户测试数据验证模型有效性，审批并发布模型。
 - 授权客户设备通过模型 API 或授权密钥使用加密模型，本地运行时完成解密。
 
+当前实现与目标态要明确区分：
+
+- 当前已实装：边缘推理、Pipeline 编排、模型提交审批发布、结果回传、审计留痕。
+- 当前未实装：真正的分布式训练控制面、远程训练 worker 调度、训练作业管理。
+- 目标态：平台部署在 `server1` 作为控制面，通过网络分配其他主机资源进行训练与微调。
+
 ## 1. 当前实现状态（MVP）
 
 ### 已实现
@@ -49,6 +55,10 @@
   - 流水线支持主路由、专家映射、阈值版本、融合规则、人工复核规则、灰度发布范围
   - 模型审批支持记录测试数据资产与验证结论
   - 模型发布支持记录交付方式（API / 本地解密 / 混合）与授权信息
+- 训练当前状态说明：
+  - 当前 MVP 已支持训练/微调相关资产用途与模型提审元数据
+  - 当前 MVP 尚未实现真正的训练作业调度与远程训练主机编排
+  - 相关目标架构见 `docs/cto/adr-0003-remote-training-control-plane.md`
 - 推理演示能力：
   - `car_number_ocr`：车号识别占位（EasyOCR可选 + 规则回退）
   - `bolt_missing_detect`：OpenCV MobileNet-SSD/回退检测逻辑
@@ -61,6 +71,12 @@
 ### 已跑通的最小闭环
 
 - 供应商提交模型 -> 平台审批发布 -> 买家上传图片 -> 边缘推理 -> 结果回传 -> 前端查询 -> 审计可查
+
+### 当前不应误判为已完成的能力
+
+- 分布式训练调度
+- 远程训练 worker 管理
+- 训练产物自动回收入库与晋级
 
 ## 2. 架构总览
 
@@ -87,6 +103,7 @@
 
 - 架构与数据流：[docs/architecture.md](docs/architecture.md)
 - 业务流转图：[docs/business_data_flow.md](docs/business_data_flow.md)
+- 项目组织图：[docs/project_organization.md](docs/project_organization.md)
 - 职责权力清单：[docs/company_responsibilities.md](docs/company_responsibilities.md)
 - 模型包规范：[docs/model_package.md](docs/model_package.md)
 - 前端设计语言：[docs/frontend_design_language.md](docs/frontend_design_language.md)

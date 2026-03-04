@@ -531,15 +531,21 @@
         backdrop-filter: var(--backdrop);
         padding: 12px 16px;
         display: grid;
-        grid-template-columns: minmax(220px, 1fr) minmax(280px, 520px) auto;
+        grid-template-columns: auto minmax(260px, 1fr) minmax(260px, 420px) auto;
         align-items: center;
         gap: 16px;
       }
 
-      .topbar-left {
+      .topbar-home-link {
         display: flex;
         align-items: center;
         gap: 10px;
+        border: 0;
+        padding: 0;
+        background: transparent;
+        color: inherit;
+        text-align: left;
+        cursor: pointer;
       }
 
       .topbar-title {
@@ -552,6 +558,31 @@
         margin: 2px 0 0;
         color: var(--text-soft);
         font-size: 11px;
+      }
+
+      .topbar-nav {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .topbar-nav-btn {
+        min-height: 36px;
+        padding: 0 14px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text);
+        font-size: 12px;
+        font-weight: 650;
+        cursor: pointer;
+      }
+
+      .topbar-nav-btn.active {
+        background: color-mix(in srgb, var(--primary) 10%, white 90%);
+        color: var(--primary);
+        border-color: color-mix(in srgb, var(--primary) 24%, var(--border) 76%);
       }
 
       .global-search {
@@ -1683,6 +1714,38 @@
         flex-wrap: wrap;
       }
 
+      .business-line-tags {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .business-line-current {
+        display: inline-flex;
+        align-items: center;
+        width: fit-content;
+        min-height: 28px;
+        padding: 0 10px;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--primary) 12%, white 88%);
+        color: var(--primary);
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .business-line-tag {
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        padding: 0 10px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--surface-2);
+        color: var(--text-soft);
+        font-size: 11px;
+        font-weight: 600;
+      }
+
       .asset-page-shell {
         max-width: 720px;
         margin: 0 auto;
@@ -1712,6 +1775,31 @@
       .field-group {
         display: grid;
         gap: 8px;
+      }
+
+      .required-mark {
+        color: var(--danger);
+      }
+
+      .compact-banner {
+        display: grid;
+        gap: 6px;
+        padding: 14px 16px;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: color-mix(in srgb, var(--primary) 5%, var(--surface) 95%);
+      }
+
+      .compact-banner-title {
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--text);
+      }
+
+      .compact-banner-desc {
+        font-size: 12px;
+        line-height: 1.6;
+        color: var(--text-soft);
       }
 
       .asset-result-card {
@@ -2878,6 +2966,20 @@
         gap: 16px;
       }
 
+      body.assets-minimal-page #dashboardLanes {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      body.assets-minimal-page .business-lane-card {
+        gap: 14px;
+        align-content: start;
+      }
+
+      body.assets-minimal-page .business-lane-card.is-active {
+        border-color: color-mix(in srgb, var(--primary) 32%, var(--border) 68%);
+        background: color-mix(in srgb, var(--primary) 4%, white 96%);
+      }
+
       body.assets-minimal-page .stacking-info-card,
       body.assets-minimal-page .stacking-path-card,
       body.assets-minimal-page .stacking-resource-card {
@@ -3262,7 +3364,16 @@
           grid-template-columns: 1fr;
         }
 
+        .topbar-nav {
+          order: 2;
+        }
+
+        .global-search {
+          order: 3;
+        }
+
         .topbar-right {
+          order: 4;
           justify-content: flex-start;
           flex-wrap: wrap;
         }
@@ -3349,6 +3460,10 @@
         body.assets-minimal-page .quick-grid,
         body.assets-minimal-page .metric-grid,
         body.assets-minimal-page .toolbar {
+          grid-template-columns: 1fr;
+        }
+
+        body.assets-minimal-page #dashboardLanes {
           grid-template-columns: 1fr;
         }
 

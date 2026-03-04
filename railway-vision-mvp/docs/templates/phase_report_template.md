@@ -3,24 +3,53 @@
 - Time window: YYYY-MM-DD ~ YYYY-MM-DD
 - Owner: <team/person>
 - Version baseline: <tag/commit>
+- Status: Green | Yellow | Red
 
-## Objectives
-- Objective 1
-- Objective 2
+## 1. Executive Summary
 
-## Delivered
-- Item 1
-- Item 2
+- 本阶段的目标是什么
+- 实际完成了什么
+- 当前结论是什么
 
-## Validation Evidence
-- Test results
-- Demo links / screenshots
-- Audit evidence references
+## 2. Objectives vs Outcome
 
-## Risks and Open Issues
-- Risk 1
-- Risk 2
+| Objective | Planned | Actual | Status | Notes |
+|---|---|---|---|---|
+|  |  |  |  |  |
 
-## Decision and Next Action
-- Continue / Pause / Rollback
-- Next phase entry criteria
+## 3. Delivered Scope
+
+- Code / architecture changes
+- Product / UX changes
+- QA / operational changes
+- Documentation changes
+
+## 4. Validation Evidence
+
+- 自动化测试 / golden / parity / gate 报告
+- demo 结果 / 关键日志 / 截图
+- 审计证据
+- 已知不覆盖范围
+
+## 5. KPI / Quality Movement
+
+| Metric | Before | After | Target | Notes |
+|---|---|---|---|---|
+|  |  |  |  |  |
+
+## 6. Risks and Open Issues
+
+| Risk | Severity | Owner | Mitigation | Next Checkpoint |
+|---|---|---|---|---|
+|  |  |  |  |  |
+
+## 7. Decision
+
+- Continue / Hold / Rollback / Re-scope
+- Why
+
+## 8. Next Phase Entry Criteria
+
+- [ ] 条件 1
+- [ ] 条件 2
+- [ ] 条件 3
