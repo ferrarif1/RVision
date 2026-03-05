@@ -43,6 +43,15 @@ bash docker/scripts/bootstrap_demo.sh
 
 ## 1. 手动流程（可选）
 
+如果你只需要快速拉起中心端服务（不跑完整 demo），可直接使用：
+
+```bash
+cd /Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp
+bash docker/scripts/start_one_click.sh
+```
+
+该脚本会自动执行 compose 启动并等待 `http://localhost:8000/api/health` 就绪。
+
 ```bash
 cd /Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp
 ./docker/scripts/generate_local_materials.sh

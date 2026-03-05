@@ -66,7 +66,7 @@
 
 目标：
 
-- 把 `frontend/index.html + assets/app.js + assets/app.css` 逐步拆成更清楚的页面与组件层。
+- 当前前端已拆分为模块化 SPA：`frontend/src/core + src/layout + src/pages + src/main.js`，壳层入口为 `frontend/index.html`。
 
 原因：
 

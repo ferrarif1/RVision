@@ -54,6 +54,14 @@ Product 轨道负责把复杂的平台能力收敛成用户一眼能懂、30 秒
 - 平台管理员：验证、审批、发布是否是一条连续路径。
 - 授权设备：授权方式与调用方式是否被清楚解释且不暴露底层实现噪音。
 
+
+## Latest Plan & Execution
+
+- [platform_user_centric_implementation_v1.md](./platform_user_centric_implementation_v1.md)
+  用户视角目标态完整实现方案（V1）。
+- [platform_user_centric_execution_backlog_v1.md](./platform_user_centric_execution_backlog_v1.md)
+  按周执行清单与验收标准（V1）。
+
 ## Recommended Deliverables
 
 - [../templates/prd_template.md](../templates/prd_template.md)
