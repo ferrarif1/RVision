@@ -165,8 +165,10 @@
       ];
 
       const NAV_GROUPS = [
-        { title: "常用", pages: PRIMARY_NAV_IDS },
-        { title: "更多", pages: SECONDARY_NAV_IDS },
+        { title: "主线 1 · 资产准备", pages: ["dashboard", "assets"], line: "line-1" },
+        { title: "主线 2 · 模型交付", pages: ["models", "pipelines"], line: "line-2" },
+        { title: "主线 3 · 执行与结果", pages: ["tasks", "task-monitor", "results"], line: "line-3" },
+        { title: "主线 4 · 治理运营", pages: ["audit", "devices", "settings"], line: "line-4" },
       ];
 
       const BUSINESS_LINES = [
@@ -416,82 +418,15 @@
         }
       }
 
-      function renderSidebarContext(pageId) {
-        const root = document.getElementById("sidebarNote");
-        if (!root) return;
-        const meta = PAGE_META[pageId] || PAGE_META.dashboard;
-        const stage = flowStep(pageId);
-        const nextId = nextAllowedPage(pageId);
-        const next = nextId ? flowStep(nextId) : null;
+      function renderSidebarContext() {}
 
-        root.innerHTML = `
-          <div class="sidebar-note-kicker">当前页面 · ${escapeHtml(stage.code)}</div>
-          <strong>${escapeHtml(stage.title)}</strong>
-          <p>${escapeHtml(meta.desc)}</p>
-          ${next ? `<div class="sidebar-note-tail">下一步：${escapeHtml(next.title)}</div>` : ""}`;
-      }
+      function buildTopbarNav() {}
 
-      function topbarPageLabel(pageId) {
-        if (pageId === "dashboard") return "主页";
-        return pageConfig(pageId)?.label || pageId;
-      }
-
-      function buildTopbarNav() {
-        const root = document.getElementById("topbarNav");
-        if (!root) return;
-        const pages = PRIMARY_NAV_IDS.filter((pageId) => hasPermission(pageConfig(pageId)?.perm));
-        root.innerHTML = pages
-          .map(
-            (pageId) => `<button class="topbar-nav-btn" type="button" data-page="${pageId}" aria-current="false">${escapeHtml(
-              topbarPageLabel(pageId)
-            )}</button>`
-          )
-          .join("");
-        root.querySelectorAll(".topbar-nav-btn").forEach((btn) => {
-          btn.onclick = () => switchPage(btn.dataset.page, { updateHash: true });
-        });
-      }
-
-      function renderPageCommandBar(pageId) {
+      function renderPageCommandBar() {
         const root = document.getElementById("pageCommandBar");
         if (!root) return;
-
-        if (pageId === "dashboard" || PRIMARY_NAV_IDS.includes(pageId)) {
-          root.classList.add("hidden");
-          return;
-        }
-        root.classList.remove("hidden");
-
-        const stage = flowStep(pageId);
-        const meta = PAGE_META[pageId] || PAGE_META.dashboard;
-        const actionConfig = {
-          pipelines: {
-            primary: hasPermission(PERMISSIONS.MODEL_RELEASE)
-              ? primaryActionButtonHtml("注册流水线", "focusField('pipelineCode')")
-              : primaryActionButtonHtml("刷新流水线", "loadPipelines()"),
-            secondary: [hasPermission(PERMISSIONS.TASK_CREATE) ? actionButtonHtml("回到执行", "switchPage('tasks')") : ""],
-          },
-          "task-monitor": {
-            primary: primaryActionButtonHtml("查询任务", "document.getElementById('btnTaskQuery').click()"),
-            secondary: [actionButtonHtml(state.taskMonitorAuto ? "关闭自动刷新" : "开启自动刷新", "toggleTaskMonitorAuto()")],
-          },
-          audit: {
-            primary: primaryActionButtonHtml("查询审计", "document.getElementById('btnAuditQuery').click()"),
-            secondary: [actionButtonHtml("筛选动作", "focusField('auditAction')")],
-          },
-        }[pageId] || { primary: "", secondary: [] };
-
-        writeOutput(
-          "pageCommandBar",
-          `<div class="command-bar">
-            <div class="command-copy">
-              <div class="command-kicker">${escapeHtml(stage.code)}</div>
-              <h3 class="command-title">${escapeHtml(meta.title)}</h3>
-              <p class="command-desc">${escapeHtml(meta.desc)}</p>
-            </div>
-            <div class="action-strip">${[actionConfig.primary, ...(actionConfig.secondary || [])].filter(Boolean).join("")}</div>
-          </div>`
-        );
+        root.classList.add("hidden");
+        root.innerHTML = "";
       }
 
       function currentModelSelectionId() {
@@ -1390,7 +1325,11 @@
             pageId === "tasks" ||
             pageId === "task-monitor" ||
             pageId === "results" ||
-            pageId === "audit"
+            pageId === "audit" ||
+            pageId === "devices" ||
+            pageId === "settings" ||
+            pageId === "403" ||
+            pageId === "404"
         );
 
         updateContentChrome(targetPageId, routePath);
@@ -1420,7 +1359,7 @@
           nav.innerHTML = NAV_GROUPS.map((group) => {
             const pages = group.pages.filter((pageId) => hasPermission(pageConfig(pageId)?.perm));
             if (!pages.length) return "";
-            return `<section class="nav-group">
+            return `<section class="nav-group ${escapeHtml(group.line || "")}">
               <div class="nav-group-title">${escapeHtml(group.title)}</div>
               ${pages
                 .map((pageId) => {
@@ -1430,7 +1369,6 @@
                     <span class="nav-btn-code">${escapeHtml(step.code)}</span>
                     <span class="nav-btn-copy">
                       <span class="nav-btn-title">${escapeHtml(page.label)}</span>
-                      <span class="nav-btn-desc">${escapeHtml(step.desc)}</span>
                     </span>
                   </button>`;
                 })

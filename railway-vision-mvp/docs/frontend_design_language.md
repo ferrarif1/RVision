@@ -60,15 +60,16 @@
 ## 3.1 平台控制台壳层（App Shell）
 
 - 统一采用 `Sidebar + Topbar + Main Content` 三段式结构，保证任意页面都可回到 Dashboard。
-- 顶部栏提供：页面标题、Breadcrumb、用户信息（username / role / tenant）和 Logout。
-- 左侧导航固定为：Dashboard、Assets、Tasks、Results、Models、Pipelines、Devices、Audit、Settings（按能力动态显示）。
+- 顶栏只保留必要信息：品牌入口、用户信息（username / role / tenant）和 Logout。
+- 左侧导航作为主入口，按四条主线明显分组并支持快速切换：资产准备、模型交付、执行与结果、治理运营（按能力动态显示）。
+- 页面文案和控件遵循“最小必要原则”：删除与当前任务无关的说明、按钮和交互。
 - 详情路由（如 `#/models/:id`）显示 Breadcrumb 明细和“返回列表”按钮，避免用户迷路。
 
 ## 3.2 路由与权限
 
 - 前端使用 hash router（`location.hash`）统一路由解析。
 - 路由表定义 `path + component(page) + requiredCapabilities`，并在导航与访问时共用。
-- 未登录统一跳转 `#/login`；无权限访问显示 403；未知路由显示 404。
+- 未登录统一跳转 `#/login`；无权限访问显示 403（保持与业务页相同壳层）；未知路由显示 404（保持与业务页相同壳层）。
 - 记录上次访问页到 `localStorage`，登录后自动恢复。
 
 ### 工作台

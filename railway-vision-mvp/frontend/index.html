@@ -81,12 +81,6 @@
               <div class="topbar-sub">主页 / 模型 / 资产 / 执行 / 结果</div>
             </div>
           </button>
-          <nav id="topbarNav" class="topbar-nav" aria-label="主导航"></nav>
-          <div class="global-search">
-            <span class="search-icon">⌕</span>
-            <input id="globalSearch" placeholder="搜索模型ID、任务ID、资产ID、审计动作" aria-label="全局搜索" />
-            <span class="search-kbd">⌘ K</span>
-          </div>
           <div class="topbar-right">
             <span id="healthBadge" class="pill">系统检测中</span>
             <div id="userMenu" class="user-menu">
@@ -101,9 +95,8 @@
 
         <div class="layout">
           <aside class="sidebar">
-            <div class="nav-title">导航</div>
+            <div class="nav-title">业务导航（快速切换）</div>
             <nav id="navList" class="nav-list"></nav>
-            <div class="sidebar-note" id="sidebarNote">请选择页面开始操作。</div>
           </aside>
 
           <main class="content">
@@ -791,11 +784,29 @@
             </section>
 
             <section id="page-403" class="page">
-              <div id="forbiddenOut" class="output"></div>
+              <div class="asset-page-shell stacking-shell">
+                <section class="stacking-hero">
+                  <div class="stacking-kicker">权限</div>
+                  <h2 class="stacking-hero-title">当前账号暂无访问权限</h2>
+                  <p class="stacking-hero-desc">如需访问该页面，请联系管理员为当前角色授予对应能力。</p>
+                </section>
+                <section class="stacking-section">
+                  <div id="forbiddenOut" class="output"></div>
+                </section>
+              </div>
             </section>
 
             <section id="page-404" class="page">
-              <div id="notFoundOut" class="output"></div>
+              <div class="asset-page-shell stacking-shell">
+                <section class="stacking-hero">
+                  <div class="stacking-kicker">路由</div>
+                  <h2 class="stacking-hero-title">页面不存在或已下线</h2>
+                  <p class="stacking-hero-desc">请从导航栏重新选择页面，或返回工作台继续操作。</p>
+                </section>
+                <section class="stacking-section">
+                  <div id="notFoundOut" class="output"></div>
+                </section>
+              </div>
             </section>
 
             <section id="page-audit" class="page">
