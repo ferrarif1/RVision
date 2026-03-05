@@ -8,6 +8,8 @@
         TASK_CREATE: "task.create",
         RESULT_READ: "result.read",
         AUDIT_READ: "audit.read",
+        DEVICE_READ: "device.read",
+        SETTINGS_VIEW: "settings.view",
         DATA_L3_READ: "data.l3.read",
       };
       const SENSITIVE_FIELDS = new Set([
@@ -30,18 +32,35 @@
       };
 
       const PAGES = [
-        { id: "dashboard", label: "开始", perm: null },
-        { id: "models", label: "模型", perm: PERMISSIONS.MODEL_VIEW },
-        { id: "pipelines", label: "流水线", perm: PERMISSIONS.MODEL_VIEW },
-        { id: "assets", label: "资产", perm: PERMISSIONS.ASSET_UPLOAD },
-        { id: "tasks", label: "执行", perm: PERMISSIONS.TASK_CREATE },
-        { id: "task-monitor", label: "任务监控", perm: PERMISSIONS.RESULT_READ },
-        { id: "results", label: "结果", perm: PERMISSIONS.RESULT_READ },
-        { id: "audit", label: "审计", perm: PERMISSIONS.AUDIT_READ },
+        { id: "dashboard", label: "Dashboard", perm: null },
+        { id: "assets", label: "Assets", perm: PERMISSIONS.ASSET_UPLOAD },
+        { id: "tasks", label: "Tasks", perm: PERMISSIONS.TASK_CREATE },
+        { id: "task-monitor", label: "Task Monitor", perm: PERMISSIONS.RESULT_READ },
+        { id: "results", label: "Results", perm: PERMISSIONS.RESULT_READ },
+        { id: "models", label: "Models", perm: PERMISSIONS.MODEL_VIEW },
+        { id: "pipelines", label: "Pipelines", perm: PERMISSIONS.MODEL_VIEW },
+        { id: "devices", label: "Devices", perm: PERMISSIONS.DEVICE_READ },
+        { id: "audit", label: "Audit", perm: PERMISSIONS.AUDIT_READ },
+        { id: "settings", label: "Settings", perm: PERMISSIONS.SETTINGS_VIEW },
       ];
 
-      const PRIMARY_NAV_IDS = ["dashboard", "models", "assets", "tasks", "results"];
-      const SECONDARY_NAV_IDS = ["pipelines", "task-monitor", "audit"];
+      const ROUTES = [
+        { path: "login", page: "login", requiredCapabilities: [] },
+        { path: "dashboard", page: "dashboard", requiredCapabilities: [] },
+        { path: "assets", page: "assets", requiredCapabilities: [PERMISSIONS.ASSET_UPLOAD] },
+        { path: "tasks", page: "tasks", requiredCapabilities: [PERMISSIONS.TASK_CREATE] },
+        { path: "task-monitor", page: "task-monitor", requiredCapabilities: [PERMISSIONS.RESULT_READ] },
+        { path: "results", page: "results", requiredCapabilities: [PERMISSIONS.RESULT_READ] },
+        { path: "models", page: "models", requiredCapabilities: [PERMISSIONS.MODEL_VIEW] },
+        { path: "models/:id", page: "models", requiredCapabilities: [PERMISSIONS.MODEL_VIEW] },
+        { path: "pipelines", page: "pipelines", requiredCapabilities: [PERMISSIONS.MODEL_VIEW] },
+        { path: "devices", page: "devices", requiredCapabilities: [PERMISSIONS.DEVICE_READ] },
+        { path: "audit", page: "audit", requiredCapabilities: [PERMISSIONS.AUDIT_READ] },
+        { path: "settings", page: "settings", requiredCapabilities: [PERMISSIONS.SETTINGS_VIEW] },
+      ];
+
+      const PRIMARY_NAV_IDS = ["dashboard", "assets", "tasks", "results", "models"];
+      const SECONDARY_NAV_IDS = ["pipelines", "devices", "audit", "settings"];
 
       const PAGE_META = {
         dashboard: {
@@ -107,7 +126,7 @@
           ],
         },
         audit: {
-          title: "审计",
+          title: "Audit",
           desc: "查询关键操作日志。",
           steps: [
             { title: "输入条件", desc: "按动作、人和资源筛选。" },
@@ -115,22 +134,41 @@
             { title: "完成回查", desc: "确认关键动作已留痕。" },
           ],
         },
+        devices: {
+          title: "Devices",
+          desc: "查看设备状态与心跳信息。",
+          steps: [
+            { title: "进入设备页", desc: "先确认当前租户设备范围。" },
+            { title: "查看状态", desc: "关注在线状态、心跳与代理版本。" },
+          ],
+        },
+        settings: {
+          title: "Settings",
+          desc: "管理个人偏好与平台设置入口。",
+          steps: [
+            { title: "查看账户", desc: "确认当前登录身份和租户。" },
+            { title: "调整偏好", desc: "按需切换主题或默认页面。" },
+          ],
+        },
       };
 
       const FLOW_STEPS = [
-        { id: "dashboard", code: "00", title: "开始", desc: "看清 3 步主路径" },
-        { id: "models", code: "01", title: "模型", desc: "提交、审批和发布模型" },
-        { id: "pipelines", code: "02", title: "流水线", desc: "配置编排和发布范围" },
-        { id: "assets", code: "03", title: "资产", desc: "上传资产并生成 ID" },
-        { id: "tasks", code: "04", title: "执行", desc: "选择流水线并创建任务" },
-        { id: "task-monitor", code: "05", title: "任务监控", desc: "跟踪任务状态" },
-        { id: "results", code: "06", title: "结果", desc: "查看结果和截图" },
-        { id: "audit", code: "07", title: "审计", desc: "查询关键日志" },
+        { id: "dashboard", code: "00", title: "Dashboard", desc: "平台总览与快速入口" },
+        { id: "assets", code: "01", title: "Assets", desc: "上传资产并生成 ID" },
+        { id: "tasks", code: "02", title: "Tasks", desc: "选择流水线并创建任务" },
+        { id: "results", code: "03", title: "Results", desc: "查看结构化结果和截图" },
+        { id: "models", code: "04", title: "Models", desc: "提交、审批和发布模型" },
+        { id: "pipelines", code: "05", title: "Pipelines", desc: "配置编排和发布范围" },
+        { id: "devices", code: "06", title: "Devices", desc: "查看设备心跳与状态" },
+        { id: "audit", code: "07", title: "Audit", desc: "查询关键日志" },
+        { id: "settings", code: "08", title: "Settings", desc: "账户与控制台设置" },
       ];
 
       const NAV_GROUPS = [
-        { title: "常用", pages: PRIMARY_NAV_IDS },
-        { title: "更多", pages: SECONDARY_NAV_IDS },
+        { title: "主线 1 · 资产准备", pages: ["dashboard", "assets"], line: "line-1" },
+        { title: "主线 2 · 模型交付", pages: ["models", "pipelines"], line: "line-2" },
+        { title: "主线 3 · 执行与结果", pages: ["tasks", "task-monitor", "results"], line: "line-3" },
+        { title: "主线 4 · 治理运营", pages: ["audit", "devices", "settings"], line: "line-4" },
       ];
 
       const BUSINESS_LINES = [
@@ -201,6 +239,7 @@
         taskFollowTimer: null,
         modelPage: 1,
         drawerLastFocus: null,
+        routeParams: {},
       };
 
       function hasPermission(permission) {
@@ -379,82 +418,15 @@
         }
       }
 
-      function renderSidebarContext(pageId) {
-        const root = document.getElementById("sidebarNote");
-        if (!root) return;
-        const meta = PAGE_META[pageId] || PAGE_META.dashboard;
-        const stage = flowStep(pageId);
-        const nextId = nextAllowedPage(pageId);
-        const next = nextId ? flowStep(nextId) : null;
+      function renderSidebarContext() {}
 
-        root.innerHTML = `
-          <div class="sidebar-note-kicker">当前页面 · ${escapeHtml(stage.code)}</div>
-          <strong>${escapeHtml(stage.title)}</strong>
-          <p>${escapeHtml(meta.desc)}</p>
-          ${next ? `<div class="sidebar-note-tail">下一步：${escapeHtml(next.title)}</div>` : ""}`;
-      }
+      function buildTopbarNav() {}
 
-      function topbarPageLabel(pageId) {
-        if (pageId === "dashboard") return "主页";
-        return pageConfig(pageId)?.label || pageId;
-      }
-
-      function buildTopbarNav() {
-        const root = document.getElementById("topbarNav");
-        if (!root) return;
-        const pages = PRIMARY_NAV_IDS.filter((pageId) => hasPermission(pageConfig(pageId)?.perm));
-        root.innerHTML = pages
-          .map(
-            (pageId) => `<button class="topbar-nav-btn" type="button" data-page="${pageId}" aria-current="false">${escapeHtml(
-              topbarPageLabel(pageId)
-            )}</button>`
-          )
-          .join("");
-        root.querySelectorAll(".topbar-nav-btn").forEach((btn) => {
-          btn.onclick = () => switchPage(btn.dataset.page, { updateHash: true });
-        });
-      }
-
-      function renderPageCommandBar(pageId) {
+      function renderPageCommandBar() {
         const root = document.getElementById("pageCommandBar");
         if (!root) return;
-
-        if (pageId === "dashboard" || PRIMARY_NAV_IDS.includes(pageId)) {
-          root.classList.add("hidden");
-          return;
-        }
-        root.classList.remove("hidden");
-
-        const stage = flowStep(pageId);
-        const meta = PAGE_META[pageId] || PAGE_META.dashboard;
-        const actionConfig = {
-          pipelines: {
-            primary: hasPermission(PERMISSIONS.MODEL_RELEASE)
-              ? primaryActionButtonHtml("注册流水线", "focusField('pipelineCode')")
-              : primaryActionButtonHtml("刷新流水线", "loadPipelines()"),
-            secondary: [hasPermission(PERMISSIONS.TASK_CREATE) ? actionButtonHtml("回到执行", "switchPage('tasks')") : ""],
-          },
-          "task-monitor": {
-            primary: primaryActionButtonHtml("查询任务", "document.getElementById('btnTaskQuery').click()"),
-            secondary: [actionButtonHtml(state.taskMonitorAuto ? "关闭自动刷新" : "开启自动刷新", "toggleTaskMonitorAuto()")],
-          },
-          audit: {
-            primary: primaryActionButtonHtml("查询审计", "document.getElementById('btnAuditQuery').click()"),
-            secondary: [actionButtonHtml("筛选动作", "focusField('auditAction')")],
-          },
-        }[pageId] || { primary: "", secondary: [] };
-
-        writeOutput(
-          "pageCommandBar",
-          `<div class="command-bar">
-            <div class="command-copy">
-              <div class="command-kicker">${escapeHtml(stage.code)}</div>
-              <h3 class="command-title">${escapeHtml(meta.title)}</h3>
-              <p class="command-desc">${escapeHtml(meta.desc)}</p>
-            </div>
-            <div class="action-strip">${[actionConfig.primary, ...(actionConfig.secondary || [])].filter(Boolean).join("")}</div>
-          </div>`
-        );
+        root.classList.add("hidden");
+        root.innerHTML = "";
       }
 
       function currentModelSelectionId() {
@@ -1248,6 +1220,8 @@
         if (caps.task_create) out.add(PERMISSIONS.TASK_CREATE);
         if (caps.result_read) out.add(PERMISSIONS.RESULT_READ);
         if (caps.audit_read) out.add(PERMISSIONS.AUDIT_READ);
+        if (caps.device_read) out.add(PERMISSIONS.DEVICE_READ);
+        if (caps.settings_view) out.add(PERMISSIONS.SETTINGS_VIEW);
         return out;
       }
 
@@ -1255,20 +1229,40 @@
         return PAGES.filter((p) => hasPermission(p.perm));
       }
 
-      function currentHashPage() {
+      function parseRoute() {
         const raw = (window.location.hash || "").replace(/^#\/?/, "").trim();
-        if (!raw) return "dashboard";
-        return raw;
+        const cleanPath = raw || "dashboard";
+        const segments = cleanPath.split("/").filter(Boolean);
+
+        for (const route of ROUTES) {
+          const routeSeg = route.path.split("/").filter(Boolean);
+          if (routeSeg.length !== segments.length) continue;
+          const params = {};
+          let matched = true;
+          for (let i = 0; i < routeSeg.length; i += 1) {
+            const token = routeSeg[i];
+            const value = segments[i];
+            if (token.startsWith(":")) {
+              params[token.slice(1)] = value;
+              continue;
+            }
+            if (token !== value) {
+              matched = false;
+              break;
+            }
+          }
+          if (matched) return { ...route, params, path: cleanPath };
+        }
+
+        return { path: cleanPath, page: "404", requiredCapabilities: [], params: {} };
       }
 
       function syncHash(pageId) {
         const next = `#/${pageId}`;
-        if (window.location.hash !== next) {
-          window.location.hash = next;
-        }
+        if (window.location.hash !== next) window.location.hash = next;
       }
 
-      function updateContentChrome(pageId) {
+      function updateContentChrome(pageId, routePath = "") {
         const meta = PAGE_META[pageId] || PAGE_META.dashboard;
         const roleMap = {
           platform_admin: "平台侧",
@@ -1285,16 +1279,16 @@
         const contentTitle = document.getElementById("contentTitle");
         const contentDesc = document.getElementById("contentDesc");
 
-        if (breadcrumbRole) breadcrumbRole.textContent = roleLabel;
-        if (breadcrumbPage) breadcrumbPage.textContent = meta.title;
+        if (breadcrumbRole) breadcrumbRole.textContent = "Console";
+        if (breadcrumbPage) breadcrumbPage.textContent = routePath && routePath.includes("/") ? `${meta.title} / Detail` : meta.title;
         if (contentTitle) contentTitle.textContent = meta.title;
         if (contentDesc) contentDesc.textContent = meta.desc;
       }
 
       function switchPage(pageId, options = {}) {
-        const { updateHash = true } = options;
+        const { updateHash = true, routePath = pageId } = options;
         const allowed = allowedPages().map((x) => x.id);
-        if (!allowed.includes(pageId)) {
+        if (pageId !== "403" && pageId !== "404" && !allowed.includes(pageId)) {
           if (state.user && pageId && allowed[0] && pageId !== allowed[0]) {
             toast("当前角色没有该页面权限", "warn");
           }
@@ -1306,19 +1300,20 @@
         if (state.page === "tasks" && pageId !== "tasks") {
           stopTaskFollowAuto();
         }
-        state.page = pageId;
+        if (pageId !== "403" && pageId !== "404") state.page = pageId;
 
         document.querySelectorAll(".page").forEach((el) => el.classList.remove("active"));
         document.querySelectorAll(".page").forEach((el) => el.setAttribute("aria-hidden", "true"));
-        const page = document.getElementById(`page-${pageId}`);
+        const targetPageId = pageId === "403" || pageId === "404" ? pageId : state.page;
+        const page = document.getElementById(`page-${targetPageId}`);
         if (page) {
           page.classList.add("active");
           page.setAttribute("aria-hidden", "false");
         }
 
         document.querySelectorAll(".nav-btn, .minimal-nav-btn, .topbar-nav-btn").forEach((el) => {
-          el.classList.toggle("active", el.dataset.page === pageId);
-          el.setAttribute("aria-current", el.dataset.page === pageId ? "page" : "false");
+          el.classList.toggle("active", el.dataset.page === targetPageId);
+          el.setAttribute("aria-current", el.dataset.page === targetPageId ? "page" : "false");
         });
 
         document.body.classList.toggle(
@@ -1330,18 +1325,29 @@
             pageId === "tasks" ||
             pageId === "task-monitor" ||
             pageId === "results" ||
-            pageId === "audit"
+            pageId === "audit" ||
+            pageId === "devices" ||
+            pageId === "settings" ||
+            pageId === "403" ||
+            pageId === "404"
         );
 
-        updateContentChrome(pageId);
-        renderSidebarContext(pageId);
-        renderPageCommandBar(pageId);
-        if (updateHash) syncHash(pageId);
+        updateContentChrome(targetPageId, routePath);
+        renderSidebarContext(targetPageId);
+        renderPageCommandBar(targetPageId);
+        if (updateHash && targetPageId !== "403" && targetPageId !== "404") syncHash(routePath || targetPageId);
 
-        if (pageId === "dashboard") refreshDashboard();
-        if (pageId === "models" || pageId === "pipelines") loadModels();
-        if (pageId === "pipelines" || pageId === "tasks") loadPipelines();
-        if (pageId === "task-monitor") updateTaskMonitorBadge();
+        const backBtn = document.getElementById("detailBackBtn");
+        if (backBtn) backBtn.classList.toggle("hidden", !(routePath || "").includes("/"));
+
+        if (targetPageId === "dashboard") refreshDashboard();
+        if (targetPageId === "models" || targetPageId === "pipelines") loadModels();
+        if (targetPageId === "pipelines" || targetPageId === "tasks") loadPipelines();
+        if (targetPageId === "task-monitor") updateTaskMonitorBadge();
+
+        if (!["403", "404"].includes(targetPageId)) {
+          localStorage.setItem("rv_last_page", routePath || targetPageId);
+        }
       }
 
       function buildNav() {
@@ -1353,7 +1359,7 @@
           nav.innerHTML = NAV_GROUPS.map((group) => {
             const pages = group.pages.filter((pageId) => hasPermission(pageConfig(pageId)?.perm));
             if (!pages.length) return "";
-            return `<section class="nav-group">
+            return `<section class="nav-group ${escapeHtml(group.line || "")}">
               <div class="nav-group-title">${escapeHtml(group.title)}</div>
               ${pages
                 .map((pageId) => {
@@ -1363,7 +1369,6 @@
                     <span class="nav-btn-code">${escapeHtml(step.code)}</span>
                     <span class="nav-btn-copy">
                       <span class="nav-btn-title">${escapeHtml(page.label)}</span>
-                      <span class="nav-btn-desc">${escapeHtml(step.desc)}</span>
                     </span>
                   </button>`;
                 })
@@ -1374,8 +1379,7 @@
             btn.onclick = () => switchPage(btn.dataset.page, { updateHash: true });
           });
         }
-        const target = currentHashPage() || state.page;
-        switchPage(target, { updateHash: !window.location.hash });
+        navigateByHash();
       }
 
       function renderStarterStates() {
@@ -1443,6 +1447,7 @@
       function applyRoleUI() {
         document.getElementById("userBadge").textContent = `用户：${state.user?.username || "-"}`;
         document.getElementById("roleBadge").textContent = `角色：${roleText(state.user)}`;
+        document.getElementById("tenantBadge").textContent = `租户：${state.user?.tenant_id || "-"}`;
 
         const canSubmit = hasPermission(PERMISSIONS.MODEL_SUBMIT);
         const canApprove = hasPermission(PERMISSIONS.MODEL_APPROVE);
@@ -1519,7 +1524,9 @@
           applyRoleUI();
           buildNav();
           await checkHealth();
-          await refreshDashboard();
+          const lastPage = localStorage.getItem("rv_last_page") || "dashboard";
+          window.location.hash = `#/${lastPage.replace(/^#\/?/, "")}`;
+          navigateByHash(false);
           toast("登录成功", "ok");
         } catch (e) {
           document.getElementById("loginStatus").textContent = `登录失败：${e.message}`;
@@ -1544,7 +1551,7 @@
         state.lastAssetId = "";
         state.lastTaskId = "";
         localStorage.removeItem("rv_token");
-        history.replaceState(null, "", window.location.pathname + window.location.search);
+        window.location.hash = "#/login";
         closeDrawer();
 
         document.getElementById("mainView").classList.add("hidden");
@@ -1705,8 +1712,36 @@
 
         window.addEventListener("hashchange", () => {
           if (!state.user) return;
-          switchPage(currentHashPage(), { updateHash: false });
+          navigateByHash(false);
         });
+      }
+
+
+      function navigateByHash(updateHash = false) {
+        const route = parseRoute();
+        state.routeParams = route.params || {};
+        if (route.page === "login") {
+          document.getElementById("mainView").classList.add("hidden");
+          document.getElementById("loginView").classList.remove("hidden");
+          return;
+        }
+        if (!state.user) return;
+        if ((route.requiredCapabilities || []).some((perm) => !hasPermission(perm))) {
+          switchPage("403", { updateHash: false, routePath: route.path });
+          return;
+        }
+        switchPage(route.page, { updateHash, routePath: route.path });
+      }
+
+      function goBackToList() {
+        const route = parseRoute();
+        const segments = route.path.split("/");
+        if (segments.length > 1) {
+          const parent = segments.slice(0, -1).join("/");
+          window.location.hash = `#/${parent}`;
+          return;
+        }
+        switchPage("dashboard");
       }
 
       function attachPageControls() {
@@ -3841,10 +3876,31 @@
           "输入动作、人或资源条件后，查询结果会显示在这里。",
           "还没有查询审计日志",
           [
-            { label: "输入动作", action: "focusField('auditAction')", primary: true },
-            { label: "查询审计日志", action: "queryAudit(document.getElementById('btnAuditQuery'))" },
+            { label: "输入动作", action: "focusField(\'auditAction\')", primary: true },
+            { label: "查询审计日志", action: "queryAudit(document.getElementById(\'btnAuditQuery\'))" },
           ]
         );
+        renderEmpty(
+          "devicesOut",
+          "后端接口待接入。当前仅提供字段占位：device_id、buyer、status、last_heartbeat、agent_version。",
+          "设备数据暂不可用",
+          [{ label: "回到 Dashboard", action: "switchPage(\'dashboard\')", primary: true }]
+        );
+        renderEmpty(
+          "settingsOut",
+          "可在此集中管理控制台偏好。",
+          "设置项正在建设",
+          [
+            { label: "切换主题", action: "toggleTheme()", primary: true },
+            { label: "回到 Dashboard", action: "switchPage(\'dashboard\')" },
+          ]
+        );
+        renderErrorState("forbiddenOut", "403 无权限", "当前账号没有访问该页面的权限。", [
+          { label: "回到 Dashboard", action: "switchPage(\'dashboard\')", primary: true },
+        ]);
+        renderErrorState("notFoundOut", "404 页面不存在", "路由不存在或已被迁移。", [
+          { label: "回到 Dashboard", action: "switchPage(\'dashboard\')", primary: true },
+        ]);
       }
 
       function attachFieldValidation() {
@@ -3879,7 +3935,9 @@
           applyRoleUI();
           buildNav();
           await checkHealth();
-          await refreshDashboard();
+          const lastPage = localStorage.getItem("rv_last_page") || "dashboard";
+          window.location.hash = `#/${lastPage.replace(/^#\/?/, "")}`;
+          navigateByHash(false);
           toast("已恢复登录会话", "ok");
         } catch {
           localStorage.removeItem("rv_token");
