@@ -3506,3 +3506,20 @@
           filter: blur(40px);
         }
       }
+
+
+.user-menu {
+  display: grid;
+  gap: 6px;
+}
+
+.breadcrumb-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+#detailBackBtn {
+  padding: 4px 10px;
+}

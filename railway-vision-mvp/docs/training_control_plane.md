@@ -31,12 +31,22 @@
   - `TRAINING_MODEL_PULL`
   - `TRAINING_CANDIDATE_UPLOAD`
 
-未实现：
+已补齐（MVP 执行层）：
 
-- 真正的训练执行引擎
-- 训练日志流式上传与长期留存
+- 新增 `docker/scripts/training_worker_runner.py`，实现 worker 端完整执行循环：
+  - 心跳、拉取作业
+  - 受控拉取训练/验证资产
+  - 受控拉取并解密基线模型
+  - 执行训练命令钩子（`--trainer-cmd`）或内置 mock 微调
+  - 候选模型打包（复用 `model_package_tool`）并上传
+  - 回传 `RUNNING/SUCCEEDED/FAILED` 状态与指标摘要
+
+仍未实现（平台级增强）：
+
+- 分布式训练执行器（多 worker 协同调度）
+- 训练日志流式上传与长期留存（当前只回传摘要）
 - 候选模型自动审批、自动晋级
-- 调度队列、重试、超时回收、容量治理
+- 调度队列重试、超时回收、容量治理
 
 ## 2. API Surface
 
@@ -107,3 +117,44 @@ worker 侧：
 2. 训练完成后的自动验证、审批编排与发布串联
 3. 训练重试、超时回收、容量治理与告警
 4. 数据缓存复用和更细粒度的数据访问控制
+
+
+## 6. Worker Runner（新增）
+
+新增脚本：`docker/scripts/training_worker_runner.py`。
+
+### 6.1 作用
+
+该脚本把训练控制面 API 串成可执行链路：
+
+1. `POST /training/workers/heartbeat`
+2. `POST /training/workers/pull-jobs`
+3. `GET /training/workers/pull-asset`
+4. `POST /training/workers/pull-base-model`
+5. 本地训练（外部命令或内置 mock）
+6. `POST /training/workers/upload-candidate`
+7. `POST /training/workers/push-update`
+
+### 6.2 快速运行
+
+```bash
+cd railway-vision-mvp
+python docker/scripts/training_worker_runner.py   --backend-base-url http://localhost:8000   --worker-token trainwk_xxx   --backend-root ./backend   --model-encrypt-key ./docker/keys/model_encrypt.key   --model-sign-private-key ./docker/keys/model_sign_private.pem   --once
+```
+
+### 6.3 接入真实训练
+
+可通过 `--trainer-cmd` 注入真实训练逻辑。命令支持占位变量：
+
+- `{job_dir}`
+- `{train_manifest}`
+- `{val_manifest}`
+- `{base_model_path}`
+- `{output_model_path}`
+- `{job_json}`
+- `{metrics_json}`
+
+真实训练命令需至少产出：
+
+- 模型文件：`{output_model_path}`
+- 指标文件（可选）：`{metrics_json}`（JSON object）

@@ -89,10 +89,13 @@
           </div>
           <div class="topbar-right">
             <span id="healthBadge" class="pill">系统检测中</span>
-            <span id="userBadge" class="pill">未登录</span>
-            <span id="roleBadge" class="pill">角色：-</span>
+            <div id="userMenu" class="user-menu">
+              <div id="userBadge" class="pill">未登录</div>
+              <div id="roleBadge" class="pill">角色：-</div>
+              <div id="tenantBadge" class="pill">租户：-</div>
+            </div>
             <button class="ghost btn-auto" id="themeBtnMain" onclick="toggleTheme()">主题</button>
-            <button class="ghost btn-auto" onclick="logout()">退出</button>
+            <button class="ghost btn-auto" onclick="logout()">Logout</button>
           </div>
         </header>
 
@@ -106,12 +109,15 @@
           <main class="content">
             <section class="content-top">
               <div class="content-header">
-                <div class="breadcrumb">
-                  <span>VisionHub</span>
-                  <span>/</span>
-                  <span id="breadcrumbRole">控制台</span>
-                  <span>/</span>
-                  <strong id="breadcrumbPage">工作台</strong>
+                <div class="breadcrumb-wrap">
+                  <button id="detailBackBtn" class="ghost btn-auto hidden" onclick="goBackToList()">← 返回列表</button>
+                  <div class="breadcrumb">
+                    <span>VisionHub</span>
+                    <span>/</span>
+                    <span id="breadcrumbRole">控制台</span>
+                    <span>/</span>
+                    <strong id="breadcrumbPage">工作台</strong>
+                  </div>
                 </div>
                 <h2 id="contentTitle" class="content-title">工作台</h2>
                 <p id="contentDesc" class="content-desc">选择页面开始操作。</p>
@@ -752,6 +758,44 @@
                   <div class="mask-tip hidden" id="resultExportOutMaskTip">部分 L3 字段已脱敏</div>
                 </section>
               </div>
+            </section>
+
+            <section id="page-devices" class="page">
+              <div class="asset-page-shell stacking-shell">
+                <section class="stacking-hero">
+                  <div class="stacking-kicker">Devices</div>
+                  <h2 class="stacking-hero-title">设备管理（MVP 占位）</h2>
+                  <p class="stacking-hero-desc">后端接口待接入，当前先提供统一空态与字段说明。</p>
+                </section>
+                <section class="stacking-section">
+                  <div class="stacking-section-head">
+                    <h3 class="stacking-section-title">设备列表</h3>
+                    <p class="stacking-section-desc">字段：device_id, buyer, status, last_heartbeat, agent_version</p>
+                  </div>
+                  <div id="devicesOut" class="output"></div>
+                </section>
+              </div>
+            </section>
+
+            <section id="page-settings" class="page">
+              <div class="asset-page-shell stacking-shell">
+                <section class="stacking-hero">
+                  <div class="stacking-kicker">Settings</div>
+                  <h2 class="stacking-hero-title">设置</h2>
+                  <p class="stacking-hero-desc">管理控制台偏好与账号信息。</p>
+                </section>
+                <section class="stacking-section">
+                  <div id="settingsOut" class="output"></div>
+                </section>
+              </div>
+            </section>
+
+            <section id="page-403" class="page">
+              <div id="forbiddenOut" class="output"></div>
+            </section>
+
+            <section id="page-404" class="page">
+              <div id="notFoundOut" class="output"></div>
             </section>
 
             <section id="page-audit" class="page">

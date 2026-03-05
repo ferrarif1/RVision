@@ -14,6 +14,7 @@
 
 - 当前已实装：边缘推理、Pipeline 编排、模型提交审批发布、结果回传、审计留痕。
 - 当前已部分实装：训练控制面最小闭环，包含训练作业对象、worker 注册、心跳、拉取作业、受控拉取训练资产/基线模型、候选模型自动回收入库、状态回传。
+- 当前已新增：`docker/scripts/training_worker_runner.py`，可在 worker 侧执行“拉作业→拉资产/基线模型→本地训练命令→打包候选→回传状态”的MVP执行闭环。
 - 当前未实装：真正的训练执行引擎、自动验证晋级、完整分布式调度与容量治理。
 - 目标态：平台部署在 `server1` 作为控制面，通过网络分配其他主机资源进行训练与微调。
 
@@ -152,6 +153,21 @@ bash docker/scripts/quality_gate.sh
 - 边缘推理 golden fixture 回归检查
 - 运行时健康检查（若容器已启动）
 - 训练控制面 smoke 检查，并归档 `docs/qa/reports/training_control_plane_latest.json`
+
+### 方式C2：运行训练 Worker MVP 执行器
+
+```bash
+cd /Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp
+python docker/scripts/training_worker_runner.py \
+  --backend-base-url http://localhost:8000 \
+  --worker-token trainwk_xxx \
+  --backend-root ./backend \
+  --model-encrypt-key ./docker/keys/model_encrypt.key \
+  --model-sign-private-key ./docker/keys/model_sign_private.pem \
+  --once
+```
+
+该脚本用于把训练控制面 API 串成可执行链路；真实训练可通过 `--trainer-cmd` 接入。
 
 ### 方式D：发布 GO/NO-GO 门禁
 
