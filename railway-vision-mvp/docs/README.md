@@ -77,6 +77,10 @@
   demo 运行手册与验证路径。
 - [roadmap_ctxport_based.md](./roadmap_ctxport_based.md)
   分阶段路线图与能力演进顺序。
+- [product/platform_user_centric_implementation_v1.md](./product/platform_user_centric_implementation_v1.md)
+  用户视角目标态完整实现方案（V1）。
+- [product/platform_user_centric_execution_backlog_v1.md](./product/platform_user_centric_execution_backlog_v1.md)
+  对应执行清单与阶段验收标准（V1）。
 - [project_organization.md](./project_organization.md)
   项目目录、职责边界与建议的下一步重构顺序。
 - [qa/release_gate_runbook.md](./qa/release_gate_runbook.md)
