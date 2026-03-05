@@ -151,7 +151,8 @@ bash docker/scripts/start_one_click.sh
 该脚本会自动处理：
 - `docker/.env` 检查与初始化（缺失时从 `.env.example` 复制）
 - `docker compose up -d --build`
-- 后端健康检查等待（`/api/health`）
+- 后端健康检查等待（按顺序探测 `http://localhost:8000/health`、`http://localhost:8080/api/health`、`https://localhost:8443/api/health`）
+- 若超时，自动打印 backend/frontend 最近日志，便于快速定位问题
 
 ### 方式C：质量门禁检查（推荐发布前执行）
 
