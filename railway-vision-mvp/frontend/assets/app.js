@@ -165,10 +165,10 @@
       ];
 
       const NAV_GROUPS = [
-        { title: "主线 1 · 资产准备", pages: ["dashboard", "assets"], line: "line-1" },
-        { title: "主线 2 · 模型交付", pages: ["models", "pipelines"], line: "line-2" },
-        { title: "主线 3 · 执行与结果", pages: ["tasks", "task-monitor", "results"], line: "line-3" },
-        { title: "主线 4 · 治理运营", pages: ["audit", "devices", "settings"], line: "line-4" },
+        { title: "主线 1：准备资产", pages: ["dashboard", "assets"], line: "line-1" },
+        { title: "主线 2：交付模型", pages: ["models", "pipelines"], line: "line-2" },
+        { title: "主线 3：执行并查看结果", pages: ["tasks", "task-monitor", "results"], line: "line-3" },
+        { title: "主线 4：治理与设置", pages: ["audit", "devices", "settings"], line: "line-4" },
       ];
 
       const BUSINESS_LINES = [
@@ -176,8 +176,8 @@
           code: "01",
           role: "客户用户",
           title: "上传资产",
-          desc: "客户用户上传图片或视频资产，资产可用于训练、微调、测试验收或推理。",
-          next: "上传后拿到资产 ID，再进入执行页创建任务。",
+          desc: "上传图片或视频，拿到资产 ID。",
+          next: "下一步进入执行页创建任务。",
           page: "assets",
           action: "进入资产",
           perm: PERMISSIONS.ASSET_UPLOAD,
@@ -186,9 +186,9 @@
         {
           code: "02",
           role: "供应商",
-          title: "提交候选成果模型",
-          desc: "供应商上传初始算法与可选预训练模型，在平台受控环境内结合客户数据反复微调，形成候选成果模型并提交审批。",
-          next: "先进入模型页提交模型包，再等待平台审批。",
+          title: "提交候选模型",
+          desc: "上传候选模型包，等待平台审批。",
+          next: "审批通过后可进入发布。",
           page: "models",
           action: "进入模型",
           perm: PERMISSIONS.MODEL_VIEW,
@@ -198,8 +198,8 @@
           code: "03",
           role: "平台管理员",
           title: "验证并发布模型",
-          desc: "平台管理员结合客户测试数据验证模型有效性，审批并发布模型。",
-          next: "审批通过后继续配置交付方式和发布范围。",
+          desc: "审核候选模型并发布可用版本。",
+          next: "下一步配置交付范围。",
           page: "models",
           action: "进入审批发布",
           perm: PERMISSIONS.MODEL_VIEW,
@@ -208,9 +208,9 @@
         {
           code: "04",
           role: "授权设备",
-          title: "授权后执行与调用",
-          desc: "授权客户设备通过模型 API 或授权密钥使用加密模型，本地运行时完成解密。",
-          next: "客户在执行页选择流水线，设备按授权方式调用已发布能力。",
+          title: "执行任务并查看结果",
+          desc: "使用已发布能力执行任务并回看结果。",
+          next: "结果异常时去审计中心回查。",
           page: "tasks",
           action: "进入执行",
           perm: PERMISSIONS.TASK_CREATE,
