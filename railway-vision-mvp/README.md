@@ -31,7 +31,7 @@
   - 工作台 / 模型中心 / 流水线注册表 / 资产上传 / 任务创建 / 任务监控 / 结果中心 / 审计日志
   - 不同角色登录后仅显示对应功能页面
   - 所有结果以业务 UI 卡片、表格、截图、详情抽屉展示，不直接暴露原始 JSON
-  - 前端资源拆分为 `frontend/index.html + frontend/assets/app.css + frontend/assets/app.js`
+  - 前端资源拆分为 `frontend/index.html + frontend/assets/app.css + frontend/src/*`（模块化 SPA）
   - 模型中心已支持主路由模型 / 专家模型元数据、插件协议、审批时间线、版本对比、发布交付板
   - 流水线注册表已支持 Router + Experts + Thresholds + Fusion + Human Review 配置与发布
   - 任务创建页已支持 pipeline-first：默认调用 Pipeline，也兼容主模型调度与手动模型
@@ -140,6 +140,18 @@ docker compose -f docker/docker-compose.yml up -d --build
 cp docker/.env.example docker/.env
 docker compose --env-file docker/.env -f docker/docker-compose.yml up -d --build
 ```
+
+### 方式B2：一键启动脚本（开发/联调推荐）
+
+```bash
+cd /Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp
+bash docker/scripts/start_one_click.sh
+```
+
+该脚本会自动处理：
+- `docker/.env` 检查与初始化（缺失时从 `.env.example` 复制）
+- `docker compose up -d --build`
+- 后端健康检查等待（`/api/health`）
 
 ### 方式C：质量门禁检查（推荐发布前执行）
 

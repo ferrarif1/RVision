@@ -120,3 +120,11 @@
 - 抽出统一玻璃组件：`GlassPanel / GlassButton / GlassDrawer / StatusBadge / MetricCard`
 - 增加页面转场、空态插画和更细的响应式断点
 - 让平台方、供应商、买家三类用户拥有更明显的独立首页
+
+
+## 5. 前端架构（重构版）
+
+- 采用当前主流的 **组件化 SPA 架构**：`core（router/store/api） + layout（AppShell） + pages（页面模块）`。
+- 路由使用 hash router，统一处理登录门禁、权限门禁和 403/404。
+- 状态集中在 store 中管理（用户、权限、当前路由），避免页面间通过全局变量互相耦合。
+- 页面实现以模块拆分，单页职责清晰，后续可平滑迁移到 Vue/React。
