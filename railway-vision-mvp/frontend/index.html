@@ -81,37 +81,36 @@
               <div class="topbar-sub">主页 / 模型 / 资产 / 执行 / 结果</div>
             </div>
           </button>
-          <nav id="topbarNav" class="topbar-nav" aria-label="主导航"></nav>
-          <div class="global-search">
-            <span class="search-icon">⌕</span>
-            <input id="globalSearch" placeholder="搜索模型ID、任务ID、资产ID、审计动作" aria-label="全局搜索" />
-            <span class="search-kbd">⌘ K</span>
-          </div>
           <div class="topbar-right">
             <span id="healthBadge" class="pill">系统检测中</span>
-            <span id="userBadge" class="pill">未登录</span>
-            <span id="roleBadge" class="pill">角色：-</span>
-            <button class="ghost btn-auto" id="themeBtnMain" onclick="toggleTheme()">主题</button>
-            <button class="ghost btn-auto" onclick="logout()">退出</button>
+            <div id="userMenu" class="user-menu">
+              <div id="userBadge" class="pill">未登录</div>
+              <div id="roleBadge" class="pill">角色：-</div>
+              <div id="tenantBadge" class="pill">租户：-</div>
+            </div>
+            <button class="ghost btn-auto" onclick="logout()">Logout</button>
           </div>
         </header>
 
         <div class="layout">
           <aside class="sidebar">
-            <div class="nav-title">导航</div>
+            <div class="nav-title">业务导航（快速切换）</div>
+            <p class="nav-hint">按四条主线，逐步完成操作。</p>
             <nav id="navList" class="nav-list"></nav>
-            <div class="sidebar-note" id="sidebarNote">请选择页面开始操作。</div>
           </aside>
 
           <main class="content">
             <section class="content-top">
               <div class="content-header">
-                <div class="breadcrumb">
-                  <span>VisionHub</span>
-                  <span>/</span>
-                  <span id="breadcrumbRole">控制台</span>
-                  <span>/</span>
-                  <strong id="breadcrumbPage">工作台</strong>
+                <div class="breadcrumb-wrap">
+                  <button id="detailBackBtn" class="ghost btn-auto hidden" onclick="goBackToList()">← 返回列表</button>
+                  <div class="breadcrumb">
+                    <span>VisionHub</span>
+                    <span>/</span>
+                    <span id="breadcrumbRole">控制台</span>
+                    <span>/</span>
+                    <strong id="breadcrumbPage">工作台</strong>
+                  </div>
                 </div>
                 <h2 id="contentTitle" class="content-title">工作台</h2>
                 <p id="contentDesc" class="content-desc">选择页面开始操作。</p>
@@ -134,24 +133,16 @@
 
                 <section class="stacking-section">
                   <div class="stacking-section-head">
-                    <h3 class="stacking-section-title">四条业务线</h3>
-                    <p class="stacking-section-desc">四个角色的责任边界、下一步动作和对应页面都在这里。</p>
-                  </div>
-                  <div id="dashboardLanes" class="stacking-option-grid"></div>
-                </section>
-
-                <section class="stacking-section">
-                  <div class="stacking-section-head">
-                    <h3 class="stacking-section-title">按当前角色开始</h3>
-                    <p class="stacking-section-desc">你现在最适合先做的页面和顺序。</p>
+                    <h3 class="stacking-section-title">开始操作</h3>
+                    <p class="stacking-section-desc">按你的角色选择当前最常用入口。</p>
                   </div>
                   <div id="dashboardQuick" class="stacking-option-grid"></div>
                 </section>
 
                 <section class="stacking-section">
                   <div class="stacking-section-head">
-                    <h3 class="stacking-section-title">当前概览</h3>
-                    <p class="stacking-section-desc">用来快速了解当前账号下的模型、任务和结果情况。</p>
+                    <h3 class="stacking-section-title">关键状态</h3>
+                    <p class="stacking-section-desc">只保留最关键的四个数字。</p>
                   </div>
                   <div class="metric-grid stacking-metrics" id="dashboardMetrics">
                     <div class="metric"><div class="metric-label">模型</div><div class="metric-value" id="mModels">-</div></div>
@@ -159,14 +150,6 @@
                     <div class="metric"><div class="metric-label">成功</div><div class="metric-value" id="mSucceeded">-</div></div>
                     <div class="metric"><div class="metric-label">告警</div><div class="metric-value" id="mAlerts">-</div></div>
                   </div>
-                </section>
-
-                <section class="stacking-section">
-                  <div class="stacking-section-head">
-                    <h3 class="stacking-section-title">最近任务</h3>
-                    <p class="stacking-section-desc">最近任务，点击后继续处理。</p>
-                  </div>
-                  <div id="dashboardRecent" class="output"><div class="empty">最近任务会显示在这里</div></div>
                 </section>
               </div>
             </section>
@@ -750,6 +733,62 @@
                   </div>
                   <div class="output" id="resultExportOut"></div>
                   <div class="mask-tip hidden" id="resultExportOutMaskTip">部分 L3 字段已脱敏</div>
+                </section>
+              </div>
+            </section>
+
+            <section id="page-devices" class="page">
+              <div class="asset-page-shell stacking-shell">
+                <section class="stacking-hero">
+                  <div class="stacking-kicker">Devices</div>
+                  <h2 class="stacking-hero-title">设备管理（MVP 占位）</h2>
+                  <p class="stacking-hero-desc">后端接口待接入，当前先提供统一空态与字段说明。</p>
+                </section>
+                <section class="stacking-section">
+                  <div class="stacking-section-head">
+                    <h3 class="stacking-section-title">设备列表</h3>
+                    <p class="stacking-section-desc">字段：device_id, buyer, status, last_heartbeat, agent_version</p>
+                  </div>
+                  <div id="devicesOut" class="output"></div>
+                </section>
+              </div>
+            </section>
+
+            <section id="page-settings" class="page">
+              <div class="asset-page-shell stacking-shell">
+                <section class="stacking-hero">
+                  <div class="stacking-kicker">Settings</div>
+                  <h2 class="stacking-hero-title">设置</h2>
+                  <p class="stacking-hero-desc">管理控制台偏好与账号信息。</p>
+                </section>
+                <section class="stacking-section">
+                  <div id="settingsOut" class="output"></div>
+                </section>
+              </div>
+            </section>
+
+            <section id="page-403" class="page">
+              <div class="asset-page-shell stacking-shell">
+                <section class="stacking-hero">
+                  <div class="stacking-kicker">权限</div>
+                  <h2 class="stacking-hero-title">当前账号暂无访问权限</h2>
+                  <p class="stacking-hero-desc">如需访问该页面，请联系管理员为当前角色授予对应能力。</p>
+                </section>
+                <section class="stacking-section">
+                  <div id="forbiddenOut" class="output"></div>
+                </section>
+              </div>
+            </section>
+
+            <section id="page-404" class="page">
+              <div class="asset-page-shell stacking-shell">
+                <section class="stacking-hero">
+                  <div class="stacking-kicker">路由</div>
+                  <h2 class="stacking-hero-title">页面不存在或已下线</h2>
+                  <p class="stacking-hero-desc">请从导航栏重新选择页面，或返回工作台继续操作。</p>
+                </section>
+                <section class="stacking-section">
+                  <div id="notFoundOut" class="output"></div>
                 </section>
               </div>
             </section>
