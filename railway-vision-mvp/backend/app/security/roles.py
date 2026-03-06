@@ -2,6 +2,7 @@
 
 from app.core.constants import PERMISSION_ASSET_UPLOAD
 from app.core.constants import PERMISSION_AUDIT_READ
+from app.core.constants import PERMISSION_DEVICE_READ
 from app.core.constants import PERMISSION_DASHBOARD_VIEW
 from app.core.constants import PERMISSION_DATA_L3_READ
 from app.core.constants import PERMISSION_MODEL_APPROVE
@@ -9,6 +10,7 @@ from app.core.constants import PERMISSION_MODEL_RELEASE
 from app.core.constants import PERMISSION_MODEL_SUBMIT
 from app.core.constants import PERMISSION_MODEL_VIEW
 from app.core.constants import PERMISSION_RESULT_READ
+from app.core.constants import PERMISSION_SETTINGS_VIEW
 from app.core.constants import PERMISSION_TASK_CREATE
 from app.core.constants import PERMISSION_TRAINING_JOB_CREATE
 from app.core.constants import PERMISSION_TRAINING_JOB_VIEW
@@ -99,6 +101,21 @@ TASK_READ_ROLES = (
 )
 RESULT_READ_ROLES = TASK_READ_ROLES
 AUDIT_READ_ROLES = (ROLE_PLATFORM_ADMIN, ROLE_PLATFORM_AUDITOR)
+DEVICE_READ_ROLES = (
+    ROLE_PLATFORM_ADMIN,
+    ROLE_PLATFORM_OPERATOR,
+    ROLE_PLATFORM_AUDITOR,
+    ROLE_BUYER_OPERATOR,
+    ROLE_BUYER_AUDITOR,
+)
+SETTINGS_VIEW_ROLES = (
+    ROLE_PLATFORM_ADMIN,
+    ROLE_PLATFORM_OPERATOR,
+    ROLE_PLATFORM_AUDITOR,
+    ROLE_SUPPLIER_ENGINEER,
+    ROLE_BUYER_OPERATOR,
+    ROLE_BUYER_AUDITOR,
+)
 TRAINING_JOB_CREATE_ROLES = (ROLE_PLATFORM_ADMIN, ROLE_PLATFORM_OPERATOR)
 TRAINING_JOB_READ_ROLES = (
     ROLE_PLATFORM_ADMIN,
@@ -120,6 +137,8 @@ def build_ui_capabilities(user_roles: list[str]) -> dict[str, bool]:
         "task_create": has_any_role(user_roles, TASK_CREATE_ROLES),
         "result_read": has_any_role(user_roles, RESULT_READ_ROLES),
         "audit_read": has_any_role(user_roles, AUDIT_READ_ROLES),
+        "device_read": has_any_role(user_roles, DEVICE_READ_ROLES),
+        "settings_view": has_any_role(user_roles, SETTINGS_VIEW_ROLES),
         "training_job_view": has_any_role(user_roles, TRAINING_JOB_READ_ROLES),
         "training_job_create": has_any_role(user_roles, TRAINING_JOB_CREATE_ROLES),
         "training_worker_manage": has_any_role(user_roles, TRAINING_WORKER_ADMIN_ROLES),
@@ -150,6 +169,10 @@ def build_permissions(user_roles: list[str]) -> list[str]:
         permissions.append(PERMISSION_RESULT_READ)
     if caps["audit_read"]:
         permissions.append(PERMISSION_AUDIT_READ)
+    if caps["device_read"]:
+        permissions.append(PERMISSION_DEVICE_READ)
+    if caps["settings_view"]:
+        permissions.append(PERMISSION_SETTINGS_VIEW)
     if caps["training_job_view"]:
         permissions.append(PERMISSION_TRAINING_JOB_VIEW)
     if caps["training_job_create"]:

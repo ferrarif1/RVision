@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 
 import jwt
 from fastapi import Depends, Header, HTTPException, status
@@ -86,6 +87,9 @@ def get_edge_device(
     device = db.query(Device).filter(Device.code == x_edge_device_code, Device.status == "ACTIVE").first()
     if not device or not verify_password(x_edge_token, device.edge_token_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid edge credentials")
+    device.last_seen_at = datetime.utcnow()
+    db.add(device)
+    db.commit()
 
     return EdgeDeviceContext(id=device.id, code=device.code, name=device.name)
 

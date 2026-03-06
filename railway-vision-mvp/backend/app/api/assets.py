@@ -2,7 +2,7 @@ import hashlib
 import os
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.audit import actions
@@ -10,13 +10,90 @@ from app.core.config import get_settings
 from app.db.database import get_db
 from app.db.models import DataAsset, Tenant
 from app.security.dependencies import AuthUser, require_roles
-from app.security.roles import ASSET_UPLOAD_ROLES, is_buyer_user, is_platform_user
+from app.security.roles import ASSET_UPLOAD_ROLES, MODEL_READ_ROLES, is_buyer_user, is_platform_user, is_supplier_user
 from app.services.audit_service import record_audit
 
 router = APIRouter(prefix="/assets", tags=["assets"])
 
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".mp4", ".avi", ".mov"}
 ASSET_PURPOSES = {"training", "finetune", "validation", "inference"}
+
+
+@router.get("")
+def list_assets(
+    q: str | None = Query(default=None),
+    asset_type: str | None = Query(default=None),
+    asset_purpose: str | None = Query(default=None),
+    sensitivity_level: str | None = Query(default=None),
+    buyer_tenant_code: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*MODEL_READ_ROLES)),
+):
+    if is_supplier_user(current_user.roles):
+        # Supplier role should not directly enumerate buyer raw assets.
+        return []
+
+    query = db.query(DataAsset).order_by(DataAsset.created_at.desc())
+    if is_buyer_user(current_user.roles):
+        query = query.filter(DataAsset.buyer_tenant_id == current_user.tenant_id)
+    elif buyer_tenant_code and is_platform_user(current_user.roles):
+        buyer_tenant = (
+            db.query(Tenant)
+            .filter(Tenant.tenant_code == buyer_tenant_code, Tenant.tenant_type == "BUYER", Tenant.status == "ACTIVE")
+            .first()
+        )
+        if not buyer_tenant:
+            return []
+        query = query.filter(DataAsset.buyer_tenant_id == buyer_tenant.id)
+
+    if asset_type:
+        query = query.filter(DataAsset.asset_type == asset_type)
+    if sensitivity_level:
+        query = query.filter(DataAsset.sensitivity_level == sensitivity_level)
+
+    rows = query.limit(limit).all()
+    tenant_ids = {row.buyer_tenant_id for row in rows if row.buyer_tenant_id}
+    tenant_map = {
+        row.id: row
+        for row in db.query(Tenant).filter(Tenant.id.in_(tenant_ids)).all()
+    }
+
+    keyword = (q or "").strip().lower()
+    payload = []
+    for row in rows:
+        meta = row.meta if isinstance(row.meta, dict) else {}
+        row_asset_purpose = str(meta.get("asset_purpose") or "")
+        if asset_purpose and row_asset_purpose != asset_purpose:
+            continue
+        if keyword:
+            haystacks = [
+                (row.file_name or "").lower(),
+                (row.asset_type or "").lower(),
+                (row.sensitivity_level or "").lower(),
+                row_asset_purpose.lower(),
+                str(meta.get("dataset_label") or "").lower(),
+                str(meta.get("use_case") or "").lower(),
+                str(meta.get("intended_model_code") or "").lower(),
+            ]
+            if not any(keyword in item for item in haystacks):
+                continue
+        buyer = tenant_map.get(row.buyer_tenant_id)
+        payload.append(
+            {
+                "id": row.id,
+                "file_name": row.file_name,
+                "asset_type": row.asset_type,
+                "sensitivity_level": row.sensitivity_level,
+                "checksum": row.checksum,
+                "buyer_tenant_id": row.buyer_tenant_id,
+                "buyer_tenant_code": buyer.tenant_code if buyer else None,
+                "buyer_tenant_name": buyer.name if buyer else None,
+                "meta": meta,
+                "created_at": row.created_at,
+            }
+        )
+    return payload
 
 
 @router.post("/upload")

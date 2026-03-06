@@ -52,7 +52,6 @@ bash docker/scripts/start_one_click.sh
 
 该脚本会自动执行 compose 启动，并按顺序等待以下任一健康检查通过：
 - `http://localhost:8000/health`
-- `http://localhost:8080/api/health`
 - `https://localhost:8443/api/health`
 
 若超时，会自动输出 backend/frontend 最近日志用于排障。

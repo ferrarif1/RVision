@@ -19,10 +19,6 @@ for i in $(seq 1 40); do
     HEALTH_OK="http://localhost:8000/health"
     break
   fi
-  if curl -fsS http://localhost:8080/api/health >/dev/null 2>&1; then
-    HEALTH_OK="http://localhost:8080/api/health"
-    break
-  fi
   if curl -ksSf https://localhost:8443/api/health >/dev/null 2>&1; then
     HEALTH_OK="https://localhost:8443/api/health"
     break
@@ -37,5 +33,5 @@ for i in $(seq 1 40); do
 done
 
 echo "[start_one_click] backend 已就绪：${HEALTH_OK}"
-echo "[start_one_click] frontend: http://localhost:8080"
+echo "[start_one_click] frontend: https://localhost:8443"
 echo "[start_one_click] backend docs: http://localhost:8000/docs"
