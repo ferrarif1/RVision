@@ -83,6 +83,8 @@
   用户视角目标态完整实现方案（V1）。
 - [product/platform_user_centric_execution_backlog_v1.md](./product/platform_user_centric_execution_backlog_v1.md)
   对应执行清单与阶段验收标准（V1）。
+- [product/visionhub_positioning_and_role_onboarding.md](./product/visionhub_positioning_and_role_onboarding.md)
+  VisionHub 的产品定位、核心价值和角色上手路径。
 - [project_organization.md](./project_organization.md)
   项目目录、职责边界与建议的下一步重构顺序。
 - [qa/release_gate_runbook.md](./qa/release_gate_runbook.md)

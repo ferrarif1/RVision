@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    app_name: str = Field(default="railway-vision-mvp-backend", description="应用名称 / Backend application name")
+    app_name: str = Field(default="visionhub-backend", description="应用名称 / Backend application name")
     app_env: str = Field(default="dev", description="运行环境 / Runtime environment, e.g. dev/staging/prod")
 
     database_url: str = Field(

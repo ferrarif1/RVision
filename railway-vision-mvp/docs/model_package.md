@@ -1,4 +1,4 @@
-# 模型包规范（railway-vision-mvp）
+# 模型包规范（VisionHub）
 
 ## 1. 固定目录结构
 

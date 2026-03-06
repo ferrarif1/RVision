@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""API parity and release-gate regression checks for railway-vision-mvp."""
+"""API parity and release-gate regression checks for VisionHub."""
 
 from __future__ import annotations
 

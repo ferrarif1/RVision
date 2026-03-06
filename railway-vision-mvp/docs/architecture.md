@@ -1,4 +1,4 @@
-# railway-vision-mvp 总体架构与数据流（第1步）
+# VisionHub 总体架构与数据流（第1步）
 
 ## 1. 目标与边界
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-click demo bootstrap for railway-vision-mvp.
+"""One-click demo bootstrap for VisionHub.
 
 This script will:
 1) Generate local certs/keys

@@ -1,90 +1,66 @@
-# railway-vision-mvp
+# VisionHub
 
-三方（平台/供应商/买家）模型托管训练与交付平台 MVP。  
-目标是把 **代码主权、数据主权、模型发布权、收费权** 固定在平台方手里，供应商仅提供算法能力。
+VisionHub 是一个面向铁路、政企内网和受监管环境的模型托管、受控训练协作、审批发布与边缘安全交付平台。
 
-当前产品按 4 条业务线组织：
+VisionHub 把资产准备、供应商协作、模型治理、任务执行、结果回传和审计闭环统一放在一个控制面中，帮助平台方稳定掌握 **代码主权、数据主权、模型发布权、收费权**。
 
-- 客户用户上传图片或视频资产，资产可用于训练、微调、测试验收或推理。
-- 供应商上传初始算法与可选预训练模型，在平台受控环境内结合客户数据反复微调，形成候选成果模型并提交审批。
-- 平台管理员结合客户测试数据验证模型有效性，审批并发布模型。
-- 授权客户设备通过模型 API 或授权密钥使用加密模型，本地运行时完成解密。
+## 核心价值
 
-当前实现与目标态要明确区分：
+- 平台控权：平台掌握模型审批、签名、发布、回滚和商业分发节奏。
+- 数据主权：客户资产在平台控制面内完成上传、训练准备、验证与推理。
+- 受控协作：供应商提交算法能力、参与微调和候选模型迭代，平台统一收口成果交付。
+- 边缘安全交付：授权设备拉取加密模型，在本地完成验签、解密、推理、补传和审计闭环。
 
-- 当前已实装：边缘推理、Pipeline 编排、模型提交审批发布、结果回传、审计留痕。
-- 当前已部分实装：训练控制面最小闭环，包含训练作业对象、worker 注册、心跳、拉取作业、受控拉取训练资产/基线模型、候选模型自动回收入库、状态回传。
-- 当前已新增：`docker/scripts/training_worker_runner.py`，可在 worker 侧执行“拉作业→拉资产/基线模型→本地训练命令→打包候选→回传状态”的MVP执行闭环。
-- 当前已新增：运行时硬化，包括真实后端登录校验、上传空文件/非法类型拦截、流式上传、重复资产复用、边缘 Agent 版本上报。
-- 当前已新增：版本化数据库迁移（`schema_migrations + backend/app/db/migrations/versions/*.sql`），不再依赖启动时散落的 `ALTER TABLE` 补字段。
-- 当前未实装：真正的训练执行引擎、自动验证晋级、完整分布式调度与容量治理。
-- 目标态：平台部署在 `server1` 作为控制面，通过网络分配其他主机资源进行训练与微调。
+## 面向的角色
 
-## 1. 当前实现状态（MVP）
+| 角色 | 核心收益 | 默认路径 |
+|---|---|---|
+| 平台方 | 掌握模型、密钥、发布、审计和授权控制面 | 模型审批 -> 发布授权 -> 审计追踪 |
+| 供应商 | 在受控环境内提交算法能力、协作训练、交付候选模型 | 提交模型 -> 训练协作 -> 候选交付 |
+| 买家 | 在数据不出域前提下上传资产、执行任务、查看结果 | 上传资产 -> 创建任务 -> 查看结果 |
+| 授权设备 | 获得可验证、可补传、可长期运行的交付链路 | 拉取授权 -> 本地执行 -> 回传结果 |
 
-### 已实现
+## 四条业务主线
+
+1. 客户用户上传图片、视频或 ZIP 数据集包，资产可用于训练、微调、测试验收或推理。
+2. 供应商上传初始算法与可选预训练模型，在平台受控环境内结合客户数据反复微调，形成候选成果模型并提交审批。
+3. 平台管理员结合客户测试数据验证模型有效性，审批并发布模型。
+4. 授权客户设备通过模型 API 或授权密钥使用加密模型，本地运行时完成解密。
+
+## 当前可直接使用的能力
 
 - 中心端一键部署：`FastAPI + PostgreSQL + Redis + Nginx(frontend)`（Docker Compose）
-- 边缘端 Agent：拉任务、拉模型、验签、解密、推理、回传、断网补传
-- 边缘推理插件化：内置插件注册表（车号OCR、螺栓缺失），支持外部插件模块按环境变量加载
-- 身份与权限：JWT + RBAC（`platform_* / supplier_* / buyer_*`）
-- 前后端权限一致：后端 `/auth/login`、`/users/me` 返回 `capabilities`，前端按能力动态显示模块
-- 前端控制台已分页面重构：
-  - 工作台 / 模型中心 / 流水线注册表 / 资产上传 / 任务创建 / 任务监控 / 结果中心 / 审计日志
-  - 不同角色登录后仅显示对应功能页面
-  - 所有结果以业务 UI 卡片、表格、截图、详情抽屉展示，不直接暴露原始 JSON
-  - 前端资源拆分为 `frontend/index.html + frontend/assets/app.css + frontend/src/*`（模块化 SPA）
-  - 模型中心已支持主路由模型 / 专家模型元数据、插件协议、审批时间线、版本对比、发布交付板
-  - 流水线注册表已支持 Router + Experts + Thresholds + Fusion + Human Review 配置与发布
-  - 任务创建页已支持 pipeline-first：默认调用 Pipeline，也兼容主模型调度与手动模型
-  - 结果中心已支持任务级概览、告警聚合、焦点截图、结果卡片与摘要导出
-  - 任务监控支持手动查询、任务队列分页筛选、10 秒自动刷新
-  - 审计中心支持按 action / 操作人 / 资源类型 / 资源ID / 时间范围筛选，并显示摘要指标
-- 多租户骨架：平台/供应商/买家租户隔离过滤（模型、资产、任务、结果）
-- 模型供应链闭环：
-  - 供应商提交 `model_package.zip`
-  - 平台审批 `/models/approve`
-  - 平台发布 `/models/release`（可指定设备、买家）
-- 模型包安全：
-  - 固定包结构：`manifest.json + model.enc + signature.sig + README.txt`
-  - 中心端入库验签、哈希校验
-  - 边缘端拉取后二次验签、哈希校验、解密加载
-- 数据流与敏感级别：
-- 资产上传（图片/视频，支持训练/微调/测试/推理用途）
-- 资产上传支持单文件与 ZIP 数据集包：训练/微调/验证用途可上传包含多层文件夹的 ZIP，控制面会记录资源数与摘要
-  - 任务创建与策略下发（支持主模型调度、小模型推荐，默认 `upload_raw_video=false`）
-  - 结果落库 + 截图（L2）回传
-- 训练与交付语义：
-  - 资产上传支持用途、数据批次、业务场景、目标模型标记
-  - 模型提交支持 router/expert 类型、统一输入输出协议、插件标识、运行时、显存与时延元数据
-  - 流水线支持主路由、专家映射、阈值版本、融合规则、人工复核规则、灰度发布范围
-  - 模型审批支持记录测试数据资产与验证结论
-  - 模型发布支持记录交付方式（API / 本地解密 / 混合）与授权信息
-- 训练当前状态说明：
-  - 当前 MVP 已支持训练/微调相关资产用途与模型提审元数据
-  - 当前 MVP 已实现训练作业、远程 worker 接入、训练资产/基线模型受控分发、候选模型自动回收
-  - 当前 MVP 尚未实现真正的训练执行、自动验证晋级与容量调度
-  - 相关目标架构见 `docs/cto/adr-0003-remote-training-control-plane.md`
-- 推理演示能力：
-  - `car_number_ocr`：车号识别占位（EasyOCR可选 + 规则回退）
-  - `bolt_missing_detect`：OpenCV MobileNet-SSD/回退检测逻辑
-- 审计留痕：登录、上传、建任务、主模型路由、小模型推荐、模型提交/审批/发布/下载、结果导出、边缘拉取回传
-- 编排执行闭环：
-  - Pipeline Registry：一条 Pipeline = Router + Experts + Thresholds + Fusion + Human Review
-  - Orchestrator：按 router 输出动态拉起专家模型，可并行执行并输出融合结果
-  - Result Store / Audit：保存 pipeline 版本、阈值版本、输入哈希、输出摘要、耗时和审计哈希
+- 身份与权限：JWT + RBAC（`platform_* / supplier_* / buyer_*`），前后端权限口径一致
+- 资产中心：支持图片、视频、ZIP 数据集包上传，支持训练/微调/验证/推理用途标记
+- 模型中心：支持模型包提交、审批、发布、时间线查看和交付元数据管理
+- 流水线中心：支持 `Router + Experts + Thresholds + Fusion + Human Review` 的 pipeline 编排与发布
+- 训练控制面：支持训练作业、worker 注册/心跳、受控拉取训练资产和基线模型、候选模型自动回收
+- 边缘执行链路：支持拉任务、拉模型、验签、解密、推理、回传、断网补传
+- 审计闭环：登录、上传、建任务、训练拉取、模型提交/审批/发布/下载、结果导出、边缘回传均有留痕
+- 运行时硬化：真实登录校验、流式上传、重复资产复用、空文件/非法类型拦截、Agent 版本上报
+- 版本化数据库迁移：`schema_migrations + backend/app/db/migrations/versions/*.sql`
 
-### 已跑通的最小闭环
+## 已验证的最小闭环
 
-- 供应商提交模型 -> 平台审批发布 -> 买家上传图片 -> 边缘推理 -> 结果回传 -> 前端查询 -> 审计可查
+- 供应商提交模型 -> 平台审批发布 -> 买家上传资产 -> 边缘执行推理 -> 结果回传 -> 前端查询 -> 审计可查
+- 训练作业创建 -> worker 拉取训练资产/基线模型 -> 生成候选模型 -> 平台自动回收入库
+- ZIP 数据集包上传 -> 资源计数与层级分析 -> worker 解包 -> 多资源训练输入
 
-### 当前不应误判为已完成的能力
+## 当前交付边界
 
-- 真实训练执行与失败重试
-- 训练数据分发与下载鉴权
-- 训练产物自动回收入库与晋级
+当前仓库已经具备“可真实运行的最小控制面和交付闭环”，重点能力如下：
 
-## 2. 架构总览
+- 已稳定落地：边缘推理、Pipeline 编排、模型提交审批发布、结果回传、审计留痕
+- 已具备最小执行闭环：训练作业对象、worker 接入、受控资产/基线模型分发、候选模型自动回收
+- 已补齐工程防线：运行时硬化、质量门禁、GO/NO-GO 报告、版本化迁移
+
+下一阶段将继续增强：
+
+- 真实训练执行引擎与失败重试
+- 自动验证晋级与审批编排
+- 完整分布式调度、容量治理与训练日志流
+
+## 系统概览
 
 ```text
 供应商(初始算法/初始模型)
@@ -105,7 +81,7 @@
 └─────────────────────────────────────────────────────────┘
 ```
 
-详细文档：
+## 文档入口
 
 - 架构与数据流：[docs/architecture.md](docs/architecture.md)
 - 边缘终端接入说明：[docs/edge_terminal_access.md](docs/edge_terminal_access.md)
@@ -115,11 +91,12 @@
 - 职责权力清单：[docs/company_responsibilities.md](docs/company_responsibilities.md)
 - 模型包规范：[docs/model_package.md](docs/model_package.md)
 - 前端设计语言：[docs/frontend_design_language.md](docs/frontend_design_language.md)
+- 产品定位与角色上手：[docs/product/visionhub_positioning_and_role_onboarding.md](docs/product/visionhub_positioning_and_role_onboarding.md)
 - 演示脚本：[docs/demo.md](docs/demo.md)
 - 研发路线图（ctxport方法）：[docs/roadmap_ctxport_based.md](docs/roadmap_ctxport_based.md)
 - 文档导航与模板：[docs/README.md](docs/README.md)
 
-## 3. 快速开始
+## 快速开始
 
 ### 方式A：一键演示（推荐）
 
@@ -237,7 +214,7 @@ python3 docker/scripts/db_migrate.py --apply
 - 当前采用 snapshot-at-tip 策略：最新迁移文件必须是 `*_schema.sql` 或 `*_snapshot.sql`，用于表达当前完整 schema
 - `backend/app/db/schema.sql` 不再手工散改；如更新了最新 snapshot migration，请执行 `python3 docker/scripts/schema_snapshot_guard.py --write`
 
-## 4. 默认账号
+## 默认账号
 
 - `platform_admin / platform123`
 - `platform_operator / platform123`
@@ -248,7 +225,7 @@ python3 docker/scripts/db_migrate.py --apply
 
 兼容旧账号：`admin/admin123`、`operator/operator123`、`auditor/auditor123`
 
-## 5. 当前接口覆盖
+## 当前接口覆盖
 
 中心端：
 
@@ -290,7 +267,7 @@ python3 docker/scripts/db_migrate.py --apply
 - `GET /edge/pull_asset`
 - `POST /edge/push_results`
 
-## 6. 安全与合规骨架（已落地）
+## 安全与合规骨架（已落地）
 
 - 模型加密存储与传输（`model.enc`）
 - 模型签名校验（RSA-SHA256）
@@ -299,7 +276,7 @@ python3 docker/scripts/db_migrate.py --apply
 - 关键动作审计可追溯（含模型下载/发布/结果导出）
 - 日志骨架：审计日志独立表，应用日志通过容器日志输出
 
-## 7. 下一步计划（建议）
+## 下一步计划（建议）
 
 ### P1（可用性）
 
@@ -320,7 +297,7 @@ python3 docker/scripts/db_migrate.py --apply
 - 授权策略：按买家、设备、期限、能力包授权
 - 对账与分账（平台抽佣、供应商结算、买家账单）
 
-## 8. 无训练硬件还能不能做这门业务？
+## 无训练硬件还能不能做这门业务？
 
 可以做，但业务模式要调整，结论是：
 

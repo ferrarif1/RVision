@@ -61,6 +61,8 @@ Product 轨道负责把复杂的平台能力收敛成用户一眼能懂、30 秒
   用户视角目标态完整实现方案（V1）。
 - [platform_user_centric_execution_backlog_v1.md](./platform_user_centric_execution_backlog_v1.md)
   按周执行清单与验收标准（V1）。
+- [visionhub_positioning_and_role_onboarding.md](./visionhub_positioning_and_role_onboarding.md)
+  VisionHub 的产品定位、核心能力、角色价值和首条上手路径。
 
 ## Recommended Deliverables
 

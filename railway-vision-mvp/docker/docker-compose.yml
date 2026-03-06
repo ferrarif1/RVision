@@ -39,7 +39,7 @@ services:
     container_name: rv_backend
     restart: unless-stopped
     environment:
-      APP_NAME: railway-vision-mvp-backend
+      APP_NAME: visionhub-backend
       APP_ENV: dev
       DATABASE_URL: postgresql+psycopg2://railway:railway123@postgres:5432/railway_vision
       REDIS_URL: redis://redis:6379/0

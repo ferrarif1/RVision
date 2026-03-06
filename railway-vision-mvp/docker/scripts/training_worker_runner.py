@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Polling training worker runner for RVision training control plane.
+"""Polling training worker runner for VisionHub training control plane.
 
 This script fills the gap between control-plane APIs and actual worker execution:
 - heartbeat + pull jobs
@@ -625,7 +625,7 @@ class TrainingWorkerRunner:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run RVision training worker execution loop.")
+    parser = argparse.ArgumentParser(description="Run VisionHub training worker execution loop.")
     parser.add_argument("--backend-base-url", default=os.getenv("TRAINING_BACKEND_BASE_URL", "http://localhost:8000"))
     parser.add_argument("--worker-code", default=os.getenv("TRAINING_WORKER_CODE", ""))
     parser.add_argument("--worker-token", default=os.getenv("TRAINING_WORKER_TOKEN", ""))

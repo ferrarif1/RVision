@@ -78,7 +78,7 @@ def build_package(
     signature = private_key.sign(manifest_bytes + encrypted_model_bytes, padding.PKCS1v15(), hashes.SHA256())
 
     readme_text = (
-        "railway-vision-mvp model package\n"
+        "VisionHub model package\n"
         "- manifest.json: model metadata and hash\n"
         "- model.enc: encrypted model bytes\n"
         "- signature.sig: RSA signature for manifest+model.enc\n"
