@@ -50,7 +50,8 @@
   - 中心端入库验签、哈希校验
   - 边缘端拉取后二次验签、哈希校验、解密加载
 - 数据流与敏感级别：
-  - 资产上传（图片/视频，支持训练/微调/测试/推理用途）
+- 资产上传（图片/视频，支持训练/微调/测试/推理用途）
+- 资产上传支持单文件与 ZIP 数据集包：训练/微调/验证用途可上传包含多层文件夹的 ZIP，控制面会记录资源数与摘要
   - 任务创建与策略下发（支持主模型调度、小模型推荐，默认 `upload_raw_video=false`）
   - 结果落库 + 截图（L2）回传
 - 训练与交付语义：
@@ -167,9 +168,11 @@ bash docker/scripts/quality_gate.sh
 
 该脚本会执行：
 - 后端/边缘代码编译检查
+- 数据库 schema 快照守卫（`backend/app/db/schema.sql` 必须与最新 snapshot migration 一致）
 - 边缘推理 golden fixture 回归检查
 - 运行时健康检查（若容器已启动）
 - 运行时硬化 smoke（认证拒绝、空文件拒绝、非法类型拒绝、重复上传复用）
+- 训练/验证数据集包支持：ZIP 嵌套目录、多资源计数、0-n 训练资产列表
 - 训练控制面 smoke 检查，并归档 `docs/qa/reports/training_control_plane_latest.json`
 
 ### 方式C2：运行训练 Worker MVP 执行器
@@ -231,6 +234,8 @@ python3 docker/scripts/db_migrate.py --apply
 - 服务启动时会自动执行待迁移版本
 - `db_migrate.py` 优先在 `rv_backend` 容器内执行，用于手动查看 `schema_migrations` 状态或在离线维护时补跑迁移
 - 当前迁移文件目录为 `backend/app/db/migrations/versions/`
+- 当前采用 snapshot-at-tip 策略：最新迁移文件必须是 `*_schema.sql` 或 `*_snapshot.sql`，用于表达当前完整 schema
+- `backend/app/db/schema.sql` 不再手工散改；如更新了最新 snapshot migration，请执行 `python3 docker/scripts/schema_snapshot_guard.py --write`
 
 ## 4. 默认账号
 

@@ -7,6 +7,9 @@ echo "[info] quality gate: compile checks"
 python -m compileall "${ROOT_DIR}/backend/app" "${ROOT_DIR}/edge/agent" "${ROOT_DIR}/edge/inference" >/tmp/rv_quality_compile.log
 tail -n 8 /tmp/rv_quality_compile.log
 
+echo "[info] quality gate: schema snapshot guard"
+python3 "${ROOT_DIR}/docker/scripts/schema_snapshot_guard.py"
+
 echo "[info] quality gate: golden plugin fixtures"
 PYTHONPATH="${ROOT_DIR}/edge" python -m inference.golden_checks
 

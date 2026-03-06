@@ -23,6 +23,14 @@ class Settings(BaseSettings):
         default=268435456,
         description="单个资产上传大小上限（字节） / Max size in bytes for a single uploaded asset",
     )
+    asset_archive_max_entries: int = Field(
+        default=10000,
+        description="单个 ZIP 资产允许的最大归档条目数 / Max number of archive entries allowed in one ZIP asset",
+    )
+    asset_archive_max_uncompressed_bytes: int = Field(
+        default=1073741824,
+        description="单个 ZIP 资产允许的最大解压后总大小（字节） / Max total uncompressed bytes allowed in one ZIP asset",
+    )
     model_signing_public_key: str = Field(
         default="/app/keys/model_sign_public.pem",
         description="模型包验签公钥路径 / Public key path for model package signature verification",

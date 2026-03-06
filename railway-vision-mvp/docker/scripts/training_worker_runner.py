@@ -21,6 +21,7 @@ import shlex
 import subprocess
 import sys
 import time
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,14 @@ from cryptography.fernet import Fernet
 
 class WorkerError(Exception):
     pass
+
+
+DATASET_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
+DATASET_VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov"}
+DATASET_MEDIA_EXTENSIONS = DATASET_IMAGE_EXTENSIONS | DATASET_VIDEO_EXTENSIONS
+ARCHIVE_PREVIEW_LIMIT = 20
+ARCHIVE_MAX_ENTRIES = 10000
+ARCHIVE_MAX_UNCOMPRESSED_BYTES = 1073741824
 
 
 def _now_ts() -> float:
@@ -82,15 +91,112 @@ def _run_cmd(cmd: str, env: dict[str, str] | None = None) -> None:
         raise WorkerError(f"command failed({proc.returncode}): {cmd}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}")
 
 
+def _resource_paths_from_row(row: dict[str, Any]) -> list[Path]:
+    members = row.get("members")
+    if isinstance(members, list) and members:
+        paths = [Path(str((item or {}).get("path") or "")) for item in members]
+        return [path for path in paths if path.exists() and path.is_file()]
+    path = Path(str(row.get("path") or ""))
+    if path.exists() and path.is_file():
+        return [path]
+    return []
+
+
+def _resource_count_from_rows(rows: list[dict[str, Any]]) -> int:
+    return sum(len(_resource_paths_from_row(row)) for row in rows)
+
+
+def _normalize_archive_member(name: str) -> Path:
+    normalized = str(name or "").replace("\\", "/").strip()
+    if not normalized:
+        raise WorkerError("archive contains empty member name")
+    path = Path(normalized)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise WorkerError(f"archive contains unsafe member path: {normalized}")
+    return path
+
+
+def _extract_archive_asset(archive_path: Path, extract_root: Path) -> dict[str, Any]:
+    try:
+        with zipfile.ZipFile(archive_path) as zf:
+            infos = zf.infolist()
+            if len(infos) > ARCHIVE_MAX_ENTRIES:
+                raise WorkerError(f"archive contains too many entries: {len(infos)} > {ARCHIVE_MAX_ENTRIES}")
+
+            members: list[dict[str, Any]] = []
+            total_uncompressed = 0
+            ignored_entry_count = 0
+            preview_members: list[str] = []
+            seen_targets: set[Path] = set()
+
+            # Worker 侧重新校验 ZIP 结构，避免只依赖控制面检查。
+            # Re-validate archive structure on worker side instead of trusting control-plane metadata only.
+            for info in infos:
+                member = _normalize_archive_member(info.filename)
+                if info.is_dir() or str(info.filename).endswith("/"):
+                    continue
+
+                total_uncompressed += max(info.file_size, 0)
+                if total_uncompressed > ARCHIVE_MAX_UNCOMPRESSED_BYTES:
+                    raise WorkerError(
+                        f"archive exceeds worker extraction limit: {total_uncompressed} > {ARCHIVE_MAX_UNCOMPRESSED_BYTES}"
+                    )
+
+                ext = member.suffix.lower()
+                if ext not in DATASET_MEDIA_EXTENSIONS:
+                    ignored_entry_count += 1
+                    continue
+
+                target = extract_root / member
+                if target in seen_targets:
+                    raise WorkerError(f"archive contains duplicate member path: {member}")
+                seen_targets.add(target)
+                target.parent.mkdir(parents=True, exist_ok=True)
+
+                with zf.open(info, "r") as src, target.open("wb") as dst:
+                    while True:
+                        chunk = src.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        dst.write(chunk)
+
+                members.append(
+                    {
+                        "relative_path": str(member),
+                        "path": str(target),
+                        "size_bytes": target.stat().st_size,
+                    }
+                )
+                if len(preview_members) < ARCHIVE_PREVIEW_LIMIT:
+                    preview_members.append(str(member))
+
+    except zipfile.BadZipFile as exc:
+        raise WorkerError(f"invalid ZIP archive: {archive_path}") from exc
+
+    if not members:
+        raise WorkerError(f"archive contains no supported image/video resources: {archive_path}")
+
+    return {
+        "archive_path": str(archive_path),
+        "extracted_dir": str(extract_root),
+        "members": members,
+        "resource_count": len(members),
+        "ignored_entry_count": ignored_entry_count,
+        "archive_preview_members": preview_members,
+    }
+
+
 def _mock_train(output_model_path: Path, train_manifest: Path, val_manifest: Path, base_model_path: Path | None, spec: dict[str, Any]) -> dict[str, Any]:
     train_rows = json.loads(train_manifest.read_text(encoding="utf-8"))
     val_rows = json.loads(val_manifest.read_text(encoding="utf-8")) if val_manifest.exists() else []
+    train_resource_count = _resource_count_from_rows(train_rows)
+    val_resource_count = _resource_count_from_rows(val_rows)
     payload = {
         "trainer": "mock",
         "epochs": spec.get("epochs", 3),
         "lr": spec.get("learning_rate", 0.0005),
-        "train_samples": len(train_rows),
-        "val_samples": len(val_rows),
+        "train_samples": train_resource_count,
+        "val_samples": val_resource_count,
         "base_model": str(base_model_path) if base_model_path else None,
         "generated_at": int(_now_ts()),
     }
@@ -158,14 +264,12 @@ def _softmax(logits: list[float]) -> list[float]:
 def _dataset_from_rows(rows: list[dict[str, Any]], labels: list[str], label_to_index: dict[str, int]) -> list[tuple[list[float], int]]:
     data: list[tuple[list[float], int]] = []
     for row in rows:
-        path = Path(str(row.get("path") or ""))
-        if not path.exists() or not path.is_file():
-            continue
         label = _label_from_row(row)
         if label not in label_to_index:
             labels.append(label)
             label_to_index[label] = len(labels) - 1
-        data.append((_feature_from_file(path), label_to_index[label]))
+        for path in _resource_paths_from_row(row):
+            data.append((_feature_from_file(path), label_to_index[label]))
     return data
 
 
@@ -193,7 +297,42 @@ def _builtin_train(output_model_path: Path, train_manifest: Path, val_manifest: 
     train_data = _dataset_from_rows(train_rows, labels, label_to_index)
     val_data = _dataset_from_rows(val_rows, labels, label_to_index)
     if not train_data:
-        raise WorkerError("built-in trainer has no readable training assets")
+        dim = len(val_data[0][0]) if val_data else 0
+        weights = [[0.0 for _ in range(dim)] for _ in range(len(labels))]
+        bias = [0.0 for _ in range(len(labels))]
+        val_loss, val_acc = _evaluate(val_data, weights, bias) if val_data and labels else (0.0, 0.0)
+        payload = {
+            "trainer": "builtin_logreg",
+            "mode": "no_train_assets",
+            "epochs": 0,
+            "learning_rate": 0.0,
+            "feature_spec": "byte_hist16+sha3+size",
+            "labels": labels,
+            "weights": weights,
+            "bias": bias,
+            "base_model": str(base_model_path) if base_model_path else None,
+            "train_samples": 0,
+            "val_samples": len(val_data),
+            "generated_at": int(_now_ts()),
+        }
+        model_bytes = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        output_model_path.parent.mkdir(parents=True, exist_ok=True)
+        output_model_path.write_bytes(model_bytes)
+        digest = hashlib.sha256(model_bytes).hexdigest()
+        return {
+            "trainer": "builtin_logreg",
+            "mode": "no_train_assets",
+            "epochs": 0,
+            "learning_rate": 0.0,
+            "train_loss": 0.0,
+            "val_loss": round(val_loss, 6),
+            "train_accuracy": 0.0,
+            "val_accuracy": round(val_acc, 4),
+            "final_loss": 0.0,
+            "val_score": round(val_acc, 4),
+            "artifact_sha256": digest,
+            "note": "no readable training assets; placeholder candidate artifact generated",
+        }
 
     dim = len(train_data[0][0])
     class_count = max(len(labels), 1)
@@ -305,7 +444,12 @@ class TrainingWorkerRunner:
     def pull_asset(self, job_id: str, asset_id: str, target_file: Path) -> dict[str, Any]:
         data = self._request_json("GET", f"/training/workers/pull-asset?job_id={job_id}&asset_id={asset_id}")
         size = _decode_to_file(data["file_b64"], target_file)
-        return {"asset": data.get("asset", {}), "path": str(target_file), "size_bytes": size}
+        result = {"asset": data.get("asset", {}), "path": str(target_file), "size_bytes": size}
+        asset = result["asset"] if isinstance(result["asset"], dict) else {}
+        if asset.get("asset_type") == "archive":
+            extract_root = target_file.parent / f"{target_file.stem}_dataset"
+            result.update(_extract_archive_asset(target_file, extract_root))
+        return result
 
     def pull_base_model(self, job_id: str, job_dir: Path) -> tuple[Path, dict[str, Any]]:
         data = self._request_json("POST", "/training/workers/pull-base-model", json={"job_id": job_id})
@@ -450,6 +594,8 @@ class TrainingWorkerRunner:
                 "duration_sec": elapsed,
                 "train_asset_count": len(train_rows),
                 "validation_asset_count": len(val_rows),
+                "train_resource_count": _resource_count_from_rows(train_rows),
+                "validation_resource_count": _resource_count_from_rows(val_rows),
                 "base_model_id": (job.get("base_model") or {}).get("id"),
                 "base_model_hash": base_manifest.get("model_hash"),
                 "candidate_model_id": ((candidate.get("candidate_model") or {}).get("id")),

@@ -147,15 +147,25 @@ def _tiny_png_bytes() -> bytes:
     )
 
 
-def _upload_asset(token: str, purpose: str, file_name: str) -> dict[str, Any]:
+def _dataset_zip_bytes(prefix: str) -> bytes:
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(f"{prefix}/images/frame-001.png", _tiny_png_bytes())
+        zf.writestr(f"{prefix}/images/frame-002.jpg", b"train-jpg-placeholder")
+        zf.writestr(f"{prefix}/clips/clip-003.mp4", b"train-mp4-placeholder")
+        zf.writestr(f"{prefix}/README.txt", b"dataset bundle")
+    return buffer.getvalue()
+
+
+def _upload_asset(token: str, purpose: str, file_name: str, file_bytes: bytes | None = None, content_type: str | None = None) -> dict[str, Any]:
     return _multipart_request(
         "POST",
         "/assets/upload",
         token=token,
         file_field="file",
         file_name=file_name,
-        file_bytes=_tiny_png_bytes(),
-        content_type="image/png",
+        file_bytes=file_bytes if file_bytes is not None else _tiny_png_bytes(),
+        content_type=content_type or "image/png",
         fields={
             "sensitivity_level": "L2",
             "asset_purpose": purpose,
@@ -267,11 +277,27 @@ def run_smoke(report_dir: Path) -> dict[str, Any]:
     models = _json_request("GET", "/models", token=admin_token)
     base_model = _pick_base_model(models)
 
-    train_asset = _upload_asset(buyer_token, "training", f"train_{uuid.uuid4().hex[:8]}.png")
-    validation_asset = _upload_asset(buyer_token, "validation", f"validation_{uuid.uuid4().hex[:8]}.png")
+    train_asset = _upload_asset(
+        buyer_token,
+        "training",
+        f"train_bundle_{uuid.uuid4().hex[:8]}.zip",
+        file_bytes=_dataset_zip_bytes("train-bundle"),
+        content_type="application/zip",
+    )
+    validation_asset = _upload_asset(
+        buyer_token,
+        "validation",
+        f"validation_bundle_{uuid.uuid4().hex[:8]}.zip",
+        file_bytes=_dataset_zip_bytes("validation-bundle"),
+        content_type="application/zip",
+    )
     report["checks"]["assets"] = {
         "training_asset_id": train_asset["id"],
         "validation_asset_id": validation_asset["id"],
+        "training_asset_type": train_asset["asset_type"],
+        "validation_asset_type": validation_asset["asset_type"],
+        "training_resource_count": (train_asset.get("meta") or {}).get("archive_resource_count"),
+        "validation_resource_count": (validation_asset.get("meta") or {}).get("archive_resource_count"),
     }
 
     worker_code = f"qa-train-worker-{uuid.uuid4().hex[:8]}"
@@ -338,7 +364,10 @@ def run_smoke(report_dir: Path) -> dict[str, Any]:
         extra_headers=worker_headers,
     )
     _assert(train_asset_blob["asset"]["id"] == train_asset["id"], "training asset pull returned wrong asset")
+    _assert(train_asset_blob["asset"]["asset_type"] == "archive", "training bundle asset type mismatch")
+    _assert(int((train_asset_blob["asset"]["meta"] or {}).get("archive_resource_count") or 0) == 3, "training bundle resource count mismatch")
     _assert(validation_asset_blob["asset"]["purpose"] == "validation", "validation asset purpose mismatch")
+    _assert(validation_asset_blob["asset"]["asset_type"] == "archive", "validation bundle asset type mismatch")
 
     base_model_blob = _json_request(
         "POST",
@@ -408,6 +437,24 @@ def run_smoke(report_dir: Path) -> dict[str, Any]:
     _assert(candidate_in_registry is not None, "candidate model missing from model registry")
     _assert(candidate_in_registry["status"] == "SUBMITTED", "candidate model should stay SUBMITTED before approval")
 
+    empty_job = _json_request(
+        "POST",
+        "/training/jobs",
+        token=admin_token,
+        payload={
+            "asset_ids": [],
+            "validation_asset_ids": [],
+            "base_model_id": base_model["id"],
+            "training_kind": "evaluate",
+            "target_model_code": f"qa_empty_{uuid.uuid4().hex[:8]}",
+            "target_version": f"v0.{int(time.time())}",
+            "worker_selector": {"worker_codes": [worker_code]},
+            "spec": {"note": "empty asset list support smoke"},
+        },
+    )
+    _assert(empty_job["asset_count"] == 0, "empty training job did not keep asset_count=0")
+    _assert(empty_job["validation_asset_count"] == 0, "empty training job did not keep validation_asset_count=0")
+
     audit_checks = {
         "TRAINING_JOB_CREATE": _query_audit(admin_token, "TRAINING_JOB_CREATE", resource_id=job_id),
         "TRAINING_JOB_ASSIGN": _query_audit(admin_token, "TRAINING_JOB_ASSIGN", resource_id=job_id),
@@ -438,6 +485,7 @@ def run_smoke(report_dir: Path) -> dict[str, Any]:
         "candidate_model_id": candidate_model["id"],
         "candidate_model_code": candidate_model["model_code"],
         "candidate_model_version": candidate_model["version"],
+        "empty_asset_job_id": empty_job["id"],
         "audit_counts": {key: len(value) if isinstance(value, list) else 0 for key, value in audit_checks.items()},
     }
 

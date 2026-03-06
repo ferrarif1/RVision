@@ -249,7 +249,6 @@ INSERT INTO roles(name) VALUES ('supplier_engineer') ON CONFLICT(name) DO NOTHIN
 INSERT INTO roles(name) VALUES ('buyer_operator') ON CONFLICT(name) DO NOTHING;
 INSERT INTO roles(name) VALUES ('buyer_auditor') ON CONFLICT(name) DO NOTHING;
 
--- legacy compatibility
 INSERT INTO roles(name) VALUES ('admin') ON CONFLICT(name) DO NOTHING;
 INSERT INTO roles(name) VALUES ('operator') ON CONFLICT(name) DO NOTHING;
 INSERT INTO roles(name) VALUES ('auditor') ON CONFLICT(name) DO NOTHING;

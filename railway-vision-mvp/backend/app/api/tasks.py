@@ -84,6 +84,14 @@ def _get_asset_in_scope(db: Session, asset_id: str, current_user: AuthUser) -> D
     return asset
 
 
+def _ensure_inference_ready_asset(asset: DataAsset) -> None:
+    if asset.asset_type == "archive":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Archive dataset assets cannot be used for inference tasks",
+        )
+
+
 def _build_scheduler_detail(decision: dict[str, Any], intent_text: str | None) -> dict[str, Any]:
     return {
         "enabled": True,
@@ -131,6 +139,7 @@ def recommend_task_model(
     current_user: AuthUser = Depends(require_roles(*TASK_CREATE_ROLES)),
 ):
     asset = _get_asset_in_scope(db, payload.asset_id, current_user)
+    _ensure_inference_ready_asset(asset)
     decision = recommend_small_models(
         db,
         current_user,
@@ -167,6 +176,7 @@ def create_task(
     current_user: AuthUser = Depends(require_roles(*TASK_CREATE_ROLES)),
 ):
     asset = _get_asset_in_scope(db, payload.asset_id, current_user)
+    _ensure_inference_ready_asset(asset)
     # 优先走 pipeline-first；未提供 pipeline 时再按调度器或显式模型执行。
     # Pipeline-first path has highest priority, then scheduler/direct-model fallback.
     scheduler_enabled = payload.use_master_scheduler or not payload.model_id

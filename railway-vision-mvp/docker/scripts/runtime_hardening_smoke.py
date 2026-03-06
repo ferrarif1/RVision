@@ -7,7 +7,9 @@ import json
 import os
 import tempfile
 import uuid
+import zipfile
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 from urllib import error, request
 
@@ -66,11 +68,20 @@ def _multipart_body(fields: dict[str, str], file_name: str, file_bytes: bytes, c
     return b"".join(parts), boundary
 
 
-def _upload_request(token: str, file_name: str, file_bytes: bytes, content_type: str = "application/octet-stream") -> tuple[int, dict]:
+def _upload_request(
+    token: str,
+    file_name: str,
+    file_bytes: bytes,
+    content_type: str = "application/octet-stream",
+    *,
+    asset_purpose: str = "inference",
+    dataset_label: str = "",
+) -> tuple[int, dict]:
     body, boundary = _multipart_body(
         fields={
             "sensitivity_level": "L2",
-            "asset_purpose": "inference",
+            "asset_purpose": asset_purpose,
+            "dataset_label": dataset_label,
             "use_case": "qa-hardening",
         },
         file_name=file_name,
@@ -97,6 +108,16 @@ def _upload_request(token: str, file_name: str, file_bytes: bytes, content_type:
         except json.JSONDecodeError:
             parsed = {"detail": raw}
         return exc.code, parsed
+
+
+def _dataset_zip_bytes() -> bytes:
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("batch-a/frame-001.png", b"zip-frame-001")
+        zf.writestr("batch-a/frame-002.jpg", b"zip-frame-002")
+        zf.writestr("batch-b/nested/clip-003.mp4", b"zip-clip-003")
+        zf.writestr("README.txt", b"dataset bundle")
+    return buffer.getvalue()
 
 
 def _assert(condition: bool, message: str) -> None:
@@ -152,6 +173,41 @@ def run_smoke(report_dir: Path) -> dict:
         "status_code": status_code,
         "asset_id": second_upload.get("id"),
         "reused": second_upload.get("reused"),
+    }
+
+    status_code, zip_upload = _upload_request(
+        token,
+        f"dataset-{uuid.uuid4().hex[:8]}.zip",
+        _dataset_zip_bytes(),
+        "application/zip",
+        asset_purpose="training",
+        dataset_label="qa-zip-training",
+    )
+    _assert(status_code == 200, "zip dataset upload failed")
+    _assert(zip_upload.get("asset_type") == "archive", "zip dataset was not classified as archive")
+    archive_meta = zip_upload.get("meta") or {}
+    _assert(int(archive_meta.get("archive_resource_count") or 0) == 3, "zip dataset resource count mismatch")
+    _assert(int(archive_meta.get("archive_max_depth") or 0) >= 1, "zip dataset nested folder depth was not detected")
+    report["checks"]["zip_dataset_upload"] = {
+        "status_code": status_code,
+        "asset_id": zip_upload.get("id"),
+        "asset_type": zip_upload.get("asset_type"),
+        "archive_resource_count": archive_meta.get("archive_resource_count"),
+        "archive_max_depth": archive_meta.get("archive_max_depth"),
+    }
+
+    status_code, zip_inference_error = _upload_request(
+        token,
+        f"inference-{uuid.uuid4().hex[:8]}.zip",
+        _dataset_zip_bytes(),
+        "application/zip",
+        asset_purpose="inference",
+    )
+    _assert(status_code == 400, "zip inference upload was not rejected with 400")
+    _assert("ZIP dataset asset is only allowed" in str(zip_inference_error.get("detail") or ""), "zip inference rejection detail mismatch")
+    report["checks"]["zip_inference_rejected"] = {
+        "status_code": status_code,
+        "detail": zip_inference_error.get("detail"),
     }
 
     status_code, type_error = _upload_request(token, "bad.txt", b"hardening", "text/plain")

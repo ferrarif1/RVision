@@ -1,6 +1,8 @@
 import hashlib
 import os
 import uuid
+import zipfile
+from pathlib import PurePosixPath
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy.exc import SQLAlchemyError
@@ -16,10 +18,16 @@ from app.services.audit_service import record_audit
 
 router = APIRouter(prefix="/assets", tags=["assets"])
 
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".mp4", ".avi", ".mov"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
+VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov"}
+ARCHIVE_EXTENSIONS = {".zip"}
+MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
+ALLOWED_EXTENSIONS = MEDIA_EXTENSIONS | ARCHIVE_EXTENSIONS
 ASSET_PURPOSES = {"training", "finetune", "validation", "inference"}
+ARCHIVE_ALLOWED_PURPOSES = {"training", "finetune", "validation"}
 UPLOAD_CHUNK_BYTES = 1024 * 1024
 MAX_FILE_NAME_LENGTH = 255
+ARCHIVE_PREVIEW_LIMIT = 20
 
 
 def _safe_original_file_name(file_name: str | None) -> tuple[str, str]:
@@ -50,6 +58,115 @@ def _resolve_buyer_tenant_id(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid buyer_tenant_code")
         return tenant.id
     return None
+
+
+def _asset_type_from_extension(ext: str) -> str:
+    if ext in VIDEO_EXTENSIONS:
+        return "video"
+    if ext in IMAGE_EXTENSIONS:
+        return "image"
+    if ext in ARCHIVE_EXTENSIONS:
+        return "archive"
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported file type")
+
+
+def _validate_archive_policy(ext: str, asset_purpose: str) -> None:
+    if ext in ARCHIVE_EXTENSIONS and asset_purpose not in ARCHIVE_ALLOWED_PURPOSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ZIP dataset asset is only allowed for training, finetune or validation purpose",
+        )
+
+
+def _normalize_archive_member(name: str) -> PurePosixPath:
+    normalized = str(name or "").replace("\\", "/").strip()
+    if not normalized:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Archive contains empty entry name")
+    member = PurePosixPath(normalized)
+    if member.is_absolute() or any(part in {"", ".", ".."} for part in member.parts):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Archive contains unsafe entry path")
+    return member
+
+
+def _inspect_archive_bundle(
+    storage_uri: str,
+    *,
+    max_entries: int,
+    max_uncompressed_bytes: int,
+) -> dict:
+    try:
+        with zipfile.ZipFile(storage_uri) as zf:
+            infos = zf.infolist()
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid ZIP archive") from exc
+
+    if not infos:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ZIP archive is empty")
+    if len(infos) > max_entries:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"ZIP archive has too many entries, max allowed is {max_entries}",
+        )
+
+    file_count = 0
+    directory_count = 0
+    ignored_entry_count = 0
+    image_count = 0
+    video_count = 0
+    max_depth = 0
+    total_uncompressed_bytes = 0
+    preview_members: list[str] = []
+
+    # 只接受 ZIP 中的图片/视频资源；其他元文件允许存在但不会被计入可训练样本。
+    # Only image/video members are counted as usable dataset resources; other files are ignored.
+    for info in infos:
+        member = _normalize_archive_member(info.filename)
+        if info.is_dir() or str(info.filename).endswith("/"):
+            directory_count += 1
+            max_depth = max(max_depth, len(member.parts) - 1)
+            continue
+
+        file_count += 1
+        max_depth = max(max_depth, len(member.parts) - 1)
+        total_uncompressed_bytes += max(info.file_size, 0)
+        if total_uncompressed_bytes > max_uncompressed_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"ZIP archive is too large after decompression, max allowed is {max_uncompressed_bytes} bytes",
+            )
+
+        ext = os.path.splitext(member.name.lower())[1]
+        if ext in IMAGE_EXTENSIONS:
+            image_count += 1
+            if len(preview_members) < ARCHIVE_PREVIEW_LIMIT:
+                preview_members.append(str(member))
+        elif ext in VIDEO_EXTENSIONS:
+            video_count += 1
+            if len(preview_members) < ARCHIVE_PREVIEW_LIMIT:
+                preview_members.append(str(member))
+        else:
+            ignored_entry_count += 1
+
+    resource_count = image_count + video_count
+    if resource_count <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ZIP archive must contain at least one supported image or video file",
+        )
+
+    return {
+        "archive_kind": "zip_dataset",
+        "archive_entry_count": len(infos),
+        "archive_file_count": file_count,
+        "archive_directory_count": directory_count,
+        "archive_resource_count": resource_count,
+        "archive_image_count": image_count,
+        "archive_video_count": video_count,
+        "archive_ignored_entry_count": ignored_entry_count,
+        "archive_max_depth": max_depth,
+        "archive_preview_members": preview_members,
+        "archive_uncompressed_bytes": total_uncompressed_bytes,
+    }
 
 
 def _persist_upload_stream(file: UploadFile, target_dir: str, asset_id: str, ext: str, max_bytes: int) -> tuple[str, str, int]:
@@ -131,7 +248,7 @@ def _serialize_asset(asset: DataAsset) -> dict:
 @router.get("")
 def list_assets(
     q: str | None = Query(default=None, description="关键词搜索 / Keyword search across file and metadata"),
-    asset_type: str | None = Query(default=None, description="资产类型 / Asset type: image or video"),
+    asset_type: str | None = Query(default=None, description="资产类型 / Asset type: image|video|archive"),
     asset_purpose: str | None = Query(default=None, description="资产用途 / Asset purpose: training|finetune|validation|inference"),
     sensitivity_level: str | None = Query(default=None, description="敏感级别 / Sensitivity level: L1|L2|L3"),
     buyer_tenant_code: str | None = Query(default=None, description="买家租户编码 / Buyer tenant code (platform role only)"),
@@ -185,6 +302,8 @@ def list_assets(
                 str(meta.get("dataset_label") or "").lower(),
                 str(meta.get("use_case") or "").lower(),
                 str(meta.get("intended_model_code") or "").lower(),
+                str(meta.get("archive_kind") or "").lower(),
+                str(meta.get("archive_preview_members") or "").lower(),
             ]
             if not any(keyword in item for item in haystacks):
                 continue
@@ -209,7 +328,7 @@ def list_assets(
 @router.post("/upload")
 def upload_asset(
     request: Request,
-    file: UploadFile = File(..., description="上传文件 / Uploaded image or video file"),
+    file: UploadFile = File(..., description="上传文件 / Uploaded image, video or ZIP dataset bundle"),
     sensitivity_level: str = Form(default="L2", description="敏感级别 / Sensitivity level: L1|L2|L3"),
     source_uri: str = Form(default="", description="来源地址 / Optional source URI for traceability"),
     asset_purpose: str = Form(default="inference", description="资产用途 / Asset purpose for training or inference"),
@@ -228,6 +347,8 @@ def upload_asset(
     if asset_purpose not in ASSET_PURPOSES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid asset_purpose")
 
+    _validate_archive_policy(ext, asset_purpose)
+
     settings = get_settings()
     os.makedirs(settings.asset_repo_path, exist_ok=True)
     buyer_tenant_id = _resolve_buyer_tenant_id(db, current_user, buyer_tenant_code.strip())
@@ -243,13 +364,26 @@ def upload_asset(
         max_bytes=settings.asset_upload_max_bytes,
     )
 
-    asset_type = "video" if ext in {".mp4", ".avi", ".mov"} else "image"
+    asset_type = _asset_type_from_extension(ext)
 
     meta = {
         "size": file_size,
         "extension": ext,
         "asset_purpose": asset_purpose,
     }
+    try:
+        if asset_type == "archive":
+            meta.update(
+                _inspect_archive_bundle(
+                    storage_uri,
+                    max_entries=settings.asset_archive_max_entries,
+                    max_uncompressed_bytes=settings.asset_archive_max_uncompressed_bytes,
+                )
+            )
+    except HTTPException:
+        if os.path.exists(storage_uri):
+            os.remove(storage_uri)
+        raise
     if dataset_label.strip():
         meta["dataset_label"] = dataset_label.strip()
     if use_case.strip():
@@ -280,6 +414,8 @@ def upload_asset(
                 "file_name": reusable_asset.file_name,
                 "size": file_size,
                 "asset_purpose": meta.get("asset_purpose"),
+                "asset_type": reusable_asset.asset_type,
+                "archive_resource_count": meta.get("archive_resource_count"),
                 "reused": True,
                 "reused_existing_asset_id": reusable_asset.id,
             },
@@ -321,6 +457,8 @@ def upload_asset(
             "size": file_size,
             "sensitivity_level": sensitivity_level,
             "asset_purpose": asset_purpose,
+            "asset_type": asset.asset_type,
+            "archive_resource_count": meta.get("archive_resource_count"),
             "dataset_label": meta.get("dataset_label"),
             "use_case": meta.get("use_case"),
             "intended_model_code": meta.get("intended_model_code"),

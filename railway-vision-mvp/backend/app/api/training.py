@@ -46,8 +46,8 @@ MODEL_TYPE_PATTERN = "^(router|expert)$"
 
 
 class TrainingJobCreateRequest(BaseModel):
-    asset_ids: list[str] = Field(default_factory=list, min_length=1, description="训练资产ID列表 / Training asset IDs")
-    validation_asset_ids: list[str] = Field(default_factory=list, description="验证资产ID列表 / Validation asset IDs")
+    asset_ids: list[str] = Field(default_factory=list, description="训练资产ID列表（0-n） / 0-n training asset IDs")
+    validation_asset_ids: list[str] = Field(default_factory=list, description="验证资产ID列表（0-n） / 0-n validation asset IDs")
     base_model_id: str | None = Field(default=None, description="基线模型ID / Optional base model ID")
     owner_tenant_id: str | None = Field(default=None, description="模型归属租户ID / Owner tenant ID for candidate model")
     training_kind: str = Field(default="finetune", pattern=TRAINING_KIND_PATTERN, description="训练类型 / Training kind: train|finetune|evaluate")
@@ -110,6 +110,18 @@ def _get_assets_or_400(db: Session, asset_ids: list[str]) -> list[DataAsset]:
     if missing:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Asset not found: {missing[0]}")
     return [found[asset_id] for asset_id in asset_ids]
+
+
+def _normalize_asset_ids(asset_ids: list[str]) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for raw in asset_ids or []:
+        cleaned = str(raw or "").strip()
+        if not cleaned or cleaned in seen:
+            continue
+        ordered.append(cleaned)
+        seen.add(cleaned)
+    return ordered
 
 
 def _clean_optional(value: str | None) -> str | None:
@@ -177,7 +189,9 @@ def _serialize_job(db: Session, job: TrainingJob) -> dict[str, Any]:
         "target_model_code": job.target_model_code,
         "target_version": job.target_version,
         "asset_ids": job.asset_ids or [],
+        "asset_count": len(job.asset_ids or []),
         "validation_asset_ids": job.validation_asset_ids or [],
+        "validation_asset_count": len(job.validation_asset_ids or []),
         "base_model": _model_summary(base_model),
         "candidate_model": _model_summary(candidate_model),
         "owner_tenant_id": job.owner_tenant_id,
@@ -278,8 +292,17 @@ def create_training_job(
     db: Session = Depends(get_db),
     current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_CREATE_ROLES)),
 ):
-    train_assets = _get_assets_or_400(db, payload.asset_ids)
-    validation_assets = _get_assets_or_400(db, payload.validation_asset_ids) if payload.validation_asset_ids else []
+    train_asset_ids = _normalize_asset_ids(payload.asset_ids)
+    validation_asset_ids = _normalize_asset_ids(payload.validation_asset_ids)
+    duplicated = set(train_asset_ids) & set(validation_asset_ids)
+    if duplicated:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Training and validation assets must not overlap: {next(iter(duplicated))}",
+        )
+
+    train_assets = _get_assets_or_400(db, train_asset_ids) if train_asset_ids else []
+    validation_assets = _get_assets_or_400(db, validation_asset_ids) if validation_asset_ids else []
     # 关键约束：一次训练作业只能绑定同一个买家租户，避免跨租户数据混用。
     # Critical constraint: one training job must remain in a single buyer tenant scope.
     buyer_tenant_id = _ensure_single_buyer_scope([*train_assets, *validation_assets])
@@ -307,8 +330,8 @@ def create_training_job(
         base_model_id=payload.base_model_id,
         status=TRAINING_JOB_STATUS_PENDING,
         training_kind=payload.training_kind,
-        asset_ids=payload.asset_ids,
-        validation_asset_ids=payload.validation_asset_ids,
+        asset_ids=train_asset_ids,
+        validation_asset_ids=validation_asset_ids,
         target_model_code=payload.target_model_code.strip(),
         target_version=payload.target_version.strip(),
         worker_selector=payload.worker_selector,
@@ -327,8 +350,8 @@ def create_training_job(
             "job_code": job.job_code,
             "training_kind": job.training_kind,
             "base_model_id": job.base_model_id,
-            "asset_ids": payload.asset_ids,
-            "validation_asset_ids": payload.validation_asset_ids,
+            "asset_ids": train_asset_ids,
+            "validation_asset_ids": validation_asset_ids,
             "owner_tenant_id": owner_tenant_id,
             "buyer_tenant_id": buyer_tenant_id,
         },

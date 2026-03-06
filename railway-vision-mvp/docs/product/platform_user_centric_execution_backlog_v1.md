@@ -118,3 +118,16 @@
 - [ ] IA 草案评审
 - [ ] 角色工作台线框
 - [ ] 训练中心作业页信息模型
+
+## 8. 当前工程待办（2026-03-06）
+
+已记录，后续按优先级继续推进：
+
+- [x] 训练/验证资产支持 0-n 个 asset_id；允许空列表创建训练作业
+- [x] 训练/验证资产支持 ZIP 数据集包；ZIP 内支持多层文件夹与多图片/多视频资源
+- [ ] 后端 API 自动化回归：`auth / assets / training / edge / tasks`
+- [ ] 训练作业详情页：展示 asset_count / validation_asset_count / resource_count / 失败原因
+- [ ] 训练 Worker 外部训练命令契约：失败分类、退出码归一、指标文件 schema 固化
+- [ ] 数据集包增强：标注文件、manifest、类别映射、采样预览
+- [ ] 数据保留策略：训练产物、上传临时文件、历史 QA 报告自动清理
+- [ ] schema 快照自动导出，替代当前 `snapshot-at-tip + --write` 人工同步

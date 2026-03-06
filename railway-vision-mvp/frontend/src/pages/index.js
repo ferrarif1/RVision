@@ -31,7 +31,7 @@ function safeJson(value) {
 
 function splitCsv(value) {
   return String(value || '')
-    .split(',')
+    .split(/[\n,，\s]+/)
     .map((v) => v.trim())
     .filter(Boolean);
 }
@@ -42,6 +42,12 @@ const ENUM_ZH = {
     training: '训练',
     finetune: '微调',
     validation: '验证',
+  },
+  asset_type: {
+    image: '图片',
+    video: '视频',
+    archive: '压缩数据集',
+    screenshot: '截图',
   },
   sensitivity_level: {
     L1: '低敏',
@@ -116,6 +122,14 @@ function enumText(group, value) {
 
 function hasPermission(state, permission) {
   return state.permissions instanceof Set && state.permissions.has(permission);
+}
+
+function archiveResourceCount(meta) {
+  return Number(meta?.archive_resource_count || 0);
+}
+
+function isTaskAsset(row) {
+  return ['image', 'video'].includes(String(row?.asset_type || ''));
 }
 
 function makeContext(route, ctx) {
@@ -299,13 +313,14 @@ function pageAssets(route, rawCtx) {
     html: `
       <section class="card">
         <h2>资产中心</h2>
-        <p>上传图片/视频资产，支持训练、验证、推理等用途。</p>
+        <p>上传图片、视频或 ZIP 数据集包，支持训练、验证、微调、推理等用途。</p>
       </section>
       <section class="grid-two">
         <form id="assetUploadForm" class="card form-grid">
           <h3>上传资产</h3>
           <label>文件</label>
-          <input type="file" name="file" accept=".jpg,.jpeg,.png,.bmp,.mp4,.avi,.mov" required />
+          <input type="file" name="file" accept=".jpg,.jpeg,.png,.bmp,.mp4,.avi,.mov,.zip" required />
+          <div class="hint">训练/验证/微调用途支持上传包含多层文件夹的 ZIP 数据集包；ZIP 内可包含多张图片或多段视频。</div>
           <label>用途</label>
           <select name="asset_purpose">
             <option value="inference">${enumText('asset_purpose', 'inference')}</option>
@@ -372,23 +387,38 @@ function pageAssets(route, rawCtx) {
           tableWrap.innerHTML = `
             <div class="table-wrap">
               <table class="table">
-                <thead><tr><th>asset_id(资产ID)</th><th>file_name(文件名)</th><th>type(类型)</th><th>purpose(用途)</th><th>sensitivity(敏感等级)</th><th>创建时间</th><th>操作</th></tr></thead>
+                <thead><tr><th>asset_id(资产ID)</th><th>file_name(文件名)</th><th>type(类型)</th><th>resource_count(资源数)</th><th>purpose(用途)</th><th>sensitivity(敏感等级)</th><th>创建时间</th><th>操作</th></tr></thead>
                 <tbody>
                   ${rows.map((row) => `
                     <tr>
                       <td class="mono">${esc(row.id)}</td>
                       <td>${esc(row.file_name)}</td>
-                      <td>${esc(row.asset_type)}</td>
+                      <td>${esc(enumText('asset_type', row.asset_type))}</td>
+                      <td>${archiveResourceCount(row.meta || {}) || 1}</td>
                       <td>${esc(enumText('asset_purpose', (row.meta || {}).asset_purpose || '-'))}</td>
                       <td>${esc(enumText('sensitivity_level', row.sensitivity_level))}</td>
                       <td>${formatDateTime(row.created_at)}</td>
-                      <td><button class="ghost" data-use-asset="${esc(row.id)}">用于任务</button></td>
+                      <td class="row-actions">
+                        <button class="ghost" data-copy-asset="${esc(row.id)}">复制ID</button>
+                        ${isTaskAsset(row) ? `<button class="ghost" data-use-asset="${esc(row.id)}">用于任务</button>` : ''}
+                      </td>
                     </tr>
                   `).join('')}
                 </tbody>
               </table>
             </div>
           `;
+          tableWrap.querySelectorAll('[data-copy-asset]').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+              const assetId = btn.getAttribute('data-copy-asset') || '';
+              try {
+                await navigator.clipboard.writeText(assetId);
+                ctx.toast('资产ID已复制');
+              } catch {
+                ctx.toast(`资产ID: ${assetId}`);
+              }
+            });
+          });
           tableWrap.querySelectorAll('[data-use-asset]').forEach((btn) => {
             btn.addEventListener('click', () => {
               localStorage.setItem('rv_prefill_asset_id', btn.getAttribute('data-use-asset') || '');
@@ -413,13 +443,27 @@ function pageAssets(route, rawCtx) {
             <div class="keyvals">
               <div><span>asset_id</span><strong class="mono">${esc(data.id)}</strong></div>
               <div><span>file_name</span><strong>${esc(data.file_name)}</strong></div>
-              <div><span>asset_type</span><strong>${esc(data.asset_type)}</strong></div>
+              <div><span>asset_type</span><strong>${esc(enumText('asset_type', data.asset_type))}</strong></div>
               <div><span>sensitivity</span><strong>${esc(enumText('sensitivity_level', data.sensitivity_level))}</strong></div>
+              ${
+                archiveResourceCount(data.meta || {})
+                  ? `<div><span>resource_count</span><strong>${archiveResourceCount(data.meta || {})}</strong></div>`
+                  : ''
+              }
             </div>
             <div class="row-actions">
-              <button class="primary" id="gotoTaskFromAsset">用该资产创建任务</button>
+              <button class="ghost" id="copyAssetIdBtn">复制资产ID</button>
+              ${isTaskAsset(data) ? `<button class="primary" id="gotoTaskFromAsset">用该资产创建任务</button>` : ''}
             </div>
           `;
+          root.querySelector('#copyAssetIdBtn')?.addEventListener('click', async () => {
+            try {
+              await navigator.clipboard.writeText(String(data.id || ''));
+              ctx.toast('资产ID已复制');
+            } catch {
+              ctx.toast(`资产ID: ${data.id}`);
+            }
+          });
           root.querySelector('#gotoTaskFromAsset')?.addEventListener('click', () => {
             localStorage.setItem('rv_prefill_asset_id', data.id);
             ctx.navigate('tasks');
@@ -510,9 +554,10 @@ function pageModels(route, rawCtx) {
                     <option value="train">${enumText('training_kind', 'train')}</option>
                     <option value="evaluate">${enumText('training_kind', 'evaluate')}</option>
                   </select>
-                  <label>asset_ids(训练资产ID，逗号分隔)</label>
-                  <input name="asset_ids" placeholder="asset-1,asset-2" required />
-                  <label>validation_asset_ids(验证资产ID，逗号分隔)</label>
+                  <label>asset_ids(训练资产ID，0-n，支持逗号/空格分隔)</label>
+                  <input name="asset_ids" placeholder="asset-1, asset-2" />
+                  <div class="hint">支持单图/单视频资产，也支持 ZIP 数据集包；一个 ZIP 包对应 1 个 asset_id。</div>
+                  <label>validation_asset_ids(验证资产ID，0-n，支持逗号/空格分隔)</label>
                   <input name="validation_asset_ids" placeholder="asset-3,asset-4" />
                   <label>base_model_id(基础模型ID，可选)</label>
                   <input name="base_model_id" placeholder="model-id" />
@@ -553,7 +598,7 @@ function pageModels(route, rawCtx) {
               ${rows.slice(0, 12).map((row) => `
                 <li>
                   <strong>${esc(row.job_code)}</strong>
-                  <span>${esc(enumText('training_kind', row.training_kind))} · ${esc(enumText('training_status', row.status))} · candidate=${esc(row.candidate_model?.id || '-')}</span>
+                  <span>${esc(enumText('training_kind', row.training_kind))} · ${esc(enumText('training_status', row.status))} · train=${esc(row.asset_count ?? 0)} · val=${esc(row.validation_asset_count ?? 0)} · candidate=${esc(row.candidate_model?.id || '-')}</span>
                 </li>
               `).join('')}
             </ul>
@@ -801,9 +846,10 @@ function pageTraining(route, rawCtx) {
                       <option value="train">${enumText('training_kind', 'train')}</option>
                       <option value="evaluate">${enumText('training_kind', 'evaluate')}</option>
                     </select>
-                    <label>asset_ids(训练资产ID，逗号分隔)</label>
-                    <input name="asset_ids" list="trainingAssetsDatalist" placeholder="asset-id-1,asset-id-2" required />
-                    <label>validation_asset_ids(验证资产ID，逗号分隔)</label>
+                    <label>asset_ids(训练资产ID，0-n，支持逗号/空格分隔)</label>
+                    <input name="asset_ids" list="trainingAssetsDatalist" placeholder="asset-id-1, asset-id-2" />
+                    <div class="hint">训练/验证资产可以为空，也可以引用多个单文件资产或多个 ZIP 数据集包。</div>
+                    <label>validation_asset_ids(验证资产ID，0-n，支持逗号/空格分隔)</label>
                     <input name="validation_asset_ids" list="trainingAssetsDatalist" placeholder="asset-id-3" />
                   </div>
                   <div class="form-grid">
@@ -854,7 +900,7 @@ function pageTraining(route, rawCtx) {
               <table class="table">
                 <thead>
                   <tr>
-                    <th>job_code(作业编码)</th><th>status(状态)</th><th>kind(类型)</th><th>base_model(基础模型)</th><th>candidate_model(候选模型)</th><th>worker(执行节点)</th><th>创建时间</th>
+                    <th>job_code(作业编码)</th><th>status(状态)</th><th>kind(类型)</th><th>train/val(资产数)</th><th>base_model(基础模型)</th><th>candidate_model(候选模型)</th><th>worker(执行节点)</th><th>创建时间</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -863,6 +909,7 @@ function pageTraining(route, rawCtx) {
                       <td class="mono">${esc(row.job_code)}</td>
                       <td>${esc(enumText('training_status', row.status))}</td>
                       <td>${esc(enumText('training_kind', row.training_kind))}</td>
+                      <td>${esc(`${row.asset_count ?? 0}/${row.validation_asset_count ?? 0}`)}</td>
                       <td class="mono">${esc(row.base_model?.id || '-')}</td>
                       <td class="mono">${esc(row.candidate_model?.id || '-')}</td>
                       <td>${esc(row.assigned_worker_code || '-')}</td>
