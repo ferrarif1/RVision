@@ -55,7 +55,7 @@ button {
   color: #e6e0cd;
   cursor: pointer;
   padding: 10px 12px;
-  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+  transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
 }
 
 button:hover {
@@ -65,6 +65,14 @@ button:hover {
 
 button:active {
   transform: translateY(1px);
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(191, 160, 75, 0.22);
 }
 
 button:disabled {
@@ -225,6 +233,36 @@ label {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.command-trigger {
+  min-height: 34px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  border-color: #4d3f1f;
+  background: linear-gradient(180deg, #19160f, #14120d);
+  color: #f0dfaa;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.command-trigger:hover {
+  border-color: #826a2f;
+  background: linear-gradient(180deg, #201c13, #17140d);
+}
+
+.command-trigger kbd {
+  border: 1px solid #4f4327;
+  border-radius: 7px;
+  padding: 1px 6px;
+  background: #111008;
+  color: #ceb772;
+  font-size: 11px;
+  font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
 }
 
 .breadcrumb {
@@ -277,6 +315,19 @@ label {
   display: grid;
   gap: 14px;
   align-content: start;
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.page.page-enter {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.page.page-enter.page-enter-active {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .card {
@@ -285,6 +336,13 @@ label {
   background: linear-gradient(180deg, #11120d 0%, #0e0f0b 100%);
   padding: 14px;
   box-shadow: var(--shadow-sm);
+  transition: border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.card:hover {
+  border-color: #3a321d;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.34);
+  transform: translateY(-1px);
 }
 
 .card h2,
@@ -311,6 +369,12 @@ label {
   background: linear-gradient(180deg, #151611 0%, #11120d 100%);
   border-radius: 12px;
   padding: 12px;
+  transition: border-color 0.18s ease, transform 0.18s ease;
+}
+
+.lane-card:hover {
+  border-color: #41371e;
+  transform: translateY(-1px);
 }
 
 .lane-card h4 {
@@ -402,10 +466,17 @@ label {
   color: #b0a788;
   font-size: 12px;
   font-weight: 600;
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
 .table tbody tr:hover {
   background: #171811;
+}
+
+.table tbody tr {
+  transition: background 0.15s ease;
 }
 
 .mono {
@@ -429,6 +500,8 @@ label {
   padding: 14px;
   color: var(--muted);
   background: #10110d;
+  position: relative;
+  overflow: hidden;
 }
 
 .state.error {
@@ -438,7 +511,21 @@ label {
 }
 
 .state.loading::before {
-  content: "⏳ ";
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    110deg,
+    rgba(191, 160, 75, 0) 10%,
+    rgba(191, 160, 75, 0.08) 45%,
+    rgba(191, 160, 75, 0) 80%
+  );
+  transform: translateX(-100%);
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+.state.loading {
+  color: #c2baa3;
 }
 
 .state.empty::before {
@@ -473,6 +560,12 @@ label {
   display: grid;
   gap: 3px;
   background: #12130e;
+  transition: border-color 0.18s ease, transform 0.18s ease;
+}
+
+.compact-list li:hover {
+  border-color: #3f361d;
+  transform: translateY(-1px);
 }
 
 .compact-list li span {
@@ -539,6 +632,11 @@ label {
   display: grid;
   gap: 8px;
   background: #12130e;
+  transition: border-color 0.18s ease;
+}
+
+.result-card:hover {
+  border-color: #3f361d;
 }
 
 .result-head {
@@ -617,6 +715,37 @@ details summary {
   margin: 0 0 10px;
   color: #6f6b5c;
   font-size: 16px;
+}
+
+.init-account-box {
+  border: 1px solid #3e341a;
+  border-radius: 10px;
+  background: rgba(21, 19, 12, 0.78);
+  padding: 9px 10px;
+  display: grid;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.init-account-title {
+  color: #c9bc97;
+  font-size: 12px;
+}
+
+.init-account-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.init-account-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: #e7e1cc;
+  font-size: 12px;
 }
 
 .oauth-list {
@@ -703,6 +832,129 @@ details summary {
   font-size: 12px;
 }
 
+.command-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 3, 3, 0.68);
+  backdrop-filter: blur(5px);
+  display: grid;
+  place-items: start center;
+  padding-top: min(16vh, 140px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease;
+  z-index: 25;
+}
+
+.command-overlay.show {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.command-panel {
+  width: min(760px, calc(100vw - 28px));
+  border: 1px solid #3c341d;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #12120e, #0e0f0b);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+.command-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.command-prefix {
+  color: #ba9e55;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.command-input {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  height: 30px;
+  color: #f2edd8;
+  font-size: 14px;
+}
+
+.command-input:focus {
+  box-shadow: none;
+}
+
+.command-kbd {
+  border: 1px solid #4f4328;
+  border-radius: 6px;
+  padding: 1px 6px;
+  color: #bea86e;
+  font-size: 11px;
+  font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.command-list {
+  max-height: 52vh;
+  overflow: auto;
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.command-item {
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  width: 100%;
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "title meta"
+    "desc meta";
+  gap: 2px 10px;
+  text-align: left;
+  padding: 8px 10px;
+}
+
+.command-item:hover,
+.command-item.active {
+  border-color: #4f4120;
+  background: rgba(191, 160, 75, 0.09);
+}
+
+.command-title {
+  grid-area: title;
+  color: #f6f1df;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.command-desc {
+  grid-area: desc;
+  color: #87826f;
+  font-size: 12px;
+}
+
+.command-meta {
+  grid-area: meta;
+  align-self: center;
+  justify-self: end;
+  color: #9b8f6a;
+  font-size: 11px;
+}
+
+.command-empty {
+  padding: 14px;
+  color: #857f6a;
+  text-align: center;
+  font-size: 13px;
+}
+
 .toast {
   position: fixed;
   right: 22px;
@@ -729,6 +981,15 @@ details summary {
   background: #2a1210;
   color: #ffc0bc;
   border-color: #8f3430;
+}
+
+@keyframes shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
 }
 
 @media (max-width: 1240px) {
@@ -764,6 +1025,16 @@ details summary {
 
   .topbar-right {
     flex-wrap: wrap;
+  }
+
+  .command-trigger {
+    order: 2;
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .command-panel {
+    width: calc(100vw - 16px);
   }
 
   .keyvals {

@@ -26,6 +26,15 @@ const LABELS = {
   settings: '设置',
 };
 
+function esc(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
 function buildGroups(can) {
   const grouped = new Map();
   NAV_ITEMS.forEach((item) => {
@@ -49,7 +58,36 @@ function renderBreadcrumb(routeView) {
     .join('<span class="crumb-sep">/</span>');
 }
 
-export function renderShell({ state, routeView, contentHtml }) {
+function renderCommandPalette(commandPalette) {
+  const items = commandPalette?.items || [];
+  const selectedIndex = commandPalette?.selectedIndex || 0;
+  const listHtml = items.length
+    ? items
+      .map((item, idx) => `
+        <button class="command-item ${idx === selectedIndex ? 'active' : ''}" data-command-index="${idx}" type="button">
+          <span class="command-title">${esc(item.title || '-')}</span>
+          <span class="command-desc">${esc(item.description || '')}</span>
+          <span class="command-meta">${esc(item.shortcut || '')}</span>
+        </button>
+      `)
+      .join('')
+    : '<div class="command-empty">没有匹配的指令</div>';
+  const visible = commandPalette?.open ? 'show' : '';
+  return `
+    <div id="commandOverlay" class="command-overlay ${visible}">
+      <div class="command-panel">
+        <div class="command-input-wrap">
+          <span class="command-prefix">></span>
+          <input id="commandPaletteInput" class="command-input" placeholder="输入指令或页面名，例如：资产、任务、发布..." value="${esc(commandPalette?.query || '')}" />
+          <span class="command-kbd">Esc</span>
+        </div>
+        <div class="command-list">${listHtml}</div>
+      </div>
+    </div>
+  `;
+}
+
+export function renderShell({ state, routeView, contentHtml, commandPalette }) {
   const user = state.user;
   const perms = state.permissions || new Set();
   const can = (page) => !PERMISSIONS[page] || perms.has(PERMISSIONS[page]);
@@ -82,6 +120,9 @@ export function renderShell({ state, routeView, contentHtml }) {
             <div class="breadcrumb">${renderBreadcrumb(routeView)}</div>
           </div>
           <div class="topbar-right">
+            <button id="openCommandPaletteBtn" class="command-trigger" title="打开命令面板（Ctrl/Cmd + K）">
+              <span>命令面板</span><kbd>Ctrl/⌘ K</kbd>
+            </button>
             <span class="pill">${user?.username || '未登录'}</span>
             <span class="pill">${(user?.roles || [])[0] || user?.role || '-'}</span>
             <span class="pill">${user?.tenant_code || user?.tenant_id || '-'}</span>
@@ -92,12 +133,22 @@ export function renderShell({ state, routeView, contentHtml }) {
           ${contentHtml}
         </main>
         <div id="toast" class="toast"></div>
+        ${renderCommandPalette(commandPalette)}
       </div>
     </div>
   `;
 }
 
-export function bindShellEvents(root, { onNavigate, onLogout, onBack, onToggleSidebar }) {
+export function bindShellEvents(root, {
+  onNavigate,
+  onLogout,
+  onBack,
+  onToggleSidebar,
+  onOpenCommandPalette,
+  onCloseCommandPalette,
+  onCommandQueryChange,
+  onCommandExecute,
+}) {
   root.querySelectorAll('[data-nav]').forEach((btn) => {
     btn.addEventListener('click', () => onNavigate(btn.getAttribute('data-nav')));
   });
@@ -105,4 +156,17 @@ export function bindShellEvents(root, { onNavigate, onLogout, onBack, onToggleSi
   root.querySelector('#backBtn')?.addEventListener('click', onBack);
   root.querySelector('#toggleSidebarBtn')?.addEventListener('click', onToggleSidebar);
   root.querySelector('#logoutBtn')?.addEventListener('click', onLogout);
+  root.querySelector('#openCommandPaletteBtn')?.addEventListener('click', onOpenCommandPalette);
+  root.querySelector('#commandOverlay')?.addEventListener('click', (event) => {
+    if (event.target?.id === 'commandOverlay') onCloseCommandPalette();
+  });
+  root.querySelector('#commandPaletteInput')?.addEventListener('input', (event) => {
+    onCommandQueryChange(event.target.value);
+  });
+  root.querySelectorAll('[data-command-index]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const idx = Number(btn.getAttribute('data-command-index') || 0);
+      onCommandExecute(idx);
+    });
+  });
 }

@@ -85,24 +85,19 @@ function pageLogin(route, rawCtx) {
         <section class="login-card">
           <h2>Welcome to VisionHub</h2>
           <p class="login-subtitle">The secure way to ship vision models</p>
-          <div class="oauth-list">
-            <button class="oauth-btn" type="button" data-oauth="google">
-              <span class="oauth-icon google">G</span><span>使用 Google 继续</span>
-            </button>
-            <button class="oauth-btn" type="button" data-oauth="github">
-              <span class="oauth-icon github">G</span><span>使用 GitHub 继续</span>
-            </button>
-            <button class="oauth-btn" type="button" data-oauth="apple">
-              <span class="oauth-icon apple">A</span><span>使用 Apple 继续</span>
-            </button>
+          <div class="init-account-box">
+            <div class="init-account-title">初始账户（用户名 / 密码）</div>
+            <ul class="init-account-list">
+              <li><span class="mono">platform_admin</span><span class="mono">platform123</span></li>
+              <li><span class="mono">supplier_demo</span><span class="mono">supplier123</span></li>
+              <li><span class="mono">buyer_operator</span><span class="mono">buyer123</span></li>
+            </ul>
           </div>
-          <div class="login-divider"></div>
-          <label>邮箱</label>
-          <input id="username" value="platform_admin" placeholder="您的账号或邮箱" />
+          <label>用户名</label>
+          <input id="username" value="platform_admin" placeholder="请输入用户名" />
           <label>密码</label>
           <input id="password" type="password" value="platform123" />
           <button id="loginBtn" class="primary">继续</button>
-          <div class="hint">账号：platform_admin / supplier_demo / buyer_operator</div>
           <div id="loginMsg" class="hint danger"></div>
         </section>
         <div class="login-footnote">服务条款和隐私政策</div>
@@ -133,11 +128,6 @@ function pageLogin(route, rawCtx) {
       }
 
       loginBtn?.addEventListener('click', submit);
-      root.querySelectorAll('[data-oauth]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          loginMsg.textContent = '第三方登录暂未接入，请使用账号密码登录。';
-        });
-      });
       passwordEl?.addEventListener('keydown', (event) => {
         if (event.key === 'Enter') submit();
       });
