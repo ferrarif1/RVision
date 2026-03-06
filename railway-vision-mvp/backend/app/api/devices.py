@@ -78,8 +78,7 @@ def list_devices(
                 "buyer": buyer_label,
                 "status": computed_status,
                 "last_heartbeat": device.last_seen_at,
-                # Current edge agent does not report version yet; keep stable placeholder.
-                "agent_version": "edge-agent-mvp",
+                "agent_version": device.agent_version or "unknown",
                 "created_at": device.created_at,
             }
         )

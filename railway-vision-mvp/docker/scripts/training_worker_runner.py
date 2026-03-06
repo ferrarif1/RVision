@@ -4,7 +4,7 @@
 This script fills the gap between control-plane APIs and actual worker execution:
 - heartbeat + pull jobs
 - controlled pull of assets/base model
-- local fine-tune command hook (or built-in mock trainer)
+- local fine-tune command hook (or built-in lightweight trainer)
 - package candidate model via model_package_tool
 - upload candidate + push terminal status
 """
@@ -15,6 +15,7 @@ import argparse
 import base64
 import hashlib
 import json
+import math
 import os
 import shlex
 import subprocess
@@ -47,11 +48,32 @@ def _decode_to_file(b64_data: str, target: Path) -> int:
     return len(raw)
 
 
-def _decrypt_base_model(enc_path: Path, out_path: Path, decrypt_key_path: Path) -> None:
-    key = decrypt_key_path.read_bytes().strip()
-    dec = Fernet(key).decrypt(enc_path.read_bytes())
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_bytes(dec)
+def _decrypt_base_model(enc_path: Path, out_path: Path, decrypt_key_path: Path, fallback_key_path: Path | None = None) -> None:
+    candidates = [decrypt_key_path]
+    if fallback_key_path and fallback_key_path not in candidates:
+        candidates.append(fallback_key_path)
+
+    payload = enc_path.read_bytes()
+    last_error: Exception | None = None
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        key = candidate.read_bytes().strip()
+        try:
+            dec = Fernet(key).decrypt(payload)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_bytes(dec)
+            return
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            continue
+    # Backward compatibility: some historical model.enc payloads are signed-only (not Fernet-encrypted).
+    if not payload.startswith(b"gAAAA"):
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_bytes(payload)
+        return
+    resolved = [str(path) for path in candidates]
+    raise WorkerError(f"failed to decrypt base model with keys: {resolved}") from last_error
 
 
 def _run_cmd(cmd: str, env: dict[str, str] | None = None) -> None:
@@ -79,12 +101,167 @@ def _mock_train(output_model_path: Path, train_manifest: Path, val_manifest: Pat
     return {"final_loss": 0.03, "val_score": 0.91, "artifact_sha256": digest}
 
 
+def _label_from_row(row: dict[str, Any]) -> str:
+    asset = row.get("asset") or {}
+    meta = asset.get("meta") if isinstance(asset.get("meta"), dict) else {}
+    text = " ".join(
+        [
+            str(asset.get("file_name") or ""),
+            str(meta.get("use_case") or ""),
+            str(meta.get("dataset_label") or ""),
+            str(meta.get("intended_model_code") or ""),
+            str(meta.get("asset_purpose") or ""),
+        ]
+    ).lower()
+    car_keywords = ("car", "number", "ocr", "wagon", "车号", "车厢", "编号")
+    bolt_keywords = ("bolt", "missing", "screw", "fastener", "螺栓", "紧固", "松动")
+    router_keywords = ("router", "scene_router", "编排", "路由")
+    if any(token in text for token in car_keywords):
+        return "car_number_ocr"
+    if any(token in text for token in bolt_keywords):
+        return "bolt_missing_detect"
+    if any(token in text for token in router_keywords):
+        return "scene_router"
+    return "generic_inspection"
+
+
+def _feature_from_file(path: Path) -> list[float]:
+    raw = path.read_bytes()
+    total = max(len(raw), 1)
+    hist = [0] * 16
+    for value in raw:
+        hist[value // 16] += 1
+    features = [bucket / total for bucket in hist]
+    sha = hashlib.sha256(raw).digest()
+    features.extend(
+        [
+            min(total / 200000.0, 1.0),
+            sha[0] / 255.0,
+            sha[1] / 255.0,
+            sha[2] / 255.0,
+        ]
+    )
+    return features
+
+
+def _dot(left: list[float], right: list[float]) -> float:
+    return sum(a * b for a, b in zip(left, right))
+
+
+def _softmax(logits: list[float]) -> list[float]:
+    peak = max(logits)
+    exp = [math.exp(item - peak) for item in logits]
+    denom = sum(exp) or 1.0
+    return [item / denom for item in exp]
+
+
+def _dataset_from_rows(rows: list[dict[str, Any]], labels: list[str], label_to_index: dict[str, int]) -> list[tuple[list[float], int]]:
+    data: list[tuple[list[float], int]] = []
+    for row in rows:
+        path = Path(str(row.get("path") or ""))
+        if not path.exists() or not path.is_file():
+            continue
+        label = _label_from_row(row)
+        if label not in label_to_index:
+            labels.append(label)
+            label_to_index[label] = len(labels) - 1
+        data.append((_feature_from_file(path), label_to_index[label]))
+    return data
+
+
+def _evaluate(data: list[tuple[list[float], int]], weights: list[list[float]], bias: list[float]) -> tuple[float, float]:
+    if not data:
+        return 0.0, 0.0
+    loss = 0.0
+    correct = 0
+    for features, target in data:
+        logits = [_dot(weight, features) + bias[idx] for idx, weight in enumerate(weights)]
+        probs = _softmax(logits)
+        pred = max(range(len(probs)), key=lambda idx: probs[idx])
+        if pred == target:
+            correct += 1
+        loss += -math.log(max(probs[target], 1e-12))
+    return loss / len(data), correct / len(data)
+
+
+def _builtin_train(output_model_path: Path, train_manifest: Path, val_manifest: Path, base_model_path: Path | None, spec: dict[str, Any]) -> dict[str, Any]:
+    train_rows = json.loads(train_manifest.read_text(encoding="utf-8"))
+    val_rows = json.loads(val_manifest.read_text(encoding="utf-8")) if val_manifest.exists() else []
+
+    labels: list[str] = []
+    label_to_index: dict[str, int] = {}
+    train_data = _dataset_from_rows(train_rows, labels, label_to_index)
+    val_data = _dataset_from_rows(val_rows, labels, label_to_index)
+    if not train_data:
+        raise WorkerError("built-in trainer has no readable training assets")
+
+    dim = len(train_data[0][0])
+    class_count = max(len(labels), 1)
+    epochs = max(1, int(spec.get("epochs", 6)))
+    learning_rate = float(spec.get("learning_rate", 0.25))
+    weights = [[0.0 for _ in range(dim)] for _ in range(class_count)]
+    bias = [0.0 for _ in range(class_count)]
+
+    final_loss = 0.0
+    for _epoch in range(epochs):
+        for features, target in train_data:
+            logits = [_dot(weight, features) + bias[idx] for idx, weight in enumerate(weights)]
+            probs = _softmax(logits)
+            for cls in range(class_count):
+                grad = probs[cls] - (1.0 if cls == target else 0.0)
+                if grad == 0.0:
+                    continue
+                for index in range(dim):
+                    weights[cls][index] -= learning_rate * grad * features[index]
+                bias[cls] -= learning_rate * grad
+        final_loss, _ = _evaluate(train_data, weights, bias)
+
+    train_loss, train_acc = _evaluate(train_data, weights, bias)
+    val_loss, val_acc = _evaluate(val_data, weights, bias) if val_data else (train_loss, train_acc)
+
+    payload = {
+        "trainer": "builtin_logreg",
+        "epochs": epochs,
+        "learning_rate": learning_rate,
+        "feature_spec": "byte_hist16+sha3+size",
+        "labels": labels,
+        "weights": weights,
+        "bias": bias,
+        "base_model": str(base_model_path) if base_model_path else None,
+        "train_samples": len(train_data),
+        "val_samples": len(val_data),
+        "generated_at": int(_now_ts()),
+    }
+    model_bytes = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    output_model_path.parent.mkdir(parents=True, exist_ok=True)
+    output_model_path.write_bytes(model_bytes)
+    digest = hashlib.sha256(model_bytes).hexdigest()
+    return {
+        "trainer": "builtin_logreg",
+        "epochs": epochs,
+        "learning_rate": round(learning_rate, 6),
+        "train_loss": round(train_loss, 6),
+        "val_loss": round(val_loss, 6),
+        "train_accuracy": round(train_acc, 4),
+        "val_accuracy": round(val_acc, 4),
+        "final_loss": round(final_loss, 6),
+        "val_score": round(val_acc, 4),
+        "artifact_sha256": digest,
+    }
+
+
 class TrainingWorkerRunner:
     def __init__(self, args: argparse.Namespace):
         self.args = args
         self.client = httpx.Client(base_url=args.backend_base_url.rstrip("/"), timeout=60.0, verify=args.verify_tls)
-        self.headers = {"Authorization": f"Bearer {args.worker_token}"}
+        self.headers = {
+            "X-Training-Worker-Code": args.worker_code,
+            "X-Training-Worker-Token": args.worker_token,
+        }
         self.backend_root = Path(args.backend_root).resolve()
+        self.model_decrypt_key_path = Path(args.model_decrypt_key).expanduser().resolve()
+        self.model_encrypt_key_path = Path(args.model_encrypt_key).expanduser().resolve()
+        self.model_sign_private_key_path = Path(args.model_sign_private_key).expanduser().resolve()
 
     def close(self) -> None:
         self.client.close()
@@ -142,7 +319,12 @@ class TrainingWorkerRunner:
         _decode_to_file(base["manifest_b64"], manifest_path)
         _decode_to_file(base["model_enc_b64"], model_enc_path)
         _decode_to_file(base["signature_b64"], sig_path)
-        _decrypt_base_model(model_enc_path, base_model_path, Path(self.args.model_decrypt_key))
+        _decrypt_base_model(
+            model_enc_path,
+            base_model_path,
+            self.model_decrypt_key_path,
+            fallback_key_path=self.model_encrypt_key_path,
+        )
 
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         return base_model_path, manifest
@@ -159,9 +341,9 @@ class TrainingWorkerRunner:
             "--version",
             str(job["target_version"]),
             "--encrypt-key",
-            self.args.model_encrypt_key,
+            str(self.model_encrypt_key_path),
             "--signing-private-key",
-            self.args.model_sign_private_key,
+            str(self.model_sign_private_key_path),
             "--output",
             str(out_zip),
             "--task-type",
@@ -249,7 +431,10 @@ class TrainingWorkerRunner:
             _safe_json_write(Path(context["job_json"]), job)
             metrics = self._run_train_command(self.args.trainer_cmd, context)
         else:
-            metrics = _mock_train(output_model, train_manifest, val_manifest, base_model_path, job.get("spec") or {})
+            if self.args.trainer_mode == "mock":
+                metrics = _mock_train(output_model, train_manifest, val_manifest, base_model_path, job.get("spec") or {})
+            else:
+                metrics = _builtin_train(output_model, train_manifest, val_manifest, base_model_path, job.get("spec") or {})
             _safe_json_write(metrics_json, metrics)
 
         self.push_update(job_id, "RUNNING", {"stage": "package"})
@@ -296,11 +481,12 @@ class TrainingWorkerRunner:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run RVision training worker execution loop.")
     parser.add_argument("--backend-base-url", default=os.getenv("TRAINING_BACKEND_BASE_URL", "http://localhost:8000"))
+    parser.add_argument("--worker-code", default=os.getenv("TRAINING_WORKER_CODE", ""))
     parser.add_argument("--worker-token", default=os.getenv("TRAINING_WORKER_TOKEN", ""))
     parser.add_argument("--worker-host", default=os.getenv("TRAINING_WORKER_HOST", "training-worker-local"))
     parser.add_argument("--backend-root", default=os.getenv("TRAINING_BACKEND_ROOT", "./backend"))
     parser.add_argument("--work-dir", default=os.getenv("TRAINING_WORK_DIR", "/tmp/rv_training_worker"))
-    parser.add_argument("--model-decrypt-key", default=os.getenv("MODEL_DECRYPT_KEY", "./docker/keys/model_encrypt.key"))
+    parser.add_argument("--model-decrypt-key", default=os.getenv("MODEL_DECRYPT_KEY", "./edge/keys/model_decrypt.key"))
     parser.add_argument("--model-encrypt-key", default=os.getenv("MODEL_ENCRYPT_KEY", "./docker/keys/model_encrypt.key"))
     parser.add_argument("--model-sign-private-key", default=os.getenv("MODEL_SIGN_PRIVATE_KEY", "./docker/keys/model_sign_private.pem"))
     parser.add_argument("--output-model-name", default=os.getenv("TRAINING_OUTPUT_MODEL", "candidate_model.bin"))
@@ -313,6 +499,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--poll-seconds", type=int, default=int(os.getenv("TRAINING_POLL_SECONDS", "10")))
     parser.add_argument("--pull-limit", type=int, default=int(os.getenv("TRAINING_PULL_LIMIT", "1")))
     parser.add_argument("--trainer-cmd", default=os.getenv("TRAINING_TRAINER_CMD", ""))
+    parser.add_argument(
+        "--trainer-mode",
+        default=os.getenv("TRAINING_TRAINER_MODE", "builtin"),
+        choices=["builtin", "mock"],
+        help="built-in trainer mode when TRAINING_TRAINER_CMD is not set",
+    )
     parser.add_argument("--verify-tls", action="store_true")
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")
@@ -320,6 +512,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resources", type=json.loads, default=os.getenv("TRAINING_WORKER_RESOURCES", '{"gpu_mem_mb":4096,"cpu":4}'))
 
     args = parser.parse_args()
+    if not args.worker_code:
+        parser.error("--worker-code (or TRAINING_WORKER_CODE) is required")
     if not args.worker_token:
         parser.error("--worker-token (or TRAINING_WORKER_TOKEN) is required")
     return args

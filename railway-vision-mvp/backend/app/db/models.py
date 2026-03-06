@@ -77,6 +77,7 @@ class Device(Base):
     name = Column(String(255), nullable=False)
     status = Column(String(32), nullable=False, default="ACTIVE")
     edge_token_hash = Column(String(255), nullable=False)
+    agent_version = Column(String(64), nullable=True)
     last_seen_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 

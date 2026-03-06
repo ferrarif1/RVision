@@ -19,6 +19,10 @@ class Settings(BaseSettings):
 
     model_repo_path: str = Field(default="/app/app/models_repo", description="模型仓库存储路径 / Model repository path")
     asset_repo_path: str = Field(default="/app/app/uploads", description="资产存储路径 / Uploaded asset storage path")
+    asset_upload_max_bytes: int = Field(
+        default=268435456,
+        description="单个资产上传大小上限（字节） / Max size in bytes for a single uploaded asset",
+    )
     model_signing_public_key: str = Field(
         default="/app/keys/model_sign_public.pem",
         description="模型包验签公钥路径 / Public key path for model package signature verification",

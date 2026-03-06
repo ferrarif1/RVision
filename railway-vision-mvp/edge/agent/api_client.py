@@ -13,6 +13,7 @@ class EdgeApiClient:
         self.headers = {
             "x-edge-device-code": settings.edge_device_code,
             "x-edge-token": settings.edge_token,
+            "x-edge-agent-version": settings.edge_agent_version,
             "content-type": "application/json",
         }
 

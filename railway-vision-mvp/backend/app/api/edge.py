@@ -92,6 +92,28 @@ def _is_model_released_to_device(db: Session, model_id: str, device_code: str) -
     return False
 
 
+def _normalize_pipeline_id(pipeline_id: str | None) -> str | None:
+    cleaned = str(pipeline_id or "").strip()
+    if not cleaned:
+        return None
+    if len(cleaned) <= 36:
+        return cleaned
+    tail = cleaned[-36:]
+    try:
+        uuid.UUID(tail)
+        return tail
+    except ValueError:
+        return hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:36]
+
+
+def _resolve_run_pipeline_id(db: Session, pipeline_id: str | None) -> str | None:
+    candidate = _normalize_pipeline_id(pipeline_id)
+    if not candidate:
+        return None
+    exists = db.query(PipelineRecord.id).filter(PipelineRecord.id == candidate).first()
+    return candidate if exists else None
+
+
 @router.get("/ping")
 def edge_ping(device: EdgeDeviceContext = Depends(get_edge_device)):
     return {"status": "ok", "device_code": device.code, "timestamp": datetime.utcnow()}
@@ -290,6 +312,9 @@ def edge_push_results(
     task = db.query(InferenceTask).filter(InferenceTask.id == payload.task_id).first()
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+    # Idempotency: tolerate edge retries after control-plane has already finalized the task.
+    if task.finished_at and task.status in {TASK_STATUS_SUCCEEDED, TASK_STATUS_FAILED} and task.status == payload.status.value:
+        return {"task_id": task.id, "status": task.status, "saved_results": 0, "idempotent": True}
 
     model = db.query(ModelRecord).filter(ModelRecord.id == task.model_id).first()
     if not model:
@@ -345,10 +370,14 @@ def edge_push_results(
     db.add(task)
 
     if payload.run.job_id or payload.run.input_hash or payload.run.result_summary:
+        raw_pipeline_id = payload.run.pipeline_id or task.pipeline_id
+        run_pipeline_id = _resolve_run_pipeline_id(db, raw_pipeline_id)
+        run_job_id = payload.run.job_id or task.id
         input_hash = payload.run.input_hash or hashlib.sha256(f"{task.asset_id}:{task.id}".encode("utf-8")).hexdigest()
         audit_hash_source = {
             "task_id": task.id,
-            "pipeline_id": payload.run.pipeline_id or task.pipeline_id,
+            "pipeline_id": run_pipeline_id,
+            "pipeline_id_raw": raw_pipeline_id,
             "pipeline_version": payload.run.pipeline_version,
             "threshold_version": payload.run.threshold_version,
             "input_hash": input_hash,
@@ -357,30 +386,46 @@ def edge_push_results(
             "result_summary": payload.run.result_summary,
         }
         audit_hash = payload.run.audit_hash or hashlib.sha256(json.dumps(audit_hash_source, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
-        db.add(
-            InferenceRun(
-                id=str(uuid.uuid4()),
-                job_id=payload.run.job_id or task.id,
-                task_id=task.id,
-                pipeline_id=payload.run.pipeline_id or task.pipeline_id,
-                pipeline_version=payload.run.pipeline_version,
-                threshold_version=payload.run.threshold_version,
-                input_hash=input_hash,
-                input_summary=payload.run.input_summary,
-                models_versions=payload.run.models_versions,
-                timings=payload.run.timings,
-                result_summary=payload.run.result_summary,
-                audit_hash=audit_hash,
-                status=payload.status.value,
+        existing_run = db.query(InferenceRun).filter(InferenceRun.job_id == run_job_id).first()
+        if existing_run:
+            existing_run.task_id = task.id
+            existing_run.pipeline_id = run_pipeline_id
+            existing_run.pipeline_version = payload.run.pipeline_version
+            existing_run.threshold_version = payload.run.threshold_version
+            existing_run.input_hash = input_hash
+            existing_run.input_summary = payload.run.input_summary
+            existing_run.models_versions = payload.run.models_versions
+            existing_run.timings = payload.run.timings
+            existing_run.result_summary = payload.run.result_summary
+            existing_run.audit_hash = audit_hash
+            existing_run.status = payload.status.value
+            db.add(existing_run)
+        else:
+            db.add(
+                InferenceRun(
+                    id=str(uuid.uuid4()),
+                    job_id=run_job_id,
+                    task_id=task.id,
+                    pipeline_id=run_pipeline_id,
+                    pipeline_version=payload.run.pipeline_version,
+                    threshold_version=payload.run.threshold_version,
+                    input_hash=input_hash,
+                    input_summary=payload.run.input_summary,
+                    models_versions=payload.run.models_versions,
+                    timings=payload.run.timings,
+                    result_summary=payload.run.result_summary,
+                    audit_hash=audit_hash,
+                    status=payload.status.value,
+                )
             )
-        )
         record_audit(
             db,
             action=actions.ORCHESTRATOR_RUN,
             resource_type="inference_run",
-            resource_id=payload.run.job_id or task.id,
+            resource_id=run_job_id,
             detail={
-                "pipeline_id": payload.run.pipeline_id or task.pipeline_id,
+                "pipeline_id": run_pipeline_id,
+                "pipeline_id_raw": raw_pipeline_id,
                 "pipeline_version": payload.run.pipeline_version,
                 "threshold_version": payload.run.threshold_version,
                 "input_hash": input_hash,
@@ -393,9 +438,9 @@ def edge_push_results(
         for reason in payload.run.review_reasons:
             review = ReviewQueue(
                 id=str(uuid.uuid4()),
-                job_id=payload.run.job_id or task.id,
+                job_id=run_job_id,
                 task_id=task.id,
-                pipeline_id=payload.run.pipeline_id or task.pipeline_id,
+                pipeline_id=run_pipeline_id,
                 reason=reason,
                 assigned_to=None,
                 label_result=None,

@@ -749,7 +749,8 @@ def _legacy_pipeline(task: dict[str, Any]) -> dict[str, Any]:
     if not model_id:
         return {"router": {}, "experts": {task_type: []}, "fusion": {"strategy": "priority", "max_experts_per_task": 1}, "thresholds": {}}
     return {
-        "id": f"legacy-{model_id}",
+        # Direct-model fallback has no registry pipeline entity.
+        "id": None,
         "pipeline_code": "legacy-single-model",
         "version": "v1",
         "router": {},

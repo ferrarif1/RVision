@@ -79,6 +79,7 @@ def require_roles(*required_roles: str):
 def get_edge_device(
     x_edge_device_code: str = Header(default=""),
     x_edge_token: str = Header(default=""),
+    x_edge_agent_version: str = Header(default=""),
     db: Session = Depends(get_db),
 ) -> EdgeDeviceContext:
     if not x_edge_device_code or not x_edge_token:
@@ -88,6 +89,8 @@ def get_edge_device(
     if not device or not verify_password(x_edge_token, device.edge_token_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid edge credentials")
     device.last_seen_at = datetime.utcnow()
+    if x_edge_agent_version.strip():
+        device.agent_version = x_edge_agent_version.strip()[:64]
     db.add(device)
     db.commit()
 

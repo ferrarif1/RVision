@@ -10,6 +10,8 @@ class EdgeSettings:
     edge_device_code: str = os.getenv("EDGE_DEVICE_CODE", "edge-01")
     # 设备鉴权 Token（对应中心端登记）/ Edge authentication token issued by control plane.
     edge_token: str = os.getenv("EDGE_TOKEN", "EDGE_TOKEN_CHANGE_ME")
+    # Agent 版本号（用于中心端设备可观测）/ Edge agent version reported to control plane.
+    edge_agent_version: str = os.getenv("EDGE_AGENT_VERSION", "edge-agent/2026.03")
     # 轮询间隔秒数 / Poll interval in seconds.
     edge_poll_seconds: int = int(os.getenv("EDGE_POLL_SECONDS", "10"))
     # 本地缓存目录（资产、补传队列、临时文件）/ Local cache directory for assets and retry queue.

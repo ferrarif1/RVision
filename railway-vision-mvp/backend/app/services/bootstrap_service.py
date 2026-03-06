@@ -1,9 +1,7 @@
 import uuid
 
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.db.database import Base, engine
 from app.db.models import Device, Role, Tenant, User, UserRole
 from app.security.auth import hash_password
 from app.security.roles import (
@@ -17,6 +15,7 @@ from app.security.roles import (
     ROLE_PLATFORM_OPERATOR,
     ROLE_SUPPLIER_ENGINEER,
 )
+from app.services.schema_migration_service import run_schema_migrations
 
 DEFAULT_TENANTS = [
     ("platform-001", "Platform Tenant", "PLATFORM"),
@@ -52,133 +51,7 @@ DEFAULT_USER_TENANT_MAP = {
 
 
 def initialize_database() -> None:
-    Base.metadata.create_all(bind=engine)
-    # Lightweight migration for environments created before tenant fields existed.
-    statements = [
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(36)",
-        "ALTER TABLE models ADD COLUMN IF NOT EXISTS model_type VARCHAR(32) NOT NULL DEFAULT 'expert'",
-        "ALTER TABLE models ADD COLUMN IF NOT EXISTS runtime VARCHAR(64)",
-        "ALTER TABLE models ADD COLUMN IF NOT EXISTS inputs JSONB NOT NULL DEFAULT '{}'::jsonb",
-        "ALTER TABLE models ADD COLUMN IF NOT EXISTS outputs JSONB NOT NULL DEFAULT '{}'::jsonb",
-        "ALTER TABLE models ADD COLUMN IF NOT EXISTS plugin_name VARCHAR(128)",
-        "ALTER TABLE models ADD COLUMN IF NOT EXISTS gpu_mem_mb INTEGER",
-        "ALTER TABLE models ADD COLUMN IF NOT EXISTS latency_ms INTEGER",
-        "ALTER TABLE models ADD COLUMN IF NOT EXISTS owner_tenant_id VARCHAR(36)",
-        "ALTER TABLE model_releases ADD COLUMN IF NOT EXISTS target_buyers JSONB NOT NULL DEFAULT '[]'::jsonb",
-        "ALTER TABLE data_assets ADD COLUMN IF NOT EXISTS buyer_tenant_id VARCHAR(36)",
-        "ALTER TABLE inference_tasks ADD COLUMN IF NOT EXISTS pipeline_id VARCHAR(36)",
-        "ALTER TABLE inference_tasks ADD COLUMN IF NOT EXISTS buyer_tenant_id VARCHAR(36)",
-        "ALTER TABLE inference_results ADD COLUMN IF NOT EXISTS buyer_tenant_id VARCHAR(36)",
-        "ALTER TABLE training_jobs ADD COLUMN IF NOT EXISTS candidate_model_id VARCHAR(36)",
-        """
-        CREATE TABLE IF NOT EXISTS pipelines (
-            id VARCHAR(36) PRIMARY KEY,
-            pipeline_code VARCHAR(128) NOT NULL,
-            name VARCHAR(255) NOT NULL,
-            router_model_id VARCHAR(36) NULL REFERENCES models(id) ON DELETE SET NULL,
-            expert_map JSONB NOT NULL DEFAULT '{}'::jsonb,
-            thresholds JSONB NOT NULL DEFAULT '{}'::jsonb,
-            fusion_rules JSONB NOT NULL DEFAULT '{}'::jsonb,
-            config JSONB NOT NULL DEFAULT '{}'::jsonb,
-            version VARCHAR(64) NOT NULL,
-            status VARCHAR(32) NOT NULL DEFAULT 'DRAFT',
-            owner_tenant_id VARCHAR(36) NULL REFERENCES tenants(id) ON DELETE SET NULL,
-            created_by VARCHAR(36) NOT NULL REFERENCES users(id),
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            CONSTRAINT uq_pipeline_code_version UNIQUE (pipeline_code, version)
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS inference_runs (
-            id VARCHAR(36) PRIMARY KEY,
-            job_id VARCHAR(36) NOT NULL UNIQUE,
-            task_id VARCHAR(36) NOT NULL REFERENCES inference_tasks(id) ON DELETE CASCADE,
-            pipeline_id VARCHAR(36) NULL REFERENCES pipelines(id) ON DELETE SET NULL,
-            pipeline_version VARCHAR(64),
-            threshold_version VARCHAR(64),
-            input_hash VARCHAR(128) NOT NULL,
-            input_summary JSONB NOT NULL DEFAULT '{}'::jsonb,
-            models_versions JSONB NOT NULL DEFAULT '[]'::jsonb,
-            timings JSONB NOT NULL DEFAULT '{}'::jsonb,
-            result_summary JSONB NOT NULL DEFAULT '{}'::jsonb,
-            audit_hash VARCHAR(128) NOT NULL,
-            status VARCHAR(32) NOT NULL DEFAULT 'SUCCEEDED',
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS review_queue (
-            id VARCHAR(36) PRIMARY KEY,
-            job_id VARCHAR(36) NOT NULL,
-            task_id VARCHAR(36) NOT NULL REFERENCES inference_tasks(id) ON DELETE CASCADE,
-            pipeline_id VARCHAR(36) NULL REFERENCES pipelines(id) ON DELETE SET NULL,
-            reason TEXT NOT NULL,
-            assigned_to VARCHAR(128),
-            label_result VARCHAR(128),
-            status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS training_workers (
-            id VARCHAR(36) PRIMARY KEY,
-            worker_code VARCHAR(128) NOT NULL UNIQUE,
-            name VARCHAR(255) NOT NULL,
-            status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
-            auth_token_hash VARCHAR(255) NOT NULL,
-            host VARCHAR(255),
-            labels JSONB NOT NULL DEFAULT '{}'::jsonb,
-            resources JSONB NOT NULL DEFAULT '{}'::jsonb,
-            last_seen_at TIMESTAMP NULL,
-            last_job_at TIMESTAMP NULL,
-            created_by VARCHAR(36) NOT NULL REFERENCES users(id),
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS training_jobs (
-            id VARCHAR(36) PRIMARY KEY,
-            job_code VARCHAR(128) NOT NULL UNIQUE,
-            owner_tenant_id VARCHAR(36) NULL REFERENCES tenants(id) ON DELETE SET NULL,
-            buyer_tenant_id VARCHAR(36) NULL REFERENCES tenants(id) ON DELETE SET NULL,
-            base_model_id VARCHAR(36) NULL REFERENCES models(id) ON DELETE SET NULL,
-            status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
-            training_kind VARCHAR(32) NOT NULL DEFAULT 'finetune',
-            asset_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
-            validation_asset_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
-            target_model_code VARCHAR(128) NOT NULL,
-            target_version VARCHAR(64) NOT NULL,
-            worker_selector JSONB NOT NULL DEFAULT '{}'::jsonb,
-            spec JSONB NOT NULL DEFAULT '{}'::jsonb,
-            output_summary JSONB NOT NULL DEFAULT '{}'::jsonb,
-            candidate_model_id VARCHAR(36) NULL REFERENCES models(id) ON DELETE SET NULL,
-            assigned_worker_code VARCHAR(128),
-            error_message TEXT,
-            requested_by VARCHAR(36) NOT NULL REFERENCES users(id),
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            started_at TIMESTAMP NULL,
-            finished_at TIMESTAMP NULL,
-            dispatch_count INTEGER NOT NULL DEFAULT 0
-        )
-        """,
-        "CREATE INDEX IF NOT EXISTS idx_models_type_status ON models(model_type, status)",
-        "CREATE INDEX IF NOT EXISTS idx_pipelines_code_version ON pipelines(pipeline_code, version)",
-        "CREATE INDEX IF NOT EXISTS idx_pipelines_status ON pipelines(status)",
-        "CREATE INDEX IF NOT EXISTS idx_pipelines_owner_tenant_id ON pipelines(owner_tenant_id)",
-        "CREATE INDEX IF NOT EXISTS idx_tasks_pipeline_id ON inference_tasks(pipeline_id)",
-        "CREATE INDEX IF NOT EXISTS idx_inference_runs_task_id ON inference_runs(task_id)",
-        "CREATE INDEX IF NOT EXISTS idx_review_queue_task_id ON review_queue(task_id)",
-        "CREATE INDEX IF NOT EXISTS idx_training_workers_status ON training_workers(status)",
-        "CREATE INDEX IF NOT EXISTS idx_training_jobs_status ON training_jobs(status)",
-        "CREATE INDEX IF NOT EXISTS idx_training_jobs_owner_tenant_id ON training_jobs(owner_tenant_id)",
-        "CREATE INDEX IF NOT EXISTS idx_training_jobs_buyer_tenant_id ON training_jobs(buyer_tenant_id)",
-        "CREATE INDEX IF NOT EXISTS idx_training_jobs_candidate_model_id ON training_jobs(candidate_model_id)",
-        "CREATE INDEX IF NOT EXISTS idx_training_jobs_assigned_worker_code ON training_jobs(assigned_worker_code)",
-    ]
-    with engine.begin() as conn:
-        for stmt in statements:
-            conn.execute(text(stmt))
+    run_schema_migrations()
 
 
 def bootstrap_defaults(db: Session) -> None:

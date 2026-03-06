@@ -60,12 +60,6 @@ export function formatDateTime(value) {
   return d.toLocaleString();
 }
 
-export const DEMO_USERS = {
-  platform_admin: { password: 'platform123', role: 'platform_admin', tenant_code: 'platform-001' },
-  supplier_demo: { password: 'supplier123', role: 'supplier_engineer', tenant_code: 'supplier-demo-001' },
-  buyer_operator: { password: 'buyer123', role: 'buyer_operator', tenant_code: 'buyer-demo-001' },
-};
-
 export const PERMISSIONS = {
   dashboard: 'dashboard.view',
   assets: 'asset.upload',
@@ -78,41 +72,3 @@ export const PERMISSIONS = {
   devices: 'device.read',
   settings: 'settings.view',
 };
-
-export function demoPermissions(role) {
-  if (role === 'platform_admin') {
-    return new Set([
-      'dashboard.view',
-      'asset.upload',
-      'model.view',
-      'model.submit',
-      'model.approve',
-      'model.release',
-      'task.create',
-      'result.read',
-      'audit.read',
-      'device.read',
-      'settings.view',
-      'training.job.view',
-      'training.job.create',
-      'training.worker.manage',
-    ]);
-  }
-  if (role === 'supplier_engineer') {
-    return new Set([
-      'dashboard.view',
-      'model.view',
-      'model.submit',
-      'settings.view',
-      'training.job.view',
-    ]);
-  }
-  return new Set([
-    'dashboard.view',
-    'asset.upload',
-    'task.create',
-    'result.read',
-    'device.read',
-    'settings.view',
-  ]);
-}

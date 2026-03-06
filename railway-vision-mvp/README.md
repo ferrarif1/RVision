@@ -15,6 +15,8 @@
 - 当前已实装：边缘推理、Pipeline 编排、模型提交审批发布、结果回传、审计留痕。
 - 当前已部分实装：训练控制面最小闭环，包含训练作业对象、worker 注册、心跳、拉取作业、受控拉取训练资产/基线模型、候选模型自动回收入库、状态回传。
 - 当前已新增：`docker/scripts/training_worker_runner.py`，可在 worker 侧执行“拉作业→拉资产/基线模型→本地训练命令→打包候选→回传状态”的MVP执行闭环。
+- 当前已新增：运行时硬化，包括真实后端登录校验、上传空文件/非法类型拦截、流式上传、重复资产复用、边缘 Agent 版本上报。
+- 当前已新增：版本化数据库迁移（`schema_migrations + backend/app/db/migrations/versions/*.sql`），不再依赖启动时散落的 `ALTER TABLE` 补字段。
 - 当前未实装：真正的训练执行引擎、自动验证晋级、完整分布式调度与容量治理。
 - 目标态：平台部署在 `server1` 作为控制面，通过网络分配其他主机资源进行训练与微调。
 
@@ -153,6 +155,7 @@ bash docker/scripts/start_one_click.sh
 - `docker/.env` 检查与初始化（缺失时从 `.env.example` 复制）
 - `docker compose up -d --build`
 - 后端健康检查等待（按顺序探测 `http://localhost:8000/health`、`https://localhost:8443/api/health`）
+- 后端启动时自动执行版本化数据库迁移
 - 若超时，自动打印 backend/frontend 最近日志，便于快速定位问题
 
 ### 方式C：质量门禁检查（推荐发布前执行）
@@ -166,6 +169,7 @@ bash docker/scripts/quality_gate.sh
 - 后端/边缘代码编译检查
 - 边缘推理 golden fixture 回归检查
 - 运行时健康检查（若容器已启动）
+- 运行时硬化 smoke（认证拒绝、空文件拒绝、非法类型拒绝、重复上传复用）
 - 训练控制面 smoke 检查，并归档 `docs/qa/reports/training_control_plane_latest.json`
 
 ### 方式C2：运行训练 Worker MVP 执行器
@@ -200,6 +204,33 @@ bash docker/scripts/go_no_go.sh
 
 可选 CI（手动触发）：
 - `.github/workflows/release-gate.yml`
+
+### 方式E：运行时清理（安全 housekeeping）
+
+```bash
+cd /Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp
+python3 docker/scripts/cleanup_runtime_housekeeping.py
+python3 docker/scripts/cleanup_runtime_housekeeping.py --apply
+```
+
+该脚本默认 `dry-run`，仅清理两类低风险产物：
+- `docs/qa/reports/*.json` 中超过保留期的历史报告（保留最新别名）
+- `backend/app/uploads/.upload-*` 异常中断残留的临时上传文件
+
+不会删除正式资产、模型仓库或数据库记录对应文件。
+
+### 方式F：数据库迁移状态 / 手动补跑
+
+```bash
+cd /Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp
+python3 docker/scripts/db_migrate.py
+python3 docker/scripts/db_migrate.py --apply
+```
+
+说明：
+- 服务启动时会自动执行待迁移版本
+- `db_migrate.py` 优先在 `rv_backend` 容器内执行，用于手动查看 `schema_migrations` 状态或在离线维护时补跑迁移
+- 当前迁移文件目录为 `backend/app/db/migrations/versions/`
 
 ## 4. 默认账号
 

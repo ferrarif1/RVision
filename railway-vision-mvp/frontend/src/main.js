@@ -1,6 +1,6 @@
 import { createStore } from './core/store.js';
 import { createRouter } from './core/router.js';
-import { api, apiPost, DEMO_USERS, demoPermissions } from './core/api.js';
+import { api, apiPost } from './core/api.js';
 import { renderShell, bindShellEvents } from './layout/AppShell.js';
 import { getPage } from './pages/index.js';
 
@@ -59,6 +59,31 @@ function clearSession() {
   localStorage.removeItem('rv_user');
   localStorage.removeItem('rv_permissions');
   localStorage.removeItem('rv_last_route');
+}
+
+async function hydrateSession() {
+  const token = String(store.getState().token || '');
+  if (!token) {
+    clearSession();
+    store.setState({ token: '', user: null, permissions: new Set() });
+    return;
+  }
+
+  if (token.startsWith('demo_')) {
+    clearSession();
+    store.setState({ token: '', user: null, permissions: new Set() });
+    return;
+  }
+
+  try {
+    const me = await api('/users/me', {}, token);
+    const permissions = new Set(me.permissions || []);
+    store.setState({ token, user: me, permissions });
+    saveSession(store.getState());
+  } catch {
+    clearSession();
+    store.setState({ token: '', user: null, permissions: new Set() });
+  }
 }
 
 function toast(message, type = 'info') {
@@ -224,30 +249,13 @@ function animateViewEntry() {
 }
 
 async function login(username, password) {
-  try {
-    const resp = await apiPost('/auth/login', { username, password });
-    const me = await api('/users/me', {}, resp.access_token);
-    const permissions = new Set(me.permissions || resp.permissions || []);
-    store.setState({ token: resp.access_token, user: me, permissions });
-    saveSession(store.getState());
-    router.navigate(localStorage.getItem('rv_last_route') || 'dashboard');
-    return { ok: true };
-  } catch (error) {
-    const demo = DEMO_USERS[username];
-    if (!demo || demo.password !== password) throw error;
-    const user = {
-      username,
-      roles: [demo.role],
-      role: demo.role,
-      tenant_code: demo.tenant_code,
-      tenant_id: demo.tenant_code,
-    };
-    const permissions = demoPermissions(demo.role);
-    store.setState({ token: `demo_${username}`, user, permissions });
-    saveSession(store.getState());
-    router.navigate('dashboard');
-    return { ok: true };
-  }
+  const resp = await apiPost('/auth/login', { username, password });
+  const me = await api('/users/me', {}, resp.access_token);
+  const permissions = new Set(me.permissions || resp.permissions || []);
+  store.setState({ token: resp.access_token, user: me, permissions });
+  saveSession(store.getState());
+  router.navigate(localStorage.getItem('rv_last_route') || 'dashboard');
+  return { ok: true };
 }
 
 function logout() {
@@ -512,11 +520,16 @@ const router = createRouter({
   },
 });
 
-if (store.getState().user) {
-  const start = localStorage.getItem('rv_last_route') || 'dashboard';
-  window.location.hash = `#/${start}`;
-} else {
-  window.location.hash = '#/login';
+async function bootstrap() {
+  await hydrateSession();
+  if (store.getState().user) {
+    const start = localStorage.getItem('rv_last_route') || 'dashboard';
+    window.location.hash = `#/${start}`;
+  } else {
+    window.location.hash = '#/login';
+  }
+  bindGlobalHotkeys();
+  router.start();
 }
-bindGlobalHotkeys();
-router.start();
+
+bootstrap();

@@ -14,3 +14,13 @@ docker/keys/*
 
 edge/keys/*
 !edge/keys/.gitkeep
+
+# Runtime-generated uploads, screenshots and QA reports
+backend/app/uploads/*
+!backend/app/uploads/.gitkeep
+!backend/app/uploads/open_models/
+!backend/app/uploads/open_models/**
+backend/app/uploads/screenshots/*
+!backend/app/uploads/screenshots/.gitkeep
+docs/qa/reports/*.json
+!docs/qa/reports/.gitkeep

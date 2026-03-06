@@ -33,5 +33,7 @@ for i in $(seq 1 40); do
 done
 
 echo "[start_one_click] backend 已就绪：${HEALTH_OK}"
+echo "[start_one_click] 当前数据库迁移状态："
+python3 docker/scripts/db_migrate.py || true
 echo "[start_one_click] frontend: https://localhost:8443"
 echo "[start_one_click] backend docs: http://localhost:8000/docs"
