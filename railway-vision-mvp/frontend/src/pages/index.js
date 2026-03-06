@@ -36,6 +36,84 @@ function splitCsv(value) {
     .filter(Boolean);
 }
 
+const ENUM_ZH = {
+  asset_purpose: {
+    inference: '推理',
+    training: '训练',
+    finetune: '微调',
+    validation: '验证',
+  },
+  sensitivity_level: {
+    L1: '低敏',
+    L2: '中敏',
+    L3: '高敏',
+  },
+  model_source_type: {
+    delivery_candidate: '交付候选',
+    finetuned_candidate: '微调候选',
+    initial_algorithm: '初始算法',
+    pretrained_seed: '预训练种子',
+  },
+  model_type: {
+    expert: '专家模型',
+    router: '路由模型',
+  },
+  training_kind: {
+    train: '训练',
+    finetune: '微调',
+    evaluate: '评估',
+  },
+  training_status: {
+    PENDING: '待调度',
+    DISPATCHED: '已派发',
+    RUNNING: '执行中',
+    SUCCEEDED: '成功',
+    FAILED: '失败',
+    CANCELLED: '已取消',
+  },
+  worker_status: {
+    ACTIVE: '活跃',
+    INACTIVE: '停用',
+    UNHEALTHY: '异常',
+  },
+  task_status: {
+    PENDING: '待处理',
+    DISPATCHED: '已派发',
+    RUNNING: '执行中',
+    SUCCEEDED: '成功',
+    FAILED: '失败',
+    CANCELLED: '已取消',
+  },
+  model_status: {
+    SUBMITTED: '已提交',
+    APPROVED: '已审批',
+    RELEASED: '已发布',
+  },
+  pipeline_status: {
+    DRAFT: '草稿',
+    RELEASED: '已发布',
+  },
+  device_status: {
+    ONLINE: '在线',
+    OFFLINE: '离线',
+    STALE: '心跳超时',
+    ACTIVE: '活跃',
+    INACTIVE: '停用',
+    UNHEALTHY: '异常',
+  },
+  task_type: {
+    pipeline_orchestrated: '编排推理',
+    ocr: '文字识别',
+    detect: '目标检测',
+  },
+};
+
+function enumText(group, value) {
+  const rendered = String(value ?? '-');
+  const label = ENUM_ZH[group]?.[rendered];
+  return label ? `${rendered}(${label})` : rendered;
+}
+
 function hasPermission(state, permission) {
   return state.permissions instanceof Set && state.permissions.has(permission);
 }
@@ -200,10 +278,10 @@ function pageDashboard(route, rawCtx) {
           ? `<ul class="compact-list">${assets.map((row) => `<li><strong>${esc(row.file_name)}</strong><span>${esc(row.asset_type)} · ${formatDateTime(row.created_at)}</span></li>`).join('')}</ul>`
           : renderEmpty('暂无资产');
         recentModels.innerHTML = models.length
-          ? `<ul class="compact-list">${models.map((row) => `<li><strong>${esc(row.model_code)}:${esc(row.version)}</strong><span>${esc(row.status)} · ${formatDateTime(row.created_at)}</span></li>`).join('')}</ul>`
+          ? `<ul class="compact-list">${models.map((row) => `<li><strong>${esc(row.model_code)}:${esc(row.version)}</strong><span>${esc(enumText('model_status', row.status))} · ${formatDateTime(row.created_at)}</span></li>`).join('')}</ul>`
           : renderEmpty('暂无模型');
         recentTasks.innerHTML = tasks.length
-          ? `<ul class="compact-list">${tasks.map((row) => `<li><strong>${esc(row.id)}</strong><span>${esc(row.task_type)} · ${esc(row.status)} · ${formatDateTime(row.created_at)}</span></li>`).join('')}</ul>`
+          ? `<ul class="compact-list">${tasks.map((row) => `<li><strong>${esc(row.id)}</strong><span>${esc(enumText('task_type', row.task_type))} · ${esc(enumText('task_status', row.status))} · ${formatDateTime(row.created_at)}</span></li>`).join('')}</ul>`
           : renderEmpty('暂无任务');
       } catch (error) {
         laneGrid.innerHTML = renderError(error.message);
@@ -230,22 +308,22 @@ function pageAssets(route, rawCtx) {
           <input type="file" name="file" accept=".jpg,.jpeg,.png,.bmp,.mp4,.avi,.mov" required />
           <label>用途</label>
           <select name="asset_purpose">
-            <option value="inference">inference</option>
-            <option value="training">training</option>
-            <option value="finetune">finetune</option>
-            <option value="validation">validation</option>
+            <option value="inference">${enumText('asset_purpose', 'inference')}</option>
+            <option value="training">${enumText('asset_purpose', 'training')}</option>
+            <option value="finetune">${enumText('asset_purpose', 'finetune')}</option>
+            <option value="validation">${enumText('asset_purpose', 'validation')}</option>
           </select>
           <label>敏感等级</label>
           <select name="sensitivity_level">
-            <option value="L2">L2</option>
-            <option value="L1">L1</option>
-            <option value="L3">L3</option>
+            <option value="L2">${enumText('sensitivity_level', 'L2')}</option>
+            <option value="L1">${enumText('sensitivity_level', 'L1')}</option>
+            <option value="L3">${enumText('sensitivity_level', 'L3')}</option>
           </select>
-          <label>dataset_label</label>
+          <label>dataset_label(数据集标签)</label>
           <input name="dataset_label" placeholder="demo-dataset-001" />
-          <label>use_case</label>
+          <label>use_case(业务场景)</label>
           <input name="use_case" placeholder="railway-defect-inspection" />
-          <label>intended_model_code</label>
+          <label>intended_model_code(目标模型编码)</label>
           <input name="intended_model_code" placeholder="scene_router" />
           <button class="primary" type="submit">上传资产</button>
           <div id="assetUploadMsg" class="hint"></div>
@@ -257,13 +335,13 @@ function pageAssets(route, rawCtx) {
       </section>
       <section class="card">
         <form id="assetFilterForm" class="inline-form">
-          <input name="q" placeholder="搜索 file_name / use_case / intended_model_code" />
+          <input name="q" placeholder="搜索 file_name(文件名) / use_case(业务场景) / intended_model_code(目标模型编码)" />
           <select name="asset_purpose">
             <option value="">全部用途</option>
-            <option value="inference">inference</option>
-            <option value="training">training</option>
-            <option value="finetune">finetune</option>
-            <option value="validation">validation</option>
+            <option value="inference">${enumText('asset_purpose', 'inference')}</option>
+            <option value="training">${enumText('asset_purpose', 'training')}</option>
+            <option value="finetune">${enumText('asset_purpose', 'finetune')}</option>
+            <option value="validation">${enumText('asset_purpose', 'validation')}</option>
           </select>
           <button class="ghost" type="submit">刷新列表</button>
         </form>
@@ -294,15 +372,15 @@ function pageAssets(route, rawCtx) {
           tableWrap.innerHTML = `
             <div class="table-wrap">
               <table class="table">
-                <thead><tr><th>asset_id</th><th>file_name</th><th>type</th><th>purpose</th><th>sensitivity</th><th>创建时间</th><th>操作</th></tr></thead>
+                <thead><tr><th>asset_id(资产ID)</th><th>file_name(文件名)</th><th>type(类型)</th><th>purpose(用途)</th><th>sensitivity(敏感等级)</th><th>创建时间</th><th>操作</th></tr></thead>
                 <tbody>
                   ${rows.map((row) => `
                     <tr>
                       <td class="mono">${esc(row.id)}</td>
                       <td>${esc(row.file_name)}</td>
                       <td>${esc(row.asset_type)}</td>
-                      <td>${esc((row.meta || {}).asset_purpose || '-')}</td>
-                      <td>${esc(row.sensitivity_level)}</td>
+                      <td>${esc(enumText('asset_purpose', (row.meta || {}).asset_purpose || '-'))}</td>
+                      <td>${esc(enumText('sensitivity_level', row.sensitivity_level))}</td>
                       <td>${formatDateTime(row.created_at)}</td>
                       <td><button class="ghost" data-use-asset="${esc(row.id)}">用于任务</button></td>
                     </tr>
@@ -336,7 +414,7 @@ function pageAssets(route, rawCtx) {
               <div><span>asset_id</span><strong class="mono">${esc(data.id)}</strong></div>
               <div><span>file_name</span><strong>${esc(data.file_name)}</strong></div>
               <div><span>asset_type</span><strong>${esc(data.asset_type)}</strong></div>
-              <div><span>sensitivity</span><strong>${esc(data.sensitivity_level)}</strong></div>
+              <div><span>sensitivity</span><strong>${esc(enumText('sensitivity_level', data.sensitivity_level))}</strong></div>
             </div>
             <div class="row-actions">
               <button class="primary" id="gotoTaskFromAsset">用该资产创建任务</button>
@@ -383,25 +461,25 @@ function pageModels(route, rawCtx) {
           <h3>提交模型包</h3>
           <label>模型包(.zip)</label>
           <input type="file" name="package" accept=".zip" required />
-          <label>model_source_type</label>
+          <label>model_source_type(模型来源类型)</label>
           <select name="model_source_type">
-            <option value="delivery_candidate">delivery_candidate</option>
-            <option value="finetuned_candidate">finetuned_candidate</option>
-            <option value="initial_algorithm">initial_algorithm</option>
-            <option value="pretrained_seed">pretrained_seed</option>
+            <option value="delivery_candidate">${enumText('model_source_type', 'delivery_candidate')}</option>
+            <option value="finetuned_candidate">${enumText('model_source_type', 'finetuned_candidate')}</option>
+            <option value="initial_algorithm">${enumText('model_source_type', 'initial_algorithm')}</option>
+            <option value="pretrained_seed">${enumText('model_source_type', 'pretrained_seed')}</option>
           </select>
-          <label>model_type</label>
+          <label>model_type(模型类型)</label>
           <select name="model_type">
-            <option value="expert">expert</option>
-            <option value="router">router</option>
+            <option value="expert">${enumText('model_type', 'expert')}</option>
+            <option value="router">${enumText('model_type', 'router')}</option>
           </select>
-          <label>plugin_name</label>
+          <label>plugin_name(插件名称)</label>
           <input name="plugin_name" placeholder="scene_router" />
-          <label>training_round</label>
+          <label>training_round(训练轮次)</label>
           <input name="training_round" placeholder="round-1" />
-          <label>dataset_label</label>
+          <label>dataset_label(数据集标签)</label>
           <input name="dataset_label" placeholder="buyer-demo-v1" />
-          <label>training_summary</label>
+          <label>training_summary(训练摘要)</label>
           <textarea name="training_summary" rows="2" placeholder="微调摘要"></textarea>
           <button class="primary" type="submit">提交模型</button>
           <div id="modelRegisterMsg" class="hint"></div>
@@ -426,21 +504,21 @@ function pageModels(route, rawCtx) {
             canCreateTrainingJob
               ? `
                 <form id="trainingJobForm" class="form-grid">
-                  <label>training_kind</label>
+                  <label>training_kind(训练类型)</label>
                   <select name="training_kind">
-                    <option value="finetune">finetune</option>
-                    <option value="train">train</option>
-                    <option value="evaluate">evaluate</option>
+                    <option value="finetune">${enumText('training_kind', 'finetune')}</option>
+                    <option value="train">${enumText('training_kind', 'train')}</option>
+                    <option value="evaluate">${enumText('training_kind', 'evaluate')}</option>
                   </select>
-                  <label>asset_ids（逗号分隔）</label>
+                  <label>asset_ids(训练资产ID，逗号分隔)</label>
                   <input name="asset_ids" placeholder="asset-1,asset-2" required />
-                  <label>validation_asset_ids（逗号分隔）</label>
+                  <label>validation_asset_ids(验证资产ID，逗号分隔)</label>
                   <input name="validation_asset_ids" placeholder="asset-3,asset-4" />
-                  <label>base_model_id（可选）</label>
+                  <label>base_model_id(基础模型ID，可选)</label>
                   <input name="base_model_id" placeholder="model-id" />
-                  <label>target_model_code</label>
+                  <label>target_model_code(目标模型编码)</label>
                   <input name="target_model_code" placeholder="car_number_ocr" required />
-                  <label>target_version</label>
+                  <label>target_version(目标版本)</label>
                   <input name="target_version" placeholder="v2.0.0" required />
                   <button class="primary" type="submit">创建训练作业</button>
                   <div id="trainingJobMsg" class="hint"></div>
@@ -475,7 +553,7 @@ function pageModels(route, rawCtx) {
               ${rows.slice(0, 12).map((row) => `
                 <li>
                   <strong>${esc(row.job_code)}</strong>
-                  <span>${esc(row.training_kind)} · ${esc(row.status)} · candidate=${esc(row.candidate_model?.id || '-')}</span>
+                  <span>${esc(enumText('training_kind', row.training_kind))} · ${esc(enumText('training_status', row.status))} · candidate=${esc(row.candidate_model?.id || '-')}</span>
                 </li>
               `).join('')}
             </ul>
@@ -499,7 +577,7 @@ function pageModels(route, rawCtx) {
               <table class="table">
                 <thead>
                   <tr>
-                    <th>model_code</th><th>version</th><th>status</th><th>source</th><th>hash</th><th>操作</th>
+                    <th>model_code(模型编码)</th><th>version(版本)</th><th>status(状态)</th><th>source(来源)</th><th>hash(摘要)</th><th>操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -507,8 +585,8 @@ function pageModels(route, rawCtx) {
                     <tr>
                       <td>${esc(row.model_code)}</td>
                       <td>${esc(row.version)}</td>
-                      <td>${esc(row.status)}</td>
-                      <td>${esc((row.platform_meta || {}).model_source_type || '-')}</td>
+                      <td>${esc(enumText('model_status', row.status))}</td>
+                      <td>${esc(enumText('model_source_type', (row.platform_meta || {}).model_source_type || '-'))}</td>
                       <td class="mono">${esc((row.model_hash || '').slice(0, 16))}...</td>
                       <td class="row-actions">
                         <button class="ghost" data-model-timeline="${esc(row.id)}">时间线</button>
@@ -534,7 +612,7 @@ function pageModels(route, rawCtx) {
                       <ol class="timeline-list">
                         ${timeline.map((item) => `
                           <li>
-                            <div><strong>${esc(item.title)}</strong><span>${esc(item.status || '-')}</span></div>
+                            <div><strong>${esc(item.title)}</strong><span>${esc(enumText('model_status', item.status || '-'))}</span></div>
                             <p>${esc(item.summary || '-')}</p>
                             <p class="muted">${esc(item.actor_username || '-')} · ${formatDateTime(item.created_at)}</p>
                           </li>
@@ -665,18 +743,18 @@ function pageTraining(route, rawCtx) {
           <form id="trainingFilterForm" class="inline-form">
             <select name="status">
               <option value="">全部状态</option>
-              <option value="PENDING">PENDING</option>
-              <option value="DISPATCHED">DISPATCHED</option>
-              <option value="RUNNING">RUNNING</option>
-              <option value="SUCCEEDED">SUCCEEDED</option>
-              <option value="FAILED">FAILED</option>
-              <option value="CANCELLED">CANCELLED</option>
+              <option value="PENDING">${enumText('training_status', 'PENDING')}</option>
+              <option value="DISPATCHED">${enumText('training_status', 'DISPATCHED')}</option>
+              <option value="RUNNING">${enumText('training_status', 'RUNNING')}</option>
+              <option value="SUCCEEDED">${enumText('training_status', 'SUCCEEDED')}</option>
+              <option value="FAILED">${enumText('training_status', 'FAILED')}</option>
+              <option value="CANCELLED">${enumText('training_status', 'CANCELLED')}</option>
             </select>
             <select name="training_kind">
               <option value="">全部类型</option>
-              <option value="finetune">finetune</option>
-              <option value="train">train</option>
-              <option value="evaluate">evaluate</option>
+              <option value="finetune">${enumText('training_kind', 'finetune')}</option>
+              <option value="train">${enumText('training_kind', 'train')}</option>
+              <option value="evaluate">${enumText('training_kind', 'evaluate')}</option>
             </select>
             <button class="ghost" type="submit">筛选</button>
           </form>
@@ -690,17 +768,17 @@ function pageTraining(route, rawCtx) {
               ? `
                 <form id="registerWorkerForm" class="form-grid">
                   <h4>注册/刷新 Worker</h4>
-                  <label>worker_code</label><input name="worker_code" placeholder="train-worker-01" required />
-                  <label>name</label><input name="name" placeholder="GPU Worker 01" required />
-                  <label>host</label><input name="host" placeholder="10.0.0.31" />
-                  <label>status</label>
+                  <label>worker_code(Worker 编码)</label><input name="worker_code" placeholder="train-worker-01" required />
+                  <label>name(名称)</label><input name="name" placeholder="GPU Worker 01" required />
+                  <label>host(主机地址)</label><input name="host" placeholder="10.0.0.31" />
+                  <label>status(状态)</label>
                   <select name="status">
-                    <option value="ACTIVE">ACTIVE</option>
-                    <option value="INACTIVE">INACTIVE</option>
-                    <option value="UNHEALTHY">UNHEALTHY</option>
+                    <option value="ACTIVE">${enumText('worker_status', 'ACTIVE')}</option>
+                    <option value="INACTIVE">${enumText('worker_status', 'INACTIVE')}</option>
+                    <option value="UNHEALTHY">${enumText('worker_status', 'UNHEALTHY')}</option>
                   </select>
-                  <label>labels(JSON)</label><textarea name="labels" rows="2">{}</textarea>
-                  <label>resources(JSON)</label><textarea name="resources" rows="2">{}</textarea>
+                  <label>labels(JSON 标签)</label><textarea name="labels" rows="2">{}</textarea>
+                  <label>resources(JSON 资源)</label><textarea name="resources" rows="2">{}</textarea>
                   <button class="primary" type="submit">注册 Worker</button>
                   <div id="registerWorkerMsg" class="hint"></div>
                 </form>
@@ -717,23 +795,23 @@ function pageTraining(route, rawCtx) {
               <form id="trainingCreateForm" class="form-grid">
                 <div class="grid-two">
                   <div class="form-grid">
-                    <label>training_kind</label>
+                    <label>training_kind(训练类型)</label>
                     <select name="training_kind">
-                      <option value="finetune">finetune</option>
-                      <option value="train">train</option>
-                      <option value="evaluate">evaluate</option>
+                      <option value="finetune">${enumText('training_kind', 'finetune')}</option>
+                      <option value="train">${enumText('training_kind', 'train')}</option>
+                      <option value="evaluate">${enumText('training_kind', 'evaluate')}</option>
                     </select>
-                    <label>asset_ids（逗号分隔）</label>
+                    <label>asset_ids(训练资产ID，逗号分隔)</label>
                     <input name="asset_ids" list="trainingAssetsDatalist" placeholder="asset-id-1,asset-id-2" required />
-                    <label>validation_asset_ids（逗号分隔）</label>
+                    <label>validation_asset_ids(验证资产ID，逗号分隔)</label>
                     <input name="validation_asset_ids" list="trainingAssetsDatalist" placeholder="asset-id-3" />
                   </div>
                   <div class="form-grid">
-                    <label>base_model_id（可选）</label>
+                    <label>base_model_id(基础模型ID，可选)</label>
                     <input name="base_model_id" list="trainingModelsDatalist" placeholder="model-id" />
-                    <label>target_model_code</label>
+                    <label>target_model_code(目标模型编码)</label>
                     <input name="target_model_code" placeholder="car_number_ocr" required />
-                    <label>target_version</label>
+                    <label>target_version(目标版本)</label>
                     <input name="target_version" placeholder="v2.0.0" required />
                   </div>
                 </div>
@@ -776,15 +854,15 @@ function pageTraining(route, rawCtx) {
               <table class="table">
                 <thead>
                   <tr>
-                    <th>job_code</th><th>status</th><th>kind</th><th>base_model</th><th>candidate_model</th><th>worker</th><th>创建时间</th>
+                    <th>job_code(作业编码)</th><th>status(状态)</th><th>kind(类型)</th><th>base_model(基础模型)</th><th>candidate_model(候选模型)</th><th>worker(执行节点)</th><th>创建时间</th>
                   </tr>
                 </thead>
                 <tbody>
                   ${rows.map((row) => `
                     <tr>
                       <td class="mono">${esc(row.job_code)}</td>
-                      <td>${esc(row.status)}</td>
-                      <td>${esc(row.training_kind)}</td>
+                      <td>${esc(enumText('training_status', row.status))}</td>
+                      <td>${esc(enumText('training_kind', row.training_kind))}</td>
                       <td class="mono">${esc(row.base_model?.id || '-')}</td>
                       <td class="mono">${esc(row.candidate_model?.id || '-')}</td>
                       <td>${esc(row.assigned_worker_code || '-')}</td>
@@ -811,12 +889,12 @@ function pageTraining(route, rawCtx) {
           workersWrap.innerHTML = `
             <div class="table-wrap">
               <table class="table">
-                <thead><tr><th>worker_code</th><th>status</th><th>host</th><th>outstanding</th><th>last_seen</th><th>resources</th></tr></thead>
+                <thead><tr><th>worker_code(Worker 编码)</th><th>status(状态)</th><th>host(主机)</th><th>outstanding(待处理)</th><th>last_seen(最近心跳)</th><th>resources(资源)</th></tr></thead>
                 <tbody>
                   ${rows.map((row) => `
                     <tr>
                       <td class="mono">${esc(row.worker_code)}</td>
-                      <td>${esc(row.status)}</td>
+                      <td>${esc(enumText('worker_status', row.status))}</td>
                       <td>${esc(row.host || '-')}</td>
                       <td>${esc(row.outstanding_jobs ?? 0)}</td>
                       <td>${formatDateTime(row.last_seen_at)}</td>
@@ -926,14 +1004,14 @@ function pagePipelines(route, rawCtx) {
       <section class="grid-two">
         <form id="pipelineRegisterForm" class="card form-grid">
           <h3>注册流水线</h3>
-          <label>pipeline_code</label><input name="pipeline_code" placeholder="railway-mainline" required />
-          <label>name</label><input name="name" placeholder="主线路由流水线" required />
-          <label>version</label><input name="version" placeholder="v1.0.0" required />
-          <label>router_model_id（可选）</label><input name="router_model_id" placeholder="router-model-id" />
-          <label>expert_map(JSON)</label><textarea name="expert_map" rows="3">{}</textarea>
-          <label>thresholds(JSON)</label><textarea name="thresholds" rows="2">{}</textarea>
-          <label>fusion_rules(JSON)</label><textarea name="fusion_rules" rows="2">{}</textarea>
-          <label>config(JSON, 可空)</label><textarea name="config" rows="4">{}</textarea>
+          <label>pipeline_code(流水线编码)</label><input name="pipeline_code" placeholder="railway-mainline" required />
+          <label>name(名称)</label><input name="name" placeholder="主线路由流水线" required />
+          <label>version(版本)</label><input name="version" placeholder="v1.0.0" required />
+          <label>router_model_id(路由模型ID，可选)</label><input name="router_model_id" placeholder="router-model-id" />
+          <label>expert_map(JSON 专家路由表)</label><textarea name="expert_map" rows="3">{}</textarea>
+          <label>thresholds(JSON 阈值配置)</label><textarea name="thresholds" rows="2">{}</textarea>
+          <label>fusion_rules(JSON 融合规则)</label><textarea name="fusion_rules" rows="2">{}</textarea>
+          <label>config(JSON 扩展配置，可空)</label><textarea name="config" rows="4">{}</textarea>
           <button class="primary" type="submit">注册流水线</button>
           <div id="pipelineRegisterMsg" class="hint"></div>
         </form>
@@ -969,13 +1047,13 @@ function pagePipelines(route, rawCtx) {
           tableWrap.innerHTML = `
             <div class="table-wrap">
               <table class="table">
-                <thead><tr><th>pipeline_code</th><th>version</th><th>status</th><th>router_model_id</th><th>threshold_version</th><th>操作</th></tr></thead>
+                <thead><tr><th>pipeline_code(流水线编码)</th><th>version(版本)</th><th>status(状态)</th><th>router_model_id(路由模型ID)</th><th>threshold_version(阈值版本)</th><th>操作</th></tr></thead>
                 <tbody>
                   ${rows.map((row) => `
                     <tr>
                       <td>${esc(row.pipeline_code)}</td>
                       <td>${esc(row.version)}</td>
-                      <td>${esc(row.status)}</td>
+                      <td>${esc(enumText('pipeline_status', row.status))}</td>
                       <td class="mono">${esc(row.router_model_id || '-')}</td>
                       <td>${esc(row.threshold_version || '-')}</td>
                       <td>
@@ -1058,17 +1136,22 @@ function pageTasks(route, rawCtx) {
       <section class="grid-two">
         <form id="taskCreateForm" class="card form-grid">
           <h3>创建任务</h3>
-          <label>asset_id</label>
+          <label>asset_id(资产ID)</label>
           <input name="asset_id" id="taskAssetInput" list="taskAssetsDatalist" placeholder="asset-id" required />
-          <label>pipeline_id（优先）</label>
+          <label>pipeline_id(流水线ID，优先)</label>
           <input name="pipeline_id" id="taskPipelineInput" list="taskPipelinesDatalist" placeholder="pipeline-id，可空" />
-          <label>model_id（无 pipeline 时使用）</label>
+          <label>model_id(模型ID，无 pipeline 时使用)</label>
           <input name="model_id" id="taskModelInput" list="taskModelsDatalist" placeholder="model-id，可空" />
-          <label>task_type（可选）</label>
-          <input name="task_type" placeholder="pipeline_orchestrated / ocr / detect" />
-          <label>device_code</label>
+          <label>task_type(任务类型，可选)</label>
+          <select name="task_type">
+            <option value="">自动选择</option>
+            <option value="pipeline_orchestrated">${enumText('task_type', 'pipeline_orchestrated')}</option>
+            <option value="ocr">${enumText('task_type', 'ocr')}</option>
+            <option value="detect">${enumText('task_type', 'detect')}</option>
+          </select>
+          <label>device_code(设备编码)</label>
           <input name="device_code" value="edge-01" />
-          <label>intent_text</label>
+          <label>intent_text(意图描述)</label>
           <input name="intent_text" placeholder="例如：优先识别车号" />
           <label class="checkbox-row"><input type="checkbox" name="use_master_scheduler" /> 启用主调度器自动选模</label>
           <datalist id="taskAssetsDatalist"></datalist>
@@ -1128,13 +1211,13 @@ function pageTasks(route, rawCtx) {
           tableWrap.innerHTML = `
             <div class="table-wrap">
               <table class="table">
-                <thead><tr><th>task_id</th><th>task_type</th><th>status</th><th>pipeline_id</th><th>device</th><th>创建时间</th><th>操作</th></tr></thead>
+                <thead><tr><th>task_id(任务ID)</th><th>task_type(任务类型)</th><th>status(状态)</th><th>pipeline_id(流水线ID)</th><th>device(设备)</th><th>创建时间</th><th>操作</th></tr></thead>
                 <tbody>
                   ${rows.map((row) => `
                     <tr>
                       <td class="mono">${esc(row.id)}</td>
-                      <td>${esc(row.task_type)}</td>
-                      <td>${esc(row.status)}</td>
+                      <td>${esc(enumText('task_type', row.task_type))}</td>
+                      <td>${esc(enumText('task_status', row.status))}</td>
                       <td class="mono">${esc(row.pipeline_id || '-')}</td>
                       <td>${esc(row.device_code || '-')}</td>
                       <td>${formatDateTime(row.created_at)}</td>
@@ -1182,8 +1265,8 @@ function pageTasks(route, rawCtx) {
           createResult.innerHTML = `
             <div class="keyvals">
               <div><span>task_id</span><strong class="mono">${esc(created.id)}</strong></div>
-              <div><span>status</span><strong>${esc(created.status)}</strong></div>
-              <div><span>task_type</span><strong>${esc(created.task_type)}</strong></div>
+              <div><span>status</span><strong>${esc(enumText('task_status', created.status))}</strong></div>
+              <div><span>task_type</span><strong>${esc(enumText('task_type', created.task_type))}</strong></div>
             </div>
             <div class="row-actions">
               <button class="primary" id="openTaskDetail">查看任务详情</button>
@@ -1224,8 +1307,8 @@ function pageTaskDetail(route, rawCtx) {
         wrap.innerHTML = `
           <div class="keyvals">
             <div><span>task_id</span><strong class="mono">${esc(data.id)}</strong></div>
-            <div><span>status</span><strong>${esc(data.status)}</strong></div>
-            <div><span>task_type</span><strong>${esc(data.task_type)}</strong></div>
+            <div><span>status</span><strong>${esc(enumText('task_status', data.status))}</strong></div>
+            <div><span>task_type</span><strong>${esc(enumText('task_type', data.task_type))}</strong></div>
             <div><span>model_id</span><strong class="mono">${esc(data.model_id || '-')}</strong></div>
             <div><span>pipeline_id</span><strong class="mono">${esc(data.pipeline_id || '-')}</strong></div>
             <div><span>created_at</span><strong>${formatDateTime(data.created_at)}</strong></div>
@@ -1376,10 +1459,10 @@ function pageAudit(route, rawCtx) {
       </section>
       <section class="card">
         <form id="auditFilterForm" class="inline-form">
-          <input name="action" placeholder="action，例如 MODEL_RELEASE" />
-          <input name="resource_type" placeholder="resource_type，例如 task" />
-          <input name="resource_id" placeholder="resource_id" />
-          <input name="actor_username" placeholder="actor_username" />
+          <input name="action" placeholder="action(动作)，例如 MODEL_RELEASE" />
+          <input name="resource_type" placeholder="resource_type(资源类型)，例如 task" />
+          <input name="resource_id" placeholder="resource_id(资源ID)" />
+          <input name="actor_username" placeholder="actor_username(操作者账号)" />
           <button class="primary" type="submit">查询</button>
         </form>
         <div id="auditTableWrap">${renderLoading('加载审计日志...')}</div>
@@ -1408,7 +1491,7 @@ function pageAudit(route, rawCtx) {
           tableWrap.innerHTML = `
             <div class="table-wrap">
               <table class="table">
-                <thead><tr><th>时间</th><th>action</th><th>actor</th><th>resource</th><th>detail</th></tr></thead>
+                <thead><tr><th>时间</th><th>action(动作)</th><th>actor(操作者)</th><th>resource(资源)</th><th>detail(详情)</th></tr></thead>
                 <tbody>
                   ${rows.map((row) => `
                     <tr>
@@ -1461,13 +1544,13 @@ function pageDevices(route, rawCtx) {
         wrap.innerHTML = `
           <div class="table-wrap">
             <table class="table">
-              <thead><tr><th>device_id</th><th>buyer</th><th>status</th><th>last_heartbeat</th><th>agent_version</th></tr></thead>
+              <thead><tr><th>device_id(设备ID)</th><th>buyer(客户)</th><th>status(状态)</th><th>last_heartbeat(最近心跳)</th><th>agent_version(Agent 版本)</th></tr></thead>
               <tbody>
                 ${rows.map((row) => `
                   <tr>
                     <td class="mono">${esc(row.device_id)}</td>
                     <td>${esc(row.buyer || '-')}</td>
-                    <td>${esc(row.status)}</td>
+                    <td>${esc(enumText('device_status', row.status))}</td>
                     <td>${formatDateTime(row.last_heartbeat)}</td>
                     <td>${esc(row.agent_version || '-')}</td>
                   </tr>
