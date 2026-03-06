@@ -44,8 +44,8 @@ def _heartbeat_status(device: Device) -> str:
 
 @router.get("")
 def list_devices(
-    status: str | None = Query(default=None),
-    limit: int = Query(default=100, ge=1, le=500),
+    status: str | None = Query(default=None, description="设备状态筛选 / Device status filter"),
+    limit: int = Query(default=100, ge=1, le=500, description="返回条数上限 / Max number of returned rows"),
     db: Session = Depends(get_db),
     current_user: AuthUser = Depends(require_roles(*DEVICE_READ_ROLES)),
 ):

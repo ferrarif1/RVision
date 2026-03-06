@@ -24,6 +24,8 @@ def flush_pending(client: EdgeApiClient) -> None:
     if not pending:
         return
 
+    # 断网补传：优先冲刷历史失败结果，保证中心端状态最终一致。
+    # Offline retry: flush pending results first for eventual consistency.
     logger.info("retry pending results: %s", len(pending))
     failed = []
     for payload in pending:
@@ -57,6 +59,8 @@ def run_once(client: EdgeApiClient) -> None:
             model_registry = task.get("models") or {}
             model_ids = list(model_registry.keys()) or ([task["model"]["id"]] if task.get("model") else [])
             for model_id in model_ids:
+                # 关键安全链路：拉模型 -> 验签 -> 解密，任何一步失败即终止当前任务。
+                # Security-critical chain: pull -> verify signature -> decrypt.
                 model_payload = client.pull_model(model_id=model_id)
                 artifacts = verify_and_decrypt_model(
                     model_payload=model_payload,
@@ -88,6 +92,8 @@ def run_once(client: EdgeApiClient) -> None:
                 client.push_results(result_payload)
                 logger.info("task finished and pushed: %s", task_id)
             except Exception as exc:
+                # 网络异常时写入本地补传队列，避免任务结果丢失。
+                # Queue result locally when push fails to avoid data loss.
                 logger.warning("push failed, enqueue result for task %s: %s", task_id, exc)
                 enqueue_pending_result(result_payload)
         except (ModelSecurityError, httpx.HTTPError, Exception) as exc:
@@ -111,6 +117,8 @@ def main() -> None:
 
     while True:
         try:
+            # 主循环：心跳探活 + 拉取执行 + 回传结果。
+            # Main loop: health ping, pull tasks, execute, and push results.
             ping = client.ping()
             logger.info("ping ok: %s", ping.get("status"))
             run_once(client)

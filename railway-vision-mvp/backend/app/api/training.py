@@ -46,46 +46,46 @@ MODEL_TYPE_PATTERN = "^(router|expert)$"
 
 
 class TrainingJobCreateRequest(BaseModel):
-    asset_ids: list[str] = Field(default_factory=list, min_length=1)
-    validation_asset_ids: list[str] = Field(default_factory=list)
-    base_model_id: str | None = None
-    owner_tenant_id: str | None = None
-    training_kind: str = Field(default="finetune", pattern=TRAINING_KIND_PATTERN)
-    target_model_code: str
-    target_version: str
-    worker_selector: dict[str, Any] = Field(default_factory=dict)
-    spec: dict[str, Any] = Field(default_factory=dict)
+    asset_ids: list[str] = Field(default_factory=list, min_length=1, description="训练资产ID列表 / Training asset IDs")
+    validation_asset_ids: list[str] = Field(default_factory=list, description="验证资产ID列表 / Validation asset IDs")
+    base_model_id: str | None = Field(default=None, description="基线模型ID / Optional base model ID")
+    owner_tenant_id: str | None = Field(default=None, description="模型归属租户ID / Owner tenant ID for candidate model")
+    training_kind: str = Field(default="finetune", pattern=TRAINING_KIND_PATTERN, description="训练类型 / Training kind: train|finetune|evaluate")
+    target_model_code: str = Field(description="目标模型编码 / Target model code")
+    target_version: str = Field(description="目标模型版本 / Target model version")
+    worker_selector: dict[str, Any] = Field(default_factory=dict, description="Worker 选择器 / Worker selector by code/label/resource")
+    spec: dict[str, Any] = Field(default_factory=dict, description="训练规格 / Training spec payload")
 
 
 class TrainingWorkerRegisterRequest(BaseModel):
-    worker_code: str
-    name: str
-    host: str | None = None
-    status: str = Field(default="ACTIVE", pattern=WORKER_STATUS_PATTERN)
-    labels: dict[str, Any] = Field(default_factory=dict)
-    resources: dict[str, Any] = Field(default_factory=dict)
+    worker_code: str = Field(description="Worker 编码 / Unique worker code")
+    name: str = Field(description="Worker 名称 / Worker display name")
+    host: str | None = Field(default=None, description="Worker 主机地址 / Worker host or IP")
+    status: str = Field(default="ACTIVE", pattern=WORKER_STATUS_PATTERN, description="Worker 状态 / Worker status")
+    labels: dict[str, Any] = Field(default_factory=dict, description="Worker 标签 / Worker labels for scheduling")
+    resources: dict[str, Any] = Field(default_factory=dict, description="Worker 资源信息 / Worker resources, e.g. gpu_mem_mb")
 
 
 class TrainingWorkerHeartbeatRequest(BaseModel):
-    host: str | None = None
-    status: str = Field(default="ACTIVE", pattern=WORKER_STATUS_PATTERN)
-    labels: dict[str, Any] = Field(default_factory=dict)
-    resources: dict[str, Any] = Field(default_factory=dict)
+    host: str | None = Field(default=None, description="Worker 主机地址 / Worker host or IP")
+    status: str = Field(default="ACTIVE", pattern=WORKER_STATUS_PATTERN, description="Worker 状态 / Worker status")
+    labels: dict[str, Any] = Field(default_factory=dict, description="Worker 标签 / Worker labels")
+    resources: dict[str, Any] = Field(default_factory=dict, description="Worker 资源信息 / Worker resource snapshot")
 
 
 class TrainingWorkerPullJobsRequest(BaseModel):
-    limit: int = Field(default=1, ge=1, le=5)
+    limit: int = Field(default=1, ge=1, le=5, description="拉取作业数量 / Number of jobs to pull")
 
 
 class TrainingWorkerUpdateRequest(BaseModel):
-    job_id: str
-    status: str = Field(pattern=WORKER_UPDATE_STATUS_PATTERN)
-    output_summary: dict[str, Any] = Field(default_factory=dict)
-    error_message: str | None = None
+    job_id: str = Field(description="训练作业ID / Training job ID")
+    status: str = Field(pattern=WORKER_UPDATE_STATUS_PATTERN, description="作业状态 / Job status update")
+    output_summary: dict[str, Any] = Field(default_factory=dict, description="输出摘要 / Structured output summary")
+    error_message: str | None = Field(default=None, description="错误信息 / Optional error message")
 
 
 class TrainingWorkerPullBaseModelRequest(BaseModel):
-    job_id: str
+    job_id: str = Field(description="训练作业ID / Training job ID")
 
 
 def _job_visible_to_user(job: TrainingJob, current_user: AuthUser) -> bool:
@@ -280,6 +280,8 @@ def create_training_job(
 ):
     train_assets = _get_assets_or_400(db, payload.asset_ids)
     validation_assets = _get_assets_or_400(db, payload.validation_asset_ids) if payload.validation_asset_ids else []
+    # 关键约束：一次训练作业只能绑定同一个买家租户，避免跨租户数据混用。
+    # Critical constraint: one training job must remain in a single buyer tenant scope.
     buyer_tenant_id = _ensure_single_buyer_scope([*train_assets, *validation_assets])
 
     base_model = None
@@ -338,8 +340,8 @@ def create_training_job(
 
 @router.get("/jobs")
 def list_training_jobs(
-    status_filter: str | None = Query(default=None, alias="status"),
-    training_kind: str | None = Query(default=None),
+    status_filter: str | None = Query(default=None, alias="status", description="状态筛选 / Filter by training job status"),
+    training_kind: str | None = Query(default=None, description="训练类型筛选 / Filter by training kind"),
     db: Session = Depends(get_db),
     current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_READ_ROLES)),
 ):
@@ -521,9 +523,9 @@ def training_worker_pull_jobs(
 
 @router.get("/workers/pull-asset")
 def training_worker_pull_asset(
-    job_id: str,
-    asset_id: str,
     request: Request,
+    job_id: str = Query(..., description="训练作业ID / Training job ID"),
+    asset_id: str = Query(..., description="资产ID / Asset ID included in the training job"),
     db: Session = Depends(get_db),
     worker_ctx: TrainingWorkerContext = Depends(get_training_worker),
 ):
@@ -611,18 +613,18 @@ def training_worker_pull_base_model(
 @router.post("/workers/upload-candidate")
 def training_worker_upload_candidate(
     request: Request,
-    job_id: str = Form(...),
-    package: UploadFile = File(...),
-    training_round: str = Form(default=""),
-    dataset_label: str = Form(default=""),
-    training_summary: str = Form(default=""),
-    model_type: str = Form(default=MODEL_TYPE_EXPERT),
-    runtime: str = Form(default=""),
-    plugin_name: str = Form(default=""),
-    inputs_json: str = Form(default=""),
-    outputs_json: str = Form(default=""),
-    gpu_mem_mb: str = Form(default=""),
-    latency_ms: str = Form(default=""),
+    job_id: str = Form(..., description="训练作业ID / Training job ID"),
+    package: UploadFile = File(..., description="候选模型包ZIP / Candidate model package zip"),
+    training_round: str = Form(default="", description="训练轮次 / Training round label"),
+    dataset_label: str = Form(default="", description="数据批次标签 / Dataset label"),
+    training_summary: str = Form(default="", description="训练摘要 / Training summary"),
+    model_type: str = Form(default=MODEL_TYPE_EXPERT, description="模型类型 / Model type: router|expert"),
+    runtime: str = Form(default="", description="运行时类型 / Runtime type"),
+    plugin_name: str = Form(default="", description="插件名称 / Plugin name for edge runtime"),
+    inputs_json: str = Form(default="", description="输入协议JSON / Input schema JSON object"),
+    outputs_json: str = Form(default="", description="输出协议JSON / Output schema JSON object"),
+    gpu_mem_mb: str = Form(default="", description="显存需求MB / Optional GPU memory requirement in MB"),
+    latency_ms: str = Form(default="", description="时延指标ms / Optional latency metric in milliseconds"),
     db: Session = Depends(get_db),
     worker_ctx: TrainingWorkerContext = Depends(get_training_worker),
 ):
@@ -639,6 +641,8 @@ def training_worker_upload_candidate(
     except ModelPackageError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    # 关键校验：候选模型包的 model_id/version 必须与训练作业目标一致，防止错包入库。
+    # Candidate manifest must match training target to prevent wrong-package ingestion.
     if parsed.manifest.get("model_id") != job.target_model_code:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Candidate package model_id does not match training job target_model_code")
     if parsed.manifest.get("version") != job.target_version:

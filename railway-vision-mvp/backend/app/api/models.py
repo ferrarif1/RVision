@@ -48,21 +48,21 @@ MODEL_TYPE_PATTERN = "^(router|expert)$"
 
 
 class ReleaseRequest(BaseModel):
-    model_id: str
-    target_devices: list[str] = Field(default_factory=list)
-    target_buyers: list[str] = Field(default_factory=list)
-    delivery_mode: str = Field(default="local_key", pattern=DELIVERY_MODE_PATTERN)
-    authorization_mode: str = Field(default="device_key", pattern=AUTHORIZATION_MODE_PATTERN)
-    runtime_encryption: bool = True
-    api_access_key_label: str | None = None
-    local_key_label: str | None = None
+    model_id: str = Field(description="模型ID / Model record ID to release")
+    target_devices: list[str] = Field(default_factory=list, description="目标设备列表 / Target edge device codes")
+    target_buyers: list[str] = Field(default_factory=list, description="目标买家列表 / Target buyer tenant codes")
+    delivery_mode: str = Field(default="local_key", pattern=DELIVERY_MODE_PATTERN, description="交付方式 / Delivery mode: api|local_key|hybrid")
+    authorization_mode: str = Field(default="device_key", pattern=AUTHORIZATION_MODE_PATTERN, description="授权方式 / Authorization mode: api_token|device_key|hybrid")
+    runtime_encryption: bool = Field(default=True, description="运行时解密要求 / Require runtime decryption on edge")
+    api_access_key_label: str | None = Field(default=None, description="API访问键标签 / Optional API key label prefix")
+    local_key_label: str | None = Field(default=None, description="本地密钥标签 / Optional local key path label")
 
 
 class ApproveRequest(BaseModel):
-    model_id: str
-    validation_asset_ids: list[str] = Field(default_factory=list)
-    validation_result: str = Field(default="passed", pattern=VALIDATION_RESULT_PATTERN)
-    validation_summary: str | None = None
+    model_id: str = Field(description="模型ID / Model record ID to approve")
+    validation_asset_ids: list[str] = Field(default_factory=list, description="验证资产ID列表 / Validation asset IDs")
+    validation_result: str = Field(default="passed", pattern=VALIDATION_RESULT_PATTERN, description="验证结论 / Validation result: pending|passed|failed")
+    validation_summary: str | None = Field(default=None, description="验证摘要 / Optional validation summary")
 
 
 def _clean_optional(value: str | None) -> str | None:
@@ -316,19 +316,19 @@ def get_model_timeline(
 @router.post("/register")
 def register_model_package(
     request: Request,
-    package: UploadFile = File(...),
-    model_source_type: str = Form(default="delivery_candidate"),
-    base_model_ref: str = Form(default=""),
-    training_round: str = Form(default=""),
-    dataset_label: str = Form(default=""),
-    training_summary: str = Form(default=""),
-    model_type: str = Form(default=MODEL_TYPE_EXPERT),
-    runtime: str = Form(default="python"),
-    plugin_name: str = Form(default=""),
-    inputs_json: str = Form(default=""),
-    outputs_json: str = Form(default=""),
-    gpu_mem_mb: str = Form(default=""),
-    latency_ms: str = Form(default=""),
+    package: UploadFile = File(..., description="模型包ZIP / Model package zip file"),
+    model_source_type: str = Form(default="delivery_candidate", description="模型来源类型 / Source type: initial_algorithm|pretrained_seed|finetuned_candidate|delivery_candidate"),
+    base_model_ref: str = Form(default="", description="基线模型引用 / Base model reference, e.g. code:version"),
+    training_round: str = Form(default="", description="训练轮次 / Training round label"),
+    dataset_label: str = Form(default="", description="数据批次标签 / Dataset batch label"),
+    training_summary: str = Form(default="", description="训练摘要 / Training summary"),
+    model_type: str = Form(default=MODEL_TYPE_EXPERT, description="模型类型 / Model type: router|expert"),
+    runtime: str = Form(default="python", description="运行时类型 / Runtime, e.g. python/onnxruntime"),
+    plugin_name: str = Form(default="", description="插件名称 / Plugin name used by edge runtime"),
+    inputs_json: str = Form(default="", description="输入协议JSON / Input schema JSON object"),
+    outputs_json: str = Form(default="", description="输出协议JSON / Output schema JSON object"),
+    gpu_mem_mb: str = Form(default="", description="显存需求MB / Optional GPU memory requirement in MB"),
+    latency_ms: str = Form(default="", description="时延指标ms / Optional latency metric in milliseconds"),
     db: Session = Depends(get_db),
     current_user: AuthUser = Depends(require_roles(*MODEL_SUBMIT_ROLES)),
 ):
@@ -362,6 +362,8 @@ def register_model_package(
     os.makedirs(settings.model_repo_path, exist_ok=True)
     uris = persist_model_package(settings.model_repo_path, model_id, parsed)
 
+    # 关键流程：供应商提交先进入 SUBMITTED，平台角色录入可直接 APPROVED。
+    # Core flow: supplier submit stays SUBMITTED; platform-side register can be pre-approved.
     is_supplier_submit = ROLE_SUPPLIER_ENGINEER in expand_roles(current_user.roles)
     model_status = MODEL_STATUS_SUBMITTED if is_supplier_submit else MODEL_STATUS_APPROVED
     audit_action = actions.MODEL_SUBMIT if is_supplier_submit else actions.MODEL_REGISTER
@@ -490,6 +492,8 @@ def release_model(
             status_code=status.HTTP_409_CONFLICT,
             detail="Model must be APPROVED before release",
         )
+    # 交付模式与授权模式必须匹配，避免“只能API交付却没有API授权”等错误组合。
+    # Delivery mode must be compatible with authorization mode.
     if payload.delivery_mode == "api" and payload.authorization_mode == "device_key":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="API delivery requires api_token or hybrid authorization")
     if payload.delivery_mode == "local_key" and payload.authorization_mode == "api_token":

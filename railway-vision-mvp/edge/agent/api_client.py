@@ -7,6 +7,8 @@ from agent.config import settings
 
 class EdgeApiClient:
     def __init__(self):
+        # 统一注入设备身份头，中心端按设备维度做鉴权和审计。
+        # Inject device identity headers for control-plane auth and auditing.
         self.base_url = settings.backend_base_url.rstrip("/")
         self.headers = {
             "x-edge-device-code": settings.edge_device_code,
@@ -24,6 +26,8 @@ class EdgeApiClient:
             return resp.json()
 
     def pull_tasks(self, limit: int = 3) -> dict[str, Any]:
+        # limit 控制单次拉取批量，避免边缘端一次性抢占过多任务。
+        # `limit` caps batch size to avoid over-fetching.
         with httpx.Client(timeout=60.0, verify=settings.verify_tls) as client:
             resp = client.post(self._url("/edge/pull_tasks"), json={"limit": limit}, headers=self.headers)
             resp.raise_for_status()

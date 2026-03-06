@@ -1,7 +1,7 @@
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -26,28 +26,28 @@ router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
 
 class PipelineRegisterRequest(BaseModel):
-    pipeline_code: str
-    name: str
-    version: str
-    router_model_id: str | None = None
-    expert_map: dict[str, Any] = Field(default_factory=dict)
-    thresholds: dict[str, Any] = Field(default_factory=dict)
-    fusion_rules: dict[str, Any] = Field(default_factory=dict)
-    config: dict[str, Any] = Field(default_factory=dict)
-    status: str = Field(default=PIPELINE_STATUS_DRAFT)
+    pipeline_code: str = Field(description="流水线编码 / Unique pipeline code")
+    name: str = Field(description="流水线名称 / Human-readable pipeline name")
+    version: str = Field(description="流水线版本 / Pipeline version")
+    router_model_id: str | None = Field(default=None, description="路由模型ID / Router model ID")
+    expert_map: dict[str, Any] = Field(default_factory=dict, description="专家映射 / Task-to-expert model mapping")
+    thresholds: dict[str, Any] = Field(default_factory=dict, description="阈值配置 / Threshold configuration")
+    fusion_rules: dict[str, Any] = Field(default_factory=dict, description="融合规则 / Fusion rules for multi-model outputs")
+    config: dict[str, Any] = Field(default_factory=dict, description="完整配置对象 / Full pipeline config object")
+    status: str = Field(default=PIPELINE_STATUS_DRAFT, description="流水线状态 / Pipeline status")
 
 
 class PipelineReleaseRequest(BaseModel):
-    pipeline_id: str
-    target_devices: list[str] = Field(default_factory=list)
-    target_buyers: list[str] = Field(default_factory=list)
-    traffic_ratio: int = Field(default=100, ge=1, le=100)
-    release_notes: str | None = None
+    pipeline_id: str = Field(description="流水线ID / Pipeline record ID to release")
+    target_devices: list[str] = Field(default_factory=list, description="目标设备列表 / Target edge device codes")
+    target_buyers: list[str] = Field(default_factory=list, description="目标买家列表 / Target buyer tenant codes")
+    traffic_ratio: int = Field(default=100, ge=1, le=100, description="流量比例 / Traffic ratio percentage")
+    release_notes: str | None = Field(default=None, description="发布说明 / Release notes")
 
 
 @router.get("")
 def list_pipelines(
-    device_code: str | None = None,
+    device_code: str | None = Query(default=None, description="设备编码 / Optional device code for visibility filtering"),
     db: Session = Depends(get_db),
     current_user: AuthUser = Depends(require_roles(*MODEL_READ_ROLES)),
 ):
@@ -71,7 +71,7 @@ def list_pipelines(
 @router.get("/{pipeline_id}")
 def get_pipeline(
     pipeline_id: str,
-    device_code: str | None = None,
+    device_code: str | None = Query(default=None, description="设备编码 / Optional device code for release-scope filtering"),
     db: Session = Depends(get_db),
     current_user: AuthUser = Depends(require_roles(*MODEL_READ_ROLES)),
 ):
@@ -105,6 +105,8 @@ def register_pipeline(
     model_ids = collect_pipeline_model_ids(normalized_config)
     if not model_ids:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Pipeline must reference at least one model")
+    # 核心约束：注册时即校验模型存在性与可见性，避免运行时才发现配置失效。
+    # Validate referenced model IDs at register-time to fail fast.
     model_map = validate_pipeline_models(db, normalized_config, model_ids)
 
     pipeline = PipelineRecord(

@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
@@ -14,16 +14,16 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(description="用户名 / Username")
+    password: str = Field(description="密码 / Password")
 
 
 class LoginResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    roles: list[str]
-    capabilities: dict[str, bool]
-    permissions: list[str]
+    access_token: str = Field(description="访问令牌 / Access token")
+    token_type: str = Field(default="bearer", description="令牌类型 / Token type")
+    roles: list[str] = Field(description="角色列表 / Role list")
+    capabilities: dict[str, bool] = Field(description="前端能力矩阵 / UI capability matrix")
+    permissions: list[str] = Field(description="权限点列表 / Flattened permission list")
 
 
 @router.post("/login", response_model=LoginResponse)

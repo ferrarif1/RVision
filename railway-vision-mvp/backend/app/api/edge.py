@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta
 from enum import Enum
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
@@ -35,11 +35,11 @@ DISPATCH_RECLAIM_SECONDS = 90
 
 
 class PullTasksRequest(BaseModel):
-    limit: int = 5
+    limit: int = Field(default=5, ge=1, le=20, description="拉取任务数量 / Number of tasks requested by edge agent")
 
 
 class PullModelRequest(BaseModel):
-    model_id: str
+    model_id: str = Field(description="模型ID / Model ID to download")
 
 
 class EdgePushStatus(str, Enum):
@@ -48,34 +48,34 @@ class EdgePushStatus(str, Enum):
 
 
 class ResultItem(BaseModel):
-    model_id: str | None = None
-    model_hash: str
-    alert_level: str = "INFO"
-    result_json: dict = Field(default_factory=dict)
-    duration_ms: int | None = None
-    screenshot_b64: str | None = None
+    model_id: str | None = Field(default=None, description="模型ID / Model ID, optional for single-model tasks")
+    model_hash: str = Field(description="模型哈希 / Model hash used for traceability")
+    alert_level: str = Field(default="INFO", description="告警级别 / Alert level")
+    result_json: dict = Field(default_factory=dict, description="推理结果JSON / Structured inference result payload")
+    duration_ms: int | None = Field(default=None, description="耗时ms / Inference duration in milliseconds")
+    screenshot_b64: str | None = Field(default=None, description="截图Base64 / Optional screenshot payload in base64")
 
 
 class RunPayload(BaseModel):
-    job_id: str | None = None
-    pipeline_id: str | None = None
-    pipeline_version: str | None = None
-    threshold_version: str | None = None
-    input_hash: str | None = None
-    input_summary: dict = Field(default_factory=dict)
-    models_versions: list[dict] = Field(default_factory=list)
-    timings: dict = Field(default_factory=dict)
-    result_summary: dict = Field(default_factory=dict)
-    audit_hash: str | None = None
-    review_reasons: list[str] = Field(default_factory=list)
+    job_id: str | None = Field(default=None, description="运行批次ID / Runtime job ID from edge pipeline")
+    pipeline_id: str | None = Field(default=None, description="流水线ID / Pipeline ID used in runtime")
+    pipeline_version: str | None = Field(default=None, description="流水线版本 / Pipeline version")
+    threshold_version: str | None = Field(default=None, description="阈值版本 / Threshold version")
+    input_hash: str | None = Field(default=None, description="输入哈希 / Input hash for replay trace")
+    input_summary: dict = Field(default_factory=dict, description="输入摘要 / Input summary metadata")
+    models_versions: list[dict] = Field(default_factory=list, description="模型版本清单 / Executed model versions")
+    timings: dict = Field(default_factory=dict, description="耗时明细 / Timing breakdown")
+    result_summary: dict = Field(default_factory=dict, description="结果摘要 / Inference result summary")
+    audit_hash: str | None = Field(default=None, description="审计哈希 / Optional precomputed audit hash")
+    review_reasons: list[str] = Field(default_factory=list, description="人工复核原因 / Human-review enqueue reasons")
 
 
 class PushResultsRequest(BaseModel):
-    task_id: str
-    status: EdgePushStatus
-    error_message: str | None = None
-    items: list[ResultItem] = Field(default_factory=list)
-    run: RunPayload = Field(default_factory=RunPayload)
+    task_id: str = Field(description="任务ID / Task ID created by control plane")
+    status: EdgePushStatus = Field(description="任务状态 / Final task status pushed by edge")
+    error_message: str | None = Field(default=None, description="错误信息 / Optional error message when failed")
+    items: list[ResultItem] = Field(default_factory=list, description="结果项列表 / Result items")
+    run: RunPayload = Field(default_factory=RunPayload, description="运行元数据 / Runtime metadata payload")
 
 
 def _is_model_released_to_device(db: Session, model_id: str, device_code: str) -> bool:
@@ -104,6 +104,8 @@ def edge_pull_tasks(
     db: Session = Depends(get_db),
     device: EdgeDeviceContext = Depends(get_edge_device),
 ):
+    # 把长时间未完成的 DISPATCHED 任务回收到可再次派发状态，避免 Agent 异常后任务卡死。
+    # Reclaim stale DISPATCHED tasks to prevent stuck tasks after agent crash/restart.
     stale_before = datetime.utcnow() - timedelta(seconds=DISPATCH_RECLAIM_SECONDS)
     query = (
         db.query(InferenceTask)
@@ -254,7 +256,7 @@ def edge_pull_model(
 
 @router.get("/pull_asset")
 def edge_pull_asset(
-    asset_id: str,
+    asset_id: str = Query(..., description="资产ID / Asset ID requested by edge"),
     db: Session = Depends(get_db),
     device: EdgeDeviceContext = Depends(get_edge_device),
 ):
@@ -299,6 +301,8 @@ def edge_push_results(
 
     for item in payload.items:
         screenshot_uri = None
+        # L2 截图仅在策略允许时落盘并入库，避免默认扩大数据回传范围。
+        # Persist screenshot only when policy allows frame upload.
         if item.screenshot_b64 and task.policy.get("upload_frames", True):
             screenshot_id = str(uuid.uuid4())
             screenshot_path = os.path.join(screenshot_dir, f"{screenshot_id}.jpg")

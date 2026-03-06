@@ -105,6 +105,7 @@
 详细文档：
 
 - 架构与数据流：[docs/architecture.md](docs/architecture.md)
+- 边缘终端接入说明：[docs/edge_terminal_access.md](docs/edge_terminal_access.md)
 - 业务流转图：[docs/business_data_flow.md](docs/business_data_flow.md)
 - 项目组织图：[docs/project_organization.md](docs/project_organization.md)
 - 训练控制面：[docs/training_control_plane.md](docs/training_control_plane.md)
@@ -205,7 +206,7 @@ bash docker/scripts/go_no_go.sh
 - `platform_admin / platform123`
 - `platform_operator / platform123`
 - `platform_auditor / platform123`
-- `supplier_demo / supplier123`
+- `supplier_demo / supplier123` 
 - `buyer_operator / buyer123`
 - `buyer_auditor / buyer123`
 

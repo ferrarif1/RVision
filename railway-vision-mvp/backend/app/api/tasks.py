@@ -29,24 +29,24 @@ DEFAULT_TASK_POLICY = {
 
 
 class TaskModelRecommendRequest(BaseModel):
-    asset_id: str
-    task_type: str | None = None
-    device_code: str | None = None
-    intent_text: str | None = None
-    limit: int = Field(default=3, ge=1, le=5)
+    asset_id: str = Field(description="资产ID / Asset ID used for model recommendation")
+    task_type: str | None = Field(default=None, description="期望任务类型 / Requested task type")
+    device_code: str | None = Field(default=None, description="设备编码 / Edge device code for release-scope filtering")
+    intent_text: str | None = Field(default=None, description="业务意图文本 / Natural-language intent for scheduler hints")
+    limit: int = Field(default=3, ge=1, le=5, description="返回候选数量 / Number of recommended models")
 
 
 class TaskCreateRequest(BaseModel):
-    pipeline_id: str | None = None
-    model_id: str | None = None
-    asset_id: str
-    task_type: str | None = None
-    device_code: str | None = None
-    policy: dict[str, Any] = Field(default_factory=dict)
-    use_master_scheduler: bool = False
-    intent_text: str | None = None
-    context: dict[str, Any] = Field(default_factory=dict)
-    options: dict[str, Any] = Field(default_factory=dict)
+    pipeline_id: str | None = Field(default=None, description="流水线ID / Pipeline ID (preferred execution entry)")
+    model_id: str | None = Field(default=None, description="模型ID / Direct model ID when not using pipeline")
+    asset_id: str = Field(description="资产ID / Asset ID to be processed")
+    task_type: str | None = Field(default=None, description="任务类型 / Task type such as ocr or defect_detect")
+    device_code: str | None = Field(default=None, description="目标设备编码 / Target edge device code")
+    policy: dict[str, Any] = Field(default_factory=dict, description="执行策略 / Execution policy overrides")
+    use_master_scheduler: bool = Field(default=False, description="是否启用主调度器 / Enable master scheduler when model is not fixed")
+    intent_text: str | None = Field(default=None, description="业务意图文本 / Free text intent for scheduler")
+    context: dict[str, Any] = Field(default_factory=dict, description="上下文参数 / Runtime context, e.g. camera_id/scene_hint")
+    options: dict[str, Any] = Field(default_factory=dict, description="运行选项 / Runtime options for pipeline/plugins")
 
 
 def _is_model_released_to_buyer(
@@ -167,6 +167,8 @@ def create_task(
     current_user: AuthUser = Depends(require_roles(*TASK_CREATE_ROLES)),
 ):
     asset = _get_asset_in_scope(db, payload.asset_id, current_user)
+    # 优先走 pipeline-first；未提供 pipeline 时再按调度器或显式模型执行。
+    # Pipeline-first path has highest priority, then scheduler/direct-model fallback.
     scheduler_enabled = payload.use_master_scheduler or not payload.model_id
     scheduler_detail: dict[str, Any] | None = None
     model: ModelRecord | None = None
@@ -226,6 +228,8 @@ def create_task(
 
     merged_policy = dict(DEFAULT_TASK_POLICY)
     merged_policy.update(payload.policy or {})
+    # 将调度决策和编排配置固化到任务策略，便于边缘端可重放执行并保留审计上下文。
+    # Persist scheduler/orchestrator metadata in task policy for reproducible edge execution.
     if scheduler_detail:
         merged_policy["master_scheduler"] = scheduler_detail
     if pipeline_payload:

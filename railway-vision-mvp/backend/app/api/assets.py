@@ -21,17 +21,18 @@ ASSET_PURPOSES = {"training", "finetune", "validation", "inference"}
 
 @router.get("")
 def list_assets(
-    q: str | None = Query(default=None),
-    asset_type: str | None = Query(default=None),
-    asset_purpose: str | None = Query(default=None),
-    sensitivity_level: str | None = Query(default=None),
-    buyer_tenant_code: str | None = Query(default=None),
-    limit: int = Query(default=100, ge=1, le=500),
+    q: str | None = Query(default=None, description="关键词搜索 / Keyword search across file and metadata"),
+    asset_type: str | None = Query(default=None, description="资产类型 / Asset type: image or video"),
+    asset_purpose: str | None = Query(default=None, description="资产用途 / Asset purpose: training|finetune|validation|inference"),
+    sensitivity_level: str | None = Query(default=None, description="敏感级别 / Sensitivity level: L1|L2|L3"),
+    buyer_tenant_code: str | None = Query(default=None, description="买家租户编码 / Buyer tenant code (platform role only)"),
+    limit: int = Query(default=100, ge=1, le=500, description="返回条数上限 / Max number of returned rows"),
     db: Session = Depends(get_db),
     current_user: AuthUser = Depends(require_roles(*MODEL_READ_ROLES)),
 ):
     if is_supplier_user(current_user.roles):
-        # Supplier role should not directly enumerate buyer raw assets.
+        # 安全边界：供应商角色不允许直接遍历买家原始资产。
+        # Security boundary: supplier cannot enumerate buyer raw assets.
         return []
 
     query = db.query(DataAsset).order_by(DataAsset.created_at.desc())
@@ -99,14 +100,14 @@ def list_assets(
 @router.post("/upload")
 def upload_asset(
     request: Request,
-    file: UploadFile = File(...),
-    sensitivity_level: str = Form(default="L2"),
-    source_uri: str = Form(default=""),
-    asset_purpose: str = Form(default="inference"),
-    dataset_label: str = Form(default=""),
-    use_case: str = Form(default=""),
-    intended_model_code: str = Form(default=""),
-    buyer_tenant_code: str = Form(default=""),
+    file: UploadFile = File(..., description="上传文件 / Uploaded image or video file"),
+    sensitivity_level: str = Form(default="L2", description="敏感级别 / Sensitivity level: L1|L2|L3"),
+    source_uri: str = Form(default="", description="来源地址 / Optional source URI for traceability"),
+    asset_purpose: str = Form(default="inference", description="资产用途 / Asset purpose for training or inference"),
+    dataset_label: str = Form(default="", description="数据集标记 / Dataset label used by training/validation"),
+    use_case: str = Form(default="", description="业务场景 / Business use case, e.g. railway-defect-inspection"),
+    intended_model_code: str = Form(default="", description="目标模型编码 / Intended target model code"),
+    buyer_tenant_code: str = Form(default="", description="买家租户编码 / Buyer tenant code (platform uploader only)"),
     db: Session = Depends(get_db),
     current_user: AuthUser = Depends(require_roles(*ASSET_UPLOAD_ROLES)),
 ):
@@ -124,6 +125,8 @@ def upload_asset(
     os.makedirs(settings.asset_repo_path, exist_ok=True)
 
     file_bytes = file.file.read()
+    # 资产内容哈希用于去重、追踪和审计。
+    # SHA-256 checksum is persisted for dedupe and audit trace.
     checksum = hashlib.sha256(file_bytes).hexdigest()
 
     asset_id = str(uuid.uuid4())

@@ -65,6 +65,8 @@
 
 - [architecture.md](./architecture.md)
   平台总体架构、当前能力与目标态边界。
+- [edge_terminal_access.md](./edge_terminal_access.md)
+  边缘终端接入流程、参数、接口契约与排障手册。
 - [business_data_flow.md](./business_data_flow.md)
   业务流、控制流、审计流与数据分级。
 - [training_control_plane.md](./training_control_plane.md)
