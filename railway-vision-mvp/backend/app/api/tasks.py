@@ -40,7 +40,7 @@ class TaskCreateRequest(BaseModel):
     pipeline_id: str | None = Field(default=None, description="流水线ID / Pipeline ID (preferred execution entry)")
     model_id: str | None = Field(default=None, description="模型ID / Direct model ID when not using pipeline")
     asset_id: str = Field(description="资产ID / Asset ID to be processed")
-    task_type: str | None = Field(default=None, description="任务类型 / Task type such as ocr or defect_detect")
+    task_type: str | None = Field(default=None, description="任务类型 / Task type such as object_detect, car_number_ocr, bolt_missing_detect")
     device_code: str | None = Field(default=None, description="目标设备编码 / Target edge device code")
     policy: dict[str, Any] = Field(default_factory=dict, description="执行策略 / Execution policy overrides")
     use_master_scheduler: bool = Field(default=False, description="是否启用主调度器 / Enable master scheduler when model is not fixed")

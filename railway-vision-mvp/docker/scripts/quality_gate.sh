@@ -29,6 +29,9 @@ fi
 echo "[info] quality gate: runtime hardening smoke"
 python3 "${ROOT_DIR}/docker/scripts/runtime_hardening_smoke.py"
 
+echo "[info] quality gate: quick detect smoke"
+python3 "${ROOT_DIR}/docker/scripts/quick_detect_smoke.py"
+
 echo "[info] quality gate: training control plane smoke"
 python3 "${ROOT_DIR}/docker/scripts/training_control_plane_smoke.py"
 

@@ -109,8 +109,103 @@ const ENUM_ZH = {
   },
   task_type: {
     pipeline_orchestrated: '编排推理',
+    object_detect: '快速识别',
+    car_number_ocr: '车号识别',
+    bolt_missing_detect: '螺栓缺失',
     ocr: '文字识别',
     detect: '目标检测',
+  },
+};
+
+const ROLE_LABELS = {
+  platform_admin: '平台管理员',
+  platform_operator: '平台运营',
+  platform_auditor: '平台审计',
+  supplier_engineer: '供应商工程师',
+  buyer_operator: '客户操作员',
+  buyer_auditor: '客户审计',
+  admin: '平台管理员',
+  operator: '平台运营',
+  auditor: '平台审计',
+};
+
+const QUICK_DETECT_PROMPTS = ['car', 'person', 'train', 'bus'];
+
+const DASHBOARD_ROLE_PRESETS = {
+  platform_admin: {
+    eyebrow: '平台治理控制面',
+    title: '掌握模型审批、发布授权与审计闭环',
+    subtitle: '优先处理候选模型、训练作业与设备授权，确保成果模型只在受控范围内交付。',
+    focus: ['待审模型与候选训练结果', '租户 / 设备授权范围', '审计证据与结果追溯'],
+    pathHint: '模型审批 -> 发布授权 -> 审计追踪',
+    actions: [
+      { label: '进入模型中心', path: 'models', permission: 'model.view' },
+      { label: '查看训练作业', path: 'training', permission: 'training.job.view' },
+      { label: '核对设备授权', path: 'devices', permission: 'device.read' },
+      { label: '查看审计追踪', path: 'audit', permission: 'audit.read' },
+    ],
+  },
+  platform_operator: {
+    eyebrow: '平台运营控制面',
+    title: '推进资产、任务与模型交付节奏',
+    subtitle: '围绕资产准备、任务执行和发布协同，保证客户测试与交付节奏顺畅推进。',
+    focus: ['资产准备与任务执行状态', '候选模型协同与发布准备', '客户联调与结果回查'],
+    pathHint: '资产准备 -> 任务执行 -> 协同发布',
+    actions: [
+      { label: '进入资产中心', path: 'assets', permission: 'asset.upload' },
+      { label: '进入任务执行', path: 'tasks', permission: 'task.create' },
+      { label: '查看模型中心', path: 'models', permission: 'model.view' },
+      { label: '查看结果中心', path: 'results', permission: 'result.read' },
+    ],
+  },
+  platform_auditor: {
+    eyebrow: '平台审计控制面',
+    title: '验证发布动作、结果输出与设备运行证据',
+    subtitle: '聚焦结果、设备、审计日志，确保每次发布、导出和执行都有完整证据链。',
+    focus: ['审计事件完整性', '结果可追溯性', '设备运行与版本状态'],
+    pathHint: '结果中心 -> 审计追踪 -> 设备状态',
+    actions: [
+      { label: '进入结果中心', path: 'results', permission: 'result.read' },
+      { label: '查看审计追踪', path: 'audit', permission: 'audit.read' },
+      { label: '查看设备状态', path: 'devices', permission: 'device.read' },
+    ],
+  },
+  supplier_engineer: {
+    eyebrow: '供应商协作入口',
+    title: '提交算法能力并跟踪受控训练与候选交付',
+    subtitle: '在受控环境里提交模型、参与微调协作，并持续跟踪候选模型和审批反馈。',
+    focus: ['模型提交与版本状态', '训练协作与候选回收', '审批反馈与补充说明'],
+    pathHint: '提交模型 -> 训练协作 -> 候选交付',
+    actions: [
+      { label: '提交模型包', path: 'models', permission: 'model.view' },
+      { label: '查看训练中心', path: 'training', permission: 'training.job.view' },
+      { label: '查看流水线', path: 'pipelines', permission: 'model.view' },
+    ],
+  },
+  buyer_operator: {
+    eyebrow: '客户业务入口',
+    title: '上传资产、创建任务并回查结果',
+    subtitle: '把资产准备、任务执行和结果回查收敛成最短路径，确保数据留在受控域内。',
+    focus: ['训练 / 验证 / 推理资产准备', '任务创建与执行状态', '结果摘要与截图回查'],
+    pathHint: '上传资产 -> 创建任务 -> 查看结果',
+    actions: [
+      { label: '上传资产', path: 'assets', permission: 'asset.upload' },
+      { label: '创建任务', path: 'tasks', permission: 'task.create' },
+      { label: '查看结果', path: 'results', permission: 'result.read' },
+      { label: '查看设备状态', path: 'devices', permission: 'device.read' },
+    ],
+  },
+  buyer_auditor: {
+    eyebrow: '客户审计入口',
+    title: '核对结果、设备与授权状态',
+    subtitle: '围绕结果回查、设备状态和租户授权范围，形成客户侧可解释的验收视图。',
+    focus: ['结果验收与导出摘要', '设备状态与心跳', '租户授权范围'],
+    pathHint: '结果回查 -> 设备核对 -> 授权确认',
+    actions: [
+      { label: '查看结果', path: 'results', permission: 'result.read' },
+      { label: '查看设备', path: 'devices', permission: 'device.read' },
+      { label: '查看设置', path: 'settings', permission: 'settings.view' },
+    ],
   },
 };
 
@@ -118,6 +213,34 @@ function enumText(group, value) {
   const rendered = String(value ?? '-');
   const label = ENUM_ZH[group]?.[rendered];
   return label ? `${rendered}(${label})` : rendered;
+}
+
+function primaryRole(user) {
+  return String((user?.roles || [])[0] || user?.role || '');
+}
+
+function roleLabel(role) {
+  const key = String(role || '');
+  return ROLE_LABELS[key] || key || '当前角色';
+}
+
+function rolePreset(user) {
+  const role = primaryRole(user);
+  if (DASHBOARD_ROLE_PRESETS[role]) return DASHBOARD_ROLE_PRESETS[role];
+  if (role.startsWith('platform_')) return DASHBOARD_ROLE_PRESETS.platform_operator;
+  if (role.startsWith('supplier')) return DASHBOARD_ROLE_PRESETS.supplier_engineer;
+  if (role.startsWith('buyer_')) return DASHBOARD_ROLE_PRESETS.buyer_operator;
+  return {
+    eyebrow: 'VisionHub 控制面',
+    title: '围绕主权、协作、交付和审计完成业务闭环',
+    subtitle: '从当前角色的默认路径进入，逐步完成资产、模型、任务和设备侧交付。',
+    focus: ['当前角色默认路径', '关键对象状态', '下一步推荐动作'],
+    pathHint: '工作台 -> 默认入口 -> 关键结果',
+    actions: [
+      { label: '进入工作台', path: 'dashboard', permission: 'dashboard.view' },
+      { label: '查看设置', path: 'settings', permission: 'settings.view' },
+    ],
+  };
 }
 
 function hasPermission(state, permission) {
@@ -150,6 +273,26 @@ function makeContext(route, ctx) {
   };
 }
 
+async function fetchAuthorizedBlobUrl(path, token) {
+  const headers = token ? { Authorization: `Bearer ${token}` } : {};
+  const resp = await fetch(`/api${path}`, { headers });
+  if (!resp.ok) {
+    throw new Error(`HTTP ${resp.status}`);
+  }
+  const blob = await resp.blob();
+  return URL.createObjectURL(blob);
+}
+
+function pickQuickDetectResult(rows) {
+  if (!Array.isArray(rows) || !rows.length) return null;
+  return (
+    rows.find((row) => row?.result_json?.stage === 'expert' && row?.result_json?.task_type === 'object_detect') ||
+    rows.find((row) => row?.result_json?.stage === 'final') ||
+    rows.find((row) => row?.screenshot_uri) ||
+    rows[0]
+  );
+}
+
 function page404() {
   return {
     html: `<section class="card"><h2>404</h2><p>页面不存在。</p><button class="primary" data-nav="dashboard">回到工作台</button></section>`,
@@ -175,14 +318,29 @@ function pageLogin(route, rawCtx) {
       <section class="login-shell">
         <div class="login-brand"><span class="brand-mark"></span><span>VISIONHUB</span></div>
         <section class="login-card">
-          <h2>Welcome to VisionHub</h2>
-          <p class="login-subtitle">The secure way to ship vision models</p>
+          <h2>进入 VisionHub</h2>
+          <p class="login-subtitle">面向铁路与政企内网的模型主权、数据主权、受控协作与边缘安全交付控制台</p>
+          <div class="login-value-grid">
+            <span class="login-value-chip">模型主权</span>
+            <span class="login-value-chip">数据主权</span>
+            <span class="login-value-chip">受控协作</span>
+            <span class="login-value-chip">边缘交付</span>
+          </div>
           <div class="init-account-box">
-            <div class="init-account-title">初始账户（用户名 / 密码）</div>
+            <div class="init-account-title">初始账户（用户名 / 密码 / 角色价值）</div>
             <ul class="init-account-list">
-              <li><span class="mono">platform_admin</span><span class="mono">platform123</span></li>
-              <li><span class="mono">supplier_demo</span><span class="mono">supplier123</span></li>
-              <li><span class="mono">buyer_operator</span><span class="mono">buyer123</span></li>
+              <li>
+                <div class="account-main"><span class="mono">platform_admin</span><span class="mono">platform123</span></div>
+                <div class="account-role">平台管理员：审批发布、设备授权、审计追踪</div>
+              </li>
+              <li>
+                <div class="account-main"><span class="mono">supplier_demo</span><span class="mono">supplier123</span></div>
+                <div class="account-role">供应商工程师：提交模型、参与受控训练、跟踪候选交付</div>
+              </li>
+              <li>
+                <div class="account-main"><span class="mono">buyer_operator</span><span class="mono">buyer123</span></div>
+                <div class="account-role">客户操作员：上传资产、创建任务、查看结果</div>
+              </li>
             </ul>
           </div>
           <label>用户名</label>
@@ -232,11 +390,48 @@ function pageLogin(route, rawCtx) {
 
 function pageDashboard(route, rawCtx) {
   const ctx = makeContext(route, rawCtx);
+  const userRole = primaryRole(ctx.state.user);
+  const preset = rolePreset(ctx.state.user);
+  const availableActions = preset.actions.filter((item) => !item.permission || hasPermission(ctx.state, item.permission));
+  const roleBadges = [...new Set((ctx.state.user?.roles || []).map((item) => roleLabel(item)).filter(Boolean))];
   return {
     html: `
-      <section class="card">
-        <h2>四主线工作台</h2>
-        <p>资产上传 -> 模型迭代 -> 审批发布 -> 设备授权执行</p>
+      <section class="card hero-panel">
+        <div class="hero-copy">
+          <span class="hero-eyebrow">${esc(preset.eyebrow)}</span>
+          <h2>${esc(preset.title)}</h2>
+          <p>${esc(preset.subtitle)}</p>
+          <div class="role-chip-row">
+            <span class="role-chip">${esc(roleLabel(userRole))}</span>
+            ${roleBadges.slice(1).map((item) => `<span class="role-chip muted">${esc(item)}</span>`).join('')}
+          </div>
+        </div>
+        <div class="hero-side">
+          <div class="hero-stat">
+            <span>默认路径</span>
+            <strong>${esc(preset.pathHint)}</strong>
+          </div>
+          <div class="hero-stat">
+            <span>当前租户</span>
+            <strong>${esc(ctx.state.user?.tenant_code || ctx.state.user?.tenant_id || '-')}</strong>
+          </div>
+        </div>
+      </section>
+      <section class="grid-two dashboard-brief-grid">
+        <div class="card">
+          <h3>推荐动作</h3>
+          <div class="quick-action-grid">
+            ${availableActions.length
+              ? availableActions.map((item) => `<button class="primary quick-action-btn" data-dashboard-nav="${esc(item.path)}">${esc(item.label)}</button>`).join('')
+              : '<div class="state empty">当前角色暂无推荐动作</div>'}
+          </div>
+        </div>
+        <div class="card">
+          <h3>当前角色重点</h3>
+          <ul class="focus-list">
+            ${preset.focus.map((item) => `<li>${esc(item)}</li>`).join('')}
+          </ul>
+        </div>
       </section>
       <section class="lane-grid" id="laneGrid">${renderLoading('加载主线指标...')}</section>
       <section class="grid-two">
@@ -255,6 +450,9 @@ function pageDashboard(route, rawCtx) {
       </section>
     `,
     async mount(root) {
+      root.querySelectorAll('[data-dashboard-nav]').forEach((btn) => {
+        btn.addEventListener('click', () => ctx.navigate(btn.getAttribute('data-dashboard-nav')));
+      });
       const laneGrid = root.querySelector('#laneGrid');
       const recentAssets = root.querySelector('#recentAssets');
       const recentModels = root.querySelector('#recentModels');
@@ -309,11 +507,17 @@ function pageDashboard(route, rawCtx) {
 
 function pageAssets(route, rawCtx) {
   const ctx = makeContext(route, rawCtx);
+  const role = primaryRole(ctx.state.user);
+  const introText = role.startsWith('buyer_')
+    ? '上传图片、视频或 ZIP 数据集包，形成可直接用于训练、验证、微调和推理的受控资产记录。'
+    : role.startsWith('platform_')
+      ? '统一收口客户资产、用途标记和敏感等级，为训练、验证、推理和审批提供可信输入。'
+      : '查看资产输入、用途标记和数据集包摘要。';
   return {
     html: `
       <section class="card">
         <h2>资产中心</h2>
-        <p>上传图片、视频或 ZIP 数据集包，支持训练、验证、微调、推理等用途。</p>
+        <p>${esc(introText)}</p>
       </section>
       <section class="grid-two">
         <form id="assetUploadForm" class="card form-grid">
@@ -345,8 +549,16 @@ function pageAssets(route, rawCtx) {
         </form>
         <section class="card">
           <h3>上传结果</h3>
-          <div id="assetUploadResult">${renderEmpty('上传后显示资产ID和摘要')}</div>
+          <div id="assetUploadResult">${renderEmpty('上传后会生成 asset_id、资源摘要和下一步入口')}</div>
         </section>
+      </section>
+      <section class="card">
+        <h3>使用建议</h3>
+        <ul class="focus-list">
+          <li>训练 / 微调 / 验证优先使用 ZIP 数据集包，便于一次性提交多层文件夹和多资源样本。</li>
+          <li>上传成功后会固定生成 asset_id，后续训练作业、验证流程和任务执行都直接引用该记录。</li>
+          <li>推理任务优先使用单图或单视频资产；训练链路可组合 0-n 个单文件资产或多个 ZIP 数据集包。</li>
+        </ul>
       </section>
       <section class="card">
         <form id="assetFilterForm" class="inline-form">
@@ -381,7 +593,7 @@ function pageAssets(route, rawCtx) {
           });
           const rows = await ctx.get(`/assets${query}`);
           if (!rows.length) {
-            tableWrap.innerHTML = renderEmpty('暂无资产，可先上传一条用于后续任务创建');
+            tableWrap.innerHTML = renderEmpty('暂无资产。建议先上传一条单图 / 单视频资产用于推理，或上传 ZIP 数据集包用于训练准备');
             return;
           }
           tableWrap.innerHTML = `
@@ -400,6 +612,7 @@ function pageAssets(route, rawCtx) {
                       <td>${formatDateTime(row.created_at)}</td>
                       <td class="row-actions">
                         <button class="ghost" data-copy-asset="${esc(row.id)}">复制ID</button>
+                        ${isTaskAsset(row) ? `<button class="primary" data-quick-detect-asset="${esc(row.id)}">快速识别</button>` : ''}
                         ${isTaskAsset(row) ? `<button class="ghost" data-use-asset="${esc(row.id)}">用于任务</button>` : ''}
                       </td>
                     </tr>
@@ -422,6 +635,12 @@ function pageAssets(route, rawCtx) {
           tableWrap.querySelectorAll('[data-use-asset]').forEach((btn) => {
             btn.addEventListener('click', () => {
               localStorage.setItem('rv_prefill_asset_id', btn.getAttribute('data-use-asset') || '');
+              ctx.navigate('tasks');
+            });
+          });
+          tableWrap.querySelectorAll('[data-quick-detect-asset]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+              localStorage.setItem('rv_quick_detect_asset_id', btn.getAttribute('data-quick-detect-asset') || '');
               ctx.navigate('tasks');
             });
           });
@@ -453,6 +672,7 @@ function pageAssets(route, rawCtx) {
             </div>
             <div class="row-actions">
               <button class="ghost" id="copyAssetIdBtn">复制资产ID</button>
+              ${isTaskAsset(data) ? `<button class="primary" id="gotoQuickDetectFromAsset">快速识别</button>` : ''}
               ${isTaskAsset(data) ? `<button class="primary" id="gotoTaskFromAsset">用该资产创建任务</button>` : ''}
             </div>
           `;
@@ -466,6 +686,10 @@ function pageAssets(route, rawCtx) {
           });
           root.querySelector('#gotoTaskFromAsset')?.addEventListener('click', () => {
             localStorage.setItem('rv_prefill_asset_id', data.id);
+            ctx.navigate('tasks');
+          });
+          root.querySelector('#gotoQuickDetectFromAsset')?.addEventListener('click', () => {
+            localStorage.setItem('rv_quick_detect_asset_id', data.id);
             ctx.navigate('tasks');
           });
           await loadAssets();
@@ -489,16 +713,22 @@ function pageAssets(route, rawCtx) {
 
 function pageModels(route, rawCtx) {
   const ctx = makeContext(route, rawCtx);
+  const role = primaryRole(ctx.state.user);
   const canApprove = hasPermission(ctx.state, 'model.approve');
   const canRelease = hasPermission(ctx.state, 'model.release');
   const canCreateTrainingJob = hasPermission(ctx.state, 'training.job.create');
   const canViewTrainingJob = hasPermission(ctx.state, 'training.job.view');
+  const introText = role.startsWith('supplier')
+    ? '提交初始算法或候选模型，持续跟踪审批反馈与训练协作进度。'
+    : role.startsWith('platform_')
+      ? '审批候选模型、发布授权范围，并把成果模型收敛到受控交付链路。'
+      : '查看已授权模型、候选状态与交付进度。';
 
   return {
     html: `
       <section class="card">
         <h2>模型中心</h2>
-        <p>供应商提交模型包，平台审批并发布到授权设备。</p>
+        <p>${esc(introText)}</p>
       </section>
       <section class="grid-two">
         <form id="modelRegisterForm" class="card form-grid">
@@ -530,7 +760,7 @@ function pageModels(route, rawCtx) {
         </form>
         <section class="card">
           <h3>模型时间线</h3>
-          <div id="modelTimelineWrap">${renderEmpty('在模型列表点击“时间线”查看')}</div>
+          <div id="modelTimelineWrap">${renderEmpty('在模型列表点击“时间线”，查看提交、审批、发布和回收轨迹')}</div>
         </section>
       </section>
       <section class="card">
@@ -590,7 +820,7 @@ function pageModels(route, rawCtx) {
         try {
           const rows = await ctx.get('/training/jobs');
           if (!rows.length) {
-            trainingJobsWrap.innerHTML = renderEmpty('暂无训练作业');
+            trainingJobsWrap.innerHTML = renderEmpty('暂无训练作业，可在右侧直接创建一条训练 / 微调作业');
             return;
           }
           trainingJobsWrap.innerHTML = `
@@ -614,7 +844,7 @@ function pageModels(route, rawCtx) {
           const rows = await ctx.get('/models');
           cachedModels = rows || [];
           if (!rows.length) {
-            modelsWrap.innerHTML = renderEmpty('暂无模型，可先提交一个模型包');
+            modelsWrap.innerHTML = renderEmpty('暂无模型，可先提交一个模型包，或等待供应商交付候选模型');
             return;
           }
           modelsWrap.innerHTML = `
@@ -774,13 +1004,17 @@ function pageModels(route, rawCtx) {
 
 function pageTraining(route, rawCtx) {
   const ctx = makeContext(route, rawCtx);
+  const role = primaryRole(ctx.state.user);
   const canCreateTrainingJob = hasPermission(ctx.state, 'training.job.create');
   const canManageWorkers = hasPermission(ctx.state, 'training.worker.manage');
+  const introText = role.startsWith('platform_')
+    ? '统一查看训练作业、Worker 健康和候选模型回收状态，确保训练链路始终处于平台控制面内。'
+    : '查看受控训练作业、候选模型回收状态和 Worker 运行情况。';
   return {
     html: `
       <section class="card">
         <h2>训练中心</h2>
-        <p>作业调度、worker 健康、候选模型回收。</p>
+        <p>${esc(introText)}</p>
       </section>
       <section class="grid-two">
         <section class="card">
@@ -892,7 +1126,7 @@ function pageTraining(route, rawCtx) {
           });
           const rows = await ctx.get(`/training/jobs${query}`);
           if (!rows.length) {
-            jobsWrap.innerHTML = renderEmpty('暂无训练作业');
+            jobsWrap.innerHTML = renderEmpty('暂无训练作业，可从模型中心或本页下方创建一条训练 / 微调作业');
             return;
           }
           jobsWrap.innerHTML = `
@@ -930,7 +1164,7 @@ function pageTraining(route, rawCtx) {
         try {
           const rows = await ctx.get('/training/workers');
           if (!rows.length) {
-            workersWrap.innerHTML = renderEmpty('暂无 Worker');
+            workersWrap.innerHTML = renderEmpty('暂无 Worker，请先接入训练执行节点或在下方注册 Worker');
             return;
           }
           workersWrap.innerHTML = `
@@ -1041,12 +1275,16 @@ function pageTraining(route, rawCtx) {
 
 function pagePipelines(route, rawCtx) {
   const ctx = makeContext(route, rawCtx);
+  const role = primaryRole(ctx.state.user);
   const canRelease = hasPermission(ctx.state, 'model.release');
+  const introText = role.startsWith('platform_')
+    ? '把路由模型、专家模型和阈值规则收敛成可发布的执行方案，并在发布前完成验证。'
+    : '查看和维护推理编排方案，确保任务执行时使用正确的模型组合和规则。';
   return {
     html: `
       <section class="card">
         <h2>流水线中心</h2>
-        <p>编排路由模型与专家模型，发布后可直接用于任务执行。</p>
+        <p>${esc(introText)}</p>
       </section>
       <section class="grid-two">
         <form id="pipelineRegisterForm" class="card form-grid">
@@ -1063,8 +1301,12 @@ function pagePipelines(route, rawCtx) {
           <div id="pipelineRegisterMsg" class="hint"></div>
         </form>
         <section class="card">
-          <h3>说明</h3>
-          <p>默认可先使用空 JSON；复杂编排可在 Advanced 中编辑。</p>
+          <h3>发布前检查</h3>
+          <ul class="focus-list">
+            <li>先确认路由模型、专家模型和阈值规则已经齐备，再生成正式流水线版本。</li>
+            <li>注册后建议先去任务中心创建一次验证任务，确认结果符合预期，再执行发布。</li>
+            <li>发布时限定目标租户和设备范围，逐步放量，而不是一次性全量下发。</li>
+          </ul>
           <details>
             <summary>示例 expert_map</summary>
             <pre>{
@@ -1088,7 +1330,7 @@ function pagePipelines(route, rawCtx) {
         try {
           const rows = await ctx.get('/pipelines');
           if (!rows.length) {
-            tableWrap.innerHTML = renderEmpty('暂无流水线，先注册一条');
+            tableWrap.innerHTML = renderEmpty('暂无流水线。建议先准备路由模型和专家模型，再注册一条用于验证的流水线');
             return;
           }
           tableWrap.innerHTML = `
@@ -1174,11 +1416,41 @@ function pagePipelines(route, rawCtx) {
 
 function pageTasks(route, rawCtx) {
   const ctx = makeContext(route, rawCtx);
+  const role = primaryRole(ctx.state.user);
+  const introText = role.startsWith('buyer_')
+    ? '上传一张图或视频后直接输入要识别的对象，或选择已准备好的资产和授权模型 / 流水线创建任务。'
+    : role.startsWith('platform_')
+      ? '统一创建和跟踪推理任务，既支持一键快速识别，也支持核对模型、流水线、设备与结果的交付状态。'
+      : '查看任务执行状态与结果回查入口。';
   return {
     html: `
       <section class="card">
         <h2>任务中心</h2>
-        <p>选择资产与模型/流水线，创建推理任务并跟踪状态。</p>
+        <p>${esc(introText)}</p>
+      </section>
+      <section class="grid-two">
+        <form id="quickDetectForm" class="card form-grid">
+          <h3>快速识别</h3>
+          <label>file(上传图片 / 视频，可选)</label>
+          <input id="quickDetectFile" type="file" accept=".jpg,.jpeg,.png,.bmp,.mp4,.avi,.mov" />
+          <div class="hint">上传一张图片或一个短视频；如果资产已经在平台内，也可以直接填写 asset_id。</div>
+          <label>asset_id(已有资产ID，可选)</label>
+          <input name="asset_id" id="quickDetectAssetInput" list="taskAssetsDatalist" placeholder="已有 asset_id，可空" />
+          <label>object_prompt(要识别什么)</label>
+          <input name="object_prompt" id="quickDetectPrompt" placeholder="例如 car / person / train / bus" required />
+          <div class="chip-row" id="quickDetectPromptChips">
+            ${QUICK_DETECT_PROMPTS.map((item) => `<button type="button" class="ghost chip-btn" data-quick-prompt="${esc(item)}">${esc(item)}</button>`).join('')}
+          </div>
+          <label>device_code(设备编码)</label>
+          <input name="device_code" id="quickDetectDeviceCode" value="edge-01" />
+          <button class="primary" type="submit">开始快速识别</button>
+          <div id="quickDetectMsg" class="hint"></div>
+          <div id="quickDetectPreview" class="quick-detect-preview state empty">选择图片后会在这里显示预览；如果选择视频或已有资产，会显示摘要信息。</div>
+        </form>
+        <section class="card">
+          <h3>快速识别结果</h3>
+          <div id="quickDetectResult">${renderEmpty('上传一张图或视频，输入要识别的对象后，VisionHub 会自动选模、创建任务并回传标注图。')}</div>
+        </section>
       </section>
       <section class="grid-two">
         <form id="taskCreateForm" class="card form-grid">
@@ -1193,8 +1465,9 @@ function pageTasks(route, rawCtx) {
           <select name="task_type">
             <option value="">自动选择</option>
             <option value="pipeline_orchestrated">${enumText('task_type', 'pipeline_orchestrated')}</option>
-            <option value="ocr">${enumText('task_type', 'ocr')}</option>
-            <option value="detect">${enumText('task_type', 'detect')}</option>
+            <option value="object_detect">${enumText('task_type', 'object_detect')}</option>
+            <option value="car_number_ocr">${enumText('task_type', 'car_number_ocr')}</option>
+            <option value="bolt_missing_detect">${enumText('task_type', 'bolt_missing_detect')}</option>
           </select>
           <label>device_code(设备编码)</label>
           <input name="device_code" value="edge-01" />
@@ -1209,7 +1482,7 @@ function pageTasks(route, rawCtx) {
         </form>
         <section class="card">
           <h3>创建结果</h3>
-          <div id="taskCreateResult">${renderEmpty('创建成功后显示 task_id')}</div>
+          <div id="taskCreateResult">${renderEmpty('创建成功后会显示 task_id，并提供结果页直达入口')}</div>
         </section>
       </section>
       <section class="card">
@@ -1218,6 +1491,14 @@ function pageTasks(route, rawCtx) {
       </section>
     `,
     async mount(root) {
+      const quickDetectForm = root.querySelector('#quickDetectForm');
+      const quickDetectFile = root.querySelector('#quickDetectFile');
+      const quickDetectAssetInput = root.querySelector('#quickDetectAssetInput');
+      const quickDetectPrompt = root.querySelector('#quickDetectPrompt');
+      const quickDetectDeviceCode = root.querySelector('#quickDetectDeviceCode');
+      const quickDetectMsg = root.querySelector('#quickDetectMsg');
+      const quickDetectPreview = root.querySelector('#quickDetectPreview');
+      const quickDetectResult = root.querySelector('#quickDetectResult');
       const createForm = root.querySelector('#taskCreateForm');
       const createMsg = root.querySelector('#taskCreateMsg');
       const createResult = root.querySelector('#taskCreateResult');
@@ -1225,12 +1506,72 @@ function pageTasks(route, rawCtx) {
       const assetsDatalist = root.querySelector('#taskAssetsDatalist');
       const pipelinesDatalist = root.querySelector('#taskPipelinesDatalist');
       const modelsDatalist = root.querySelector('#taskModelsDatalist');
+      let quickPreviewUrl = '';
+      let quickResultScreenshotUrl = '';
+
+      function revokeQuickUrls() {
+        if (quickPreviewUrl) {
+          URL.revokeObjectURL(quickPreviewUrl);
+          quickPreviewUrl = '';
+        }
+        if (quickResultScreenshotUrl) {
+          URL.revokeObjectURL(quickResultScreenshotUrl);
+          quickResultScreenshotUrl = '';
+        }
+      }
+
+      function renderQuickPreview() {
+        const file = quickDetectFile?.files?.[0];
+        revokeQuickUrls();
+        if (!file) {
+          if (quickDetectAssetInput?.value.trim()) {
+            quickDetectPreview.className = 'quick-detect-preview';
+            quickDetectPreview.innerHTML = `
+              <div class="quick-detect-preview-meta">
+                <strong>已有资产</strong>
+                <span class="mono">${esc(quickDetectAssetInput.value.trim())}</span>
+              </div>
+            `;
+            return;
+          }
+          quickDetectPreview.className = 'quick-detect-preview state empty';
+          quickDetectPreview.textContent = '选择图片后会在这里显示预览；如果选择视频或已有资产，会显示摘要信息。';
+          return;
+        }
+
+        quickPreviewUrl = URL.createObjectURL(file);
+        quickDetectPreview.className = 'quick-detect-preview';
+        if (String(file.type || '').startsWith('image/')) {
+          quickDetectPreview.innerHTML = `
+            <img src="${quickPreviewUrl}" alt="快速识别预览" />
+            <div class="quick-detect-preview-meta">
+              <strong>${esc(file.name)}</strong>
+              <span>${esc(`${Math.max(1, Math.round(file.size / 1024))} KB`)}</span>
+            </div>
+          `;
+          return;
+        }
+
+        quickDetectPreview.innerHTML = `
+          <div class="quick-detect-preview-meta">
+            <strong>${esc(file.name)}</strong>
+            <span>${esc(file.type || 'video/*')} · ${esc(`${Math.max(1, Math.round(file.size / 1024))} KB`)}</span>
+          </div>
+        `;
+      }
+
       const prefillAsset = localStorage.getItem('rv_prefill_asset_id');
       if (prefillAsset) {
         const assetInput = root.querySelector('#taskAssetInput');
         if (assetInput) assetInput.value = prefillAsset;
         localStorage.removeItem('rv_prefill_asset_id');
       }
+      const quickPrefillAsset = localStorage.getItem('rv_quick_detect_asset_id');
+      if (quickPrefillAsset && quickDetectAssetInput) {
+        quickDetectAssetInput.value = quickPrefillAsset;
+        localStorage.removeItem('rv_quick_detect_asset_id');
+      }
+      renderQuickPreview();
 
       async function loadAssistData() {
         try {
@@ -1247,12 +1588,81 @@ function pageTasks(route, rawCtx) {
         }
       }
 
+      async function waitForQuickDetect(taskId) {
+        const deadline = Date.now() + 90_000;
+        while (Date.now() < deadline) {
+          const task = await ctx.get(`/tasks/${taskId}`);
+          const rows = await ctx.get(`/results${toQuery({ task_id: taskId })}`);
+          if (rows.length) {
+            return { task, rows };
+          }
+          if (['FAILED', 'CANCELLED'].includes(String(task?.status || ''))) {
+            throw new Error(task?.error_message || `任务执行失败：${task?.status}`);
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 2000));
+        }
+        throw new Error(`快速识别超时，任务 ${taskId} 尚未产出结果`);
+      }
+
+      async function renderQuickDetectOutcome({ uploadedAsset, recommendation, task, rows, prompt }) {
+        const focus = pickQuickDetectResult(rows);
+        const predictions = Array.isArray(focus?.result_json?.predictions) ? focus.result_json.predictions : [];
+        const promptSupported = focus?.result_json?.prompt_supported;
+
+        if (quickResultScreenshotUrl) {
+          URL.revokeObjectURL(quickResultScreenshotUrl);
+          quickResultScreenshotUrl = '';
+        }
+        if (focus?.id) {
+          try {
+            quickResultScreenshotUrl = await fetchAuthorizedBlobUrl(`/results/${focus.id}/screenshot`, ctx.token);
+          } catch {
+            quickResultScreenshotUrl = '';
+          }
+        }
+
+        quickDetectResult.innerHTML = `
+          <div class="quick-detect-result">
+            <div class="keyvals">
+              <div><span>asset_id</span><strong class="mono">${esc(uploadedAsset?.id || task.asset_id || '-')}</strong></div>
+              <div><span>task_id</span><strong class="mono">${esc(task.id)}</strong></div>
+              <div><span>query</span><strong>${esc(prompt)}</strong></div>
+              <div><span>selected_model</span><strong>${esc(`${recommendation?.selected_model?.model_code || task.model_code || '-'}:${recommendation?.selected_model?.version || '-'}`)}</strong></div>
+              <div><span>status</span><strong>${esc(enumText('task_status', task.status))}</strong></div>
+              <div><span>object_count</span><strong>${esc(String(focus?.result_json?.object_count ?? predictions.length ?? 0))}</strong></div>
+            </div>
+            <div class="quick-detect-recommend">${esc(recommendation?.summary || '已完成自动选模并执行快速识别')}</div>
+            ${
+              quickResultScreenshotUrl
+                ? `<div class="quick-detect-shot"><img src="${quickResultScreenshotUrl}" alt="快速识别标注图" /></div>`
+                : renderEmpty('当前结果暂无可用标注图')
+            }
+            <div class="quick-detect-preds">
+              ${
+                predictions.length
+                  ? predictions
+                      .slice(0, 8)
+                      .map((pred) => `<span class="badge">${esc(`${pred.label}:${Number(pred.score || 0).toFixed(2)}`)}</span>`)
+                      .join('')
+                  : `<span class="hint">${esc(promptSupported === false ? '当前提示词不在模型可识别标签内，建议尝试 car / person / train / bus。' : '已完成执行，但当前图片中没有匹配到目标。')}</span>`
+              }
+            </div>
+            <div class="row-actions">
+              <button class="primary" id="openQuickDetectResult">查看结果页</button>
+              <button class="ghost" id="openQuickDetectTask">查看任务详情</button>
+            </div>
+          </div>
+        `;
+        root.querySelector('#openQuickDetectResult')?.addEventListener('click', () => ctx.navigate(`results/task/${task.id}`));
+        root.querySelector('#openQuickDetectTask')?.addEventListener('click', () => ctx.navigate(`tasks/${task.id}`));
+      }
+
       async function loadTasks() {
         tableWrap.innerHTML = renderLoading('加载任务列表...');
         try {
           const rows = await ctx.get('/tasks');
           if (!rows.length) {
-            tableWrap.innerHTML = renderEmpty('暂无任务');
+            tableWrap.innerHTML = renderEmpty('暂无任务，可先去资产中心上传资产，再回到这里创建推理任务');
             return;
           }
           tableWrap.innerHTML = `
@@ -1288,6 +1698,99 @@ function pageTasks(route, rawCtx) {
           tableWrap.innerHTML = renderError(error.message);
         }
       }
+
+      quickDetectFile?.addEventListener('change', renderQuickPreview);
+      quickDetectAssetInput?.addEventListener('input', () => {
+        if (!quickDetectFile?.files?.length) renderQuickPreview();
+      });
+      root.querySelectorAll('[data-quick-prompt]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          if (quickDetectPrompt) quickDetectPrompt.value = btn.getAttribute('data-quick-prompt') || '';
+        });
+      });
+
+      quickDetectForm?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        quickDetectMsg.textContent = '';
+        const submitBtn = quickDetectForm.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        quickDetectResult.innerHTML = renderLoading('正在准备快速识别...');
+        try {
+          const prompt = String(quickDetectPrompt?.value || '').trim();
+          const deviceCode = String(quickDetectDeviceCode?.value || 'edge-01').trim() || 'edge-01';
+          const existingAssetId = String(quickDetectAssetInput?.value || '').trim();
+          const file = quickDetectFile?.files?.[0];
+          if (!prompt) {
+            throw new Error('请输入要识别的对象');
+          }
+          if (!file && !existingAssetId) {
+            throw new Error('请上传图片/视频，或填写已有 asset_id');
+          }
+
+          let uploadedAsset = null;
+          let assetId = existingAssetId;
+          if (file) {
+            const uploadForm = new FormData();
+            uploadForm.set('file', file);
+            uploadForm.set('asset_purpose', 'inference');
+            uploadForm.set('sensitivity_level', 'L2');
+            uploadForm.set('dataset_label', `quick-detect-${prompt}`);
+            uploadForm.set('use_case', 'quick-detect');
+            uploadForm.set('intended_model_code', 'object_detect');
+            quickDetectResult.innerHTML = renderLoading('正在上传资产...');
+            uploadedAsset = await ctx.postForm('/assets/upload', uploadForm);
+            assetId = uploadedAsset.id;
+            if (quickDetectAssetInput) quickDetectAssetInput.value = assetId;
+          }
+
+          quickDetectResult.innerHTML = renderLoading('正在推荐模型...');
+          const recommendation = await ctx.post('/tasks/recommend-model', {
+            asset_id: assetId,
+            task_type: 'object_detect',
+            device_code: deviceCode,
+            intent_text: prompt,
+            limit: 3,
+          });
+          if (!recommendation?.selected_model?.model_id) {
+            throw new Error('当前没有可用于快速识别的已发布模型');
+          }
+
+          quickDetectResult.innerHTML = renderLoading('已选中模型，正在创建任务并等待结果...');
+          const task = await ctx.post('/tasks/create', {
+            asset_id: assetId,
+            task_type: 'object_detect',
+            device_code: deviceCode,
+            use_master_scheduler: true,
+            intent_text: prompt,
+            context: { object_prompt: prompt },
+            options: { object_prompt: prompt },
+            policy: {
+              upload_raw_video: false,
+              upload_frames: true,
+              desensitize_frames: false,
+              retention_days: 30,
+              quick_detect: { object_prompt: prompt },
+            },
+          });
+          localStorage.setItem('rv_last_task_id', task.id);
+          const settled = await waitForQuickDetect(task.id);
+          await renderQuickDetectOutcome({
+            uploadedAsset,
+            recommendation,
+            task: settled.task,
+            rows: settled.rows,
+            prompt,
+          });
+          quickDetectMsg.textContent = `快速识别完成：${task.id}`;
+          ctx.toast('快速识别完成');
+          await Promise.all([loadTasks(), loadAssistData()]);
+        } catch (error) {
+          quickDetectMsg.textContent = error.message || '快速识别失败';
+          quickDetectResult.innerHTML = renderError(error.message || '快速识别失败');
+        } finally {
+          submitBtn.disabled = false;
+        }
+      });
 
       createForm?.addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -1377,7 +1880,7 @@ function pageTaskDetail(route, rawCtx) {
 }
 
 function buildResultListHtml(rows) {
-  if (!rows.length) return renderEmpty('暂无结果');
+  if (!rows.length) return renderEmpty('暂无结果，请确认任务已执行完成，或返回任务中心重新创建任务');
   return `
     <div class="result-list">
       ${rows.map((row) => `
@@ -1400,12 +1903,18 @@ function buildResultListHtml(rows) {
 
 function pageResults(route, rawCtx) {
   const ctx = makeContext(route, rawCtx);
+  const role = primaryRole(ctx.state.user);
   const defaultTaskId = route.params?.task_id || localStorage.getItem('rv_last_task_id') || '';
+  const introText = role.startsWith('buyer_')
+    ? '按 task_id 回查结构化结果、截图摘要和导出信息，支撑客户验收与复核。'
+    : role.startsWith('platform_')
+      ? '统一查看执行结果、导出摘要和截图证据，验证模型交付与任务产出。'
+      : '查看任务输出、截图摘要与导出信息。';
   return {
     html: `
       <section class="card">
         <h2>结果中心</h2>
-        <p>按 task_id 查询结构化结果，可导出审计摘要。</p>
+        <p>${esc(introText)}</p>
       </section>
       <section class="card">
         <form id="resultQueryForm" class="inline-form">
@@ -1416,7 +1925,7 @@ function pageResults(route, rawCtx) {
         <div id="resultMeta" class="hint"></div>
       </section>
       <section class="card">
-        <div id="resultListWrap">${defaultTaskId ? renderLoading('加载结果...') : renderEmpty('请输入 task_id 查询')}</div>
+        <div id="resultListWrap">${defaultTaskId ? renderLoading('加载结果...') : renderEmpty('请输入 task_id 查询，或先在任务中心创建并执行任务')}</div>
       </section>
     `,
     async mount(root) {
@@ -1452,7 +1961,7 @@ function pageResults(route, rawCtx) {
       async function loadByTaskId(taskId) {
         const clean = String(taskId || '').trim();
         if (!clean) {
-          listWrap.innerHTML = renderEmpty('请输入 task_id');
+          listWrap.innerHTML = renderEmpty('请输入 task_id，或先在任务中心创建并执行任务');
           resultMeta.textContent = '';
           return;
         }
@@ -1502,7 +2011,7 @@ function pageAudit(route, rawCtx) {
     html: `
       <section class="card">
         <h2>审计中心</h2>
-        <p>关键动作可追溯：模型审批发布、任务创建、结果导出、设备拉取等。</p>
+        <p>统一核对模型审批发布、训练拉取、任务创建、结果导出和设备执行证据。</p>
       </section>
       <section class="card">
         <form id="auditFilterForm" class="inline-form">
@@ -1532,7 +2041,7 @@ function pageAudit(route, rawCtx) {
           });
           const rows = await ctx.get(`/audit${query}`);
           if (!rows.length) {
-            tableWrap.innerHTML = renderEmpty('暂无审计日志');
+            tableWrap.innerHTML = renderEmpty('暂无审计日志。完成模型审批、任务创建、结果导出或设备拉取后会在这里留痕');
             return;
           }
           tableWrap.innerHTML = `
@@ -1570,11 +2079,15 @@ function pageAudit(route, rawCtx) {
 
 function pageDevices(route, rawCtx) {
   const ctx = makeContext(route, rawCtx);
+  const role = primaryRole(ctx.state.user);
+  const introText = role.startsWith('buyer_')
+    ? '查看已授权边缘设备的在线状态、最近心跳和 Agent 版本，确认设备可执行范围。'
+    : '查看设备授权、在线状态、最近心跳和 Agent 版本，核对边缘运行面。';
   return {
     html: `
       <section class="card">
         <h2>设备中心</h2>
-        <p>展示授权边缘设备运行状态与最近心跳。</p>
+        <p>${esc(introText)}</p>
       </section>
       <section class="card">
         <div id="devicesTableWrap">${renderLoading('加载设备列表...')}</div>
@@ -1585,7 +2098,7 @@ function pageDevices(route, rawCtx) {
       try {
         const rows = await ctx.get('/devices');
         if (!rows.length) {
-          wrap.innerHTML = renderEmpty('暂无设备或当前角色无可见设备');
+          wrap.innerHTML = renderEmpty('暂无设备。请先接入边缘 Agent，或确认当前角色拥有设备查看权限');
           return;
         }
         wrap.innerHTML = `
@@ -1608,7 +2121,7 @@ function pageDevices(route, rawCtx) {
         `;
       } catch (error) {
         if (String(error.message || '').includes('404')) {
-          wrap.innerHTML = renderEmpty('后端接口待接入：/devices');
+          wrap.innerHTML = renderEmpty('设备接口尚未接通，请先确认中心端 /devices 接口状态');
           return;
         }
         wrap.innerHTML = renderError(error.message);
@@ -1623,7 +2136,7 @@ function pageSettings(route, rawCtx) {
     html: `
       <section class="card">
         <h2>设置</h2>
-        <p>查看当前登录身份、租户和权限能力。</p>
+        <p>核对当前登录身份、租户边界、权限能力和默认角色路径。</p>
       </section>
       <section class="card" id="settingsWrap">${renderLoading('加载用户信息...')}</section>
     `,
@@ -1631,13 +2144,15 @@ function pageSettings(route, rawCtx) {
       const wrap = root.querySelector('#settingsWrap');
       try {
         const me = await ctx.get('/users/me');
+        const preset = rolePreset(me);
         wrap.innerHTML = `
           <div class="keyvals">
             <div><span>username</span><strong>${esc(me.username)}</strong></div>
-            <div><span>roles</span><strong>${esc((me.roles || []).join(','))}</strong></div>
+            <div><span>roles</span><strong>${esc((me.roles || []).map((item) => roleLabel(item)).join(' / '))}</strong></div>
             <div><span>tenant_code</span><strong>${esc(me.tenant_code || '-')}</strong></div>
             <div><span>tenant_type</span><strong>${esc(me.tenant_type || '-')}</strong></div>
           </div>
+          <div class="hint">默认路径：${esc(preset.pathHint)}</div>
           <details open>
             <summary>permissions</summary>
             <pre>${esc(safeJson(me.permissions || []))}</pre>

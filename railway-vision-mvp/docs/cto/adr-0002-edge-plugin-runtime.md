@@ -40,6 +40,7 @@
   - router 额外输出：`scene_id / scene_score / tasks[] / task_scores[]`
 - 内置插件：
   - `heuristic_router`
+  - `object_detect`
   - `car_number_ocr`
   - `bolt_missing_detect`
 - 外部插件通过 `EDGE_PLUGIN_MODULES` 指定模块加载。

@@ -262,6 +262,32 @@ MOBILENET_SSD_LABELS = [
     "tvmonitor",
 ]
 
+OBJECT_DETECT_LABEL_ALIASES: dict[str, tuple[str, ...]] = {
+    "person": ("person", "people", "human", "pedestrian", "行人", "人员", "人"),
+    "car": ("car", "cars", "auto", "automobile", "汽车", "轿车", "小汽车"),
+    "bus": ("bus", "coach", "巴士", "公交", "大巴"),
+    "train": ("train", "locomotive", "railcar", "rail car", "wagon", "列车", "火车", "车厢"),
+    "motorbike": ("motorbike", "motorcycle", "摩托", "摩托车"),
+    "bicycle": ("bicycle", "bike", "自行车", "单车"),
+    "boat": ("boat", "ship", "船", "船只"),
+    "bottle": ("bottle", "瓶子"),
+    "chair": ("chair", "椅子"),
+    "dog": ("dog", "狗"),
+    "cat": ("cat", "猫"),
+    "horse": ("horse", "马"),
+    "sheep": ("sheep", "羊"),
+    "bird": ("bird", "鸟"),
+    "tvmonitor": ("tv", "monitor", "screen", "显示器", "屏幕"),
+}
+
+OBJECT_DETECT_GROUP_ALIASES: dict[str, tuple[str, ...]] = {
+    "vehicle": ("car", "bus", "train", "motorbike", "bicycle"),
+    "vehicles": ("car", "bus", "train", "motorbike", "bicycle"),
+    "transport": ("car", "bus", "train", "motorbike", "bicycle"),
+    "交通工具": ("car", "bus", "train", "motorbike", "bicycle"),
+    "车辆": ("car", "bus", "train", "motorbike", "bicycle"),
+}
+
 
 @lru_cache(maxsize=2)
 def _prepare_model_bundle(bundle_path: str) -> tuple[str, str]:
@@ -318,6 +344,100 @@ def _try_open_model_detect(frame: np.ndarray, model_path: str) -> tuple[int, lis
         return None
 
 
+def _resolve_object_prompt(ctx: ModelExecutionContext) -> str:
+    policy = ctx.policy or {}
+    quick_detect = policy.get("quick_detect") if isinstance(policy.get("quick_detect"), dict) else {}
+    master_scheduler = policy.get("master_scheduler") if isinstance(policy.get("master_scheduler"), dict) else {}
+    candidates = (
+        quick_detect.get("object_prompt"),
+        quick_detect.get("prompt"),
+        ctx.context.get("object_prompt"),
+        ctx.options.get("object_prompt"),
+        master_scheduler.get("intent_text"),
+    )
+    for candidate in candidates:
+        text = str(candidate or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _resolve_requested_detection_labels(prompt_text: str) -> tuple[set[str], bool]:
+    normalized = prompt_text.strip().lower()
+    if not normalized:
+        return set(), True
+
+    tokens = [token for token in re.split(r"[\s,，;/|]+", normalized) if token]
+    labels: set[str] = set()
+
+    for label in MOBILENET_SSD_LABELS[1:]:
+        if label in normalized or label in tokens:
+            labels.add(label)
+
+    for label, aliases in OBJECT_DETECT_LABEL_ALIASES.items():
+        if any(alias in normalized or alias in tokens for alias in aliases):
+            labels.add(label)
+
+    for alias, mapped_labels in OBJECT_DETECT_GROUP_ALIASES.items():
+        if alias in normalized or alias in tokens:
+            labels.update(mapped_labels)
+
+    return labels, bool(labels)
+
+
+def _mock_object_detect(frame: np.ndarray, target_labels: set[str]) -> list[list[Any]]:
+    h, w = frame.shape[:2]
+    label = sorted(target_labels)[0] if target_labels else "car"
+    return [[int(w * 0.18), int(h * 0.22), int(w * 0.82), int(h * 0.78), label, 0.94]]
+
+
+def _draw_detection_annotations(
+    frame: np.ndarray,
+    predictions: list[dict[str, Any]],
+    *,
+    prompt_text: str,
+    prompt_supported: bool,
+) -> np.ndarray:
+    annotated = frame.copy()
+    for prediction in predictions:
+        bbox = _normalize_bbox(prediction.get("bbox"))
+        if not bbox:
+            continue
+        color = (76, 175, 80) if prediction.get("label") == "person" else (193, 102, 255)
+        cv2.rectangle(annotated, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
+        cv2.putText(
+            annotated,
+            f"{prediction.get('label')}:{float(prediction.get('score') or 0.0):.2f}",
+            (bbox[0], max(24, bbox[1] - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2,
+        )
+
+    if prompt_text:
+        if prompt_supported:
+            footer = f"query={prompt_text} matches={len(predictions)}"
+            color = (76, 175, 80) if predictions else (0, 215, 255)
+        else:
+            footer = f"query={prompt_text} unsupported, try car/person/train/bus"
+            color = (0, 80, 255)
+    else:
+        footer = f"all objects={len(predictions)}"
+        color = (76, 175, 80)
+
+    cv2.putText(
+        annotated,
+        footer[:72],
+        (20, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.75,
+        color,
+        2,
+    )
+    return annotated
+
+
 class HeuristicRouterPlugin:
     plugin_names = ("heuristic_router", "scene_router", "router")
 
@@ -333,9 +453,12 @@ class HeuristicRouterPlugin:
                 str(asset_meta.get("dataset_label") or ""),
             ]
         ).lower()
-        scores = {"car_number_ocr": 0.15, "bolt_missing_detect": 0.15}
-        car_terms = ("car", "wagon", "ocr", "number", "车号", "车厢", "编号")
+        scores = {"object_detect": 0.15, "car_number_ocr": 0.15, "bolt_missing_detect": 0.15}
+        object_terms = ("object", "detect", "box", "car", "bus", "person", "train", "目标", "标注", "框选", "行人", "车辆", "列车")
+        car_terms = ("ocr", "number", "plate", "car_number", "车号", "编号", "读取车号")
         bolt_terms = ("bolt", "missing", "螺栓", "紧固", "松动", "缺失")
+        if any(term in search_text for term in object_terms):
+            scores["object_detect"] += 0.7
         if any(term in search_text for term in car_terms):
             scores["car_number_ocr"] += 0.7
         if any(term in search_text for term in bolt_terms):
@@ -503,8 +626,89 @@ class BoltMissingDetectPlugin:
         }
 
 
+class GenericObjectDetectPlugin:
+    plugin_names = ("object_detect", "generic_object_detect", "rapid_object_detect")
+
+    def run(self, ctx: ModelExecutionContext) -> dict[str, Any]:
+        started = time.time()
+        prompt_text = _resolve_object_prompt(ctx)
+        requested_labels, prompt_supported = _resolve_requested_detection_labels(prompt_text)
+        force_mock_object_detector = bool((ctx.policy or {}).get("force_mock_object_detector", False))
+
+        predictions: list[dict[str, Any]] = []
+        artifacts: list[dict[str, Any]] = []
+        matched_labels: set[str] = set()
+        detector_name = "opencv_mobilenet_ssd_bundle"
+
+        # 快速识别需要把“提示词 -> 目标类别 -> 框选结果”固化为可审计结果，而不是仅返回裸检测框。
+        # Convert the prompt into a bounded set of detectable labels so the result remains explainable.
+        for frame_idx, raw_frame in _iter_frames(ctx.local_asset_path):
+            frame = _apply_pre_ops(raw_frame, ctx)
+            if force_mock_object_detector:
+                detections = _mock_object_detect(frame, requested_labels)
+                detector_name = "mock_object_detector"
+            else:
+                model_res = _try_open_model_detect(frame, ctx.model_path)
+                detections = (model_res or (0, []))[1]
+                detector_name = "opencv_mobilenet_ssd_bundle" if model_res is not None else "opencv_mobilenet_ssd_bundle_unavailable"
+
+            frame_predictions: list[dict[str, Any]] = []
+            for box in detections:
+                x1, y1, x2, y2, label, score = box
+                label = str(label)
+                if prompt_text:
+                    if not prompt_supported or label not in requested_labels:
+                        continue
+                prediction = {
+                    "label": label,
+                    "score": round(float(score), 4),
+                    "bbox": [int(x1), int(y1), int(x2), int(y2)],
+                    "attributes": {
+                        "frame_index": frame_idx,
+                        "detector": detector_name,
+                        "requested_prompt": prompt_text or None,
+                    },
+                }
+                frame_predictions.append(prediction)
+
+            predictions.extend(frame_predictions)
+            matched_labels.update(str(pred.get("label")) for pred in frame_predictions)
+
+            if not artifacts:
+                annotated = _draw_detection_annotations(
+                    frame,
+                    frame_predictions,
+                    prompt_text=prompt_text,
+                    prompt_supported=prompt_supported,
+                )
+                if (ctx.policy or {}).get("desensitize_frames", False):
+                    annotated = _desensitize(annotated)
+                artifacts.append(_preview_artifact(annotated))
+
+        return {
+            "predictions": predictions,
+            "artifacts": artifacts,
+            "metrics": {
+                "duration_ms": int((time.time() - started) * 1000),
+                "gpu_mem_mb": 0,
+                "version": ctx.model_meta.get("version") or ctx.manifest.get("version"),
+                "calibration": "none",
+            },
+            "summary": {
+                "task_type": "object_detect",
+                "object_prompt": prompt_text or None,
+                "requested_labels": sorted(requested_labels),
+                "matched_labels": sorted(matched_labels),
+                "object_count": len(predictions),
+                "prompt_supported": prompt_supported if prompt_text else True,
+                "detector": detector_name,
+            },
+        }
+
+
 def register_builtin_plugins() -> None:
     register_plugin(HeuristicRouterPlugin())
+    register_plugin(GenericObjectDetectPlugin())
     register_plugin(CarNumberOcrPlugin())
     register_plugin(BoltMissingDetectPlugin())
 
@@ -558,6 +762,7 @@ def _build_model_item(
 def _build_final_item(
     *,
     pipeline: dict[str, Any] | None,
+    requested_task_type: str | None,
     selected_tasks: list[str],
     router_output: dict[str, Any] | None,
     fused_predictions: list[dict[str, Any]],
@@ -566,6 +771,9 @@ def _build_final_item(
     screenshot_b64: str | None,
 ) -> dict[str, Any]:
     alert_level = "ALERT" if any(pred.get("label") == "bolt_missing" for pred in fused_predictions) else ("WARN" if review_reasons else "INFO")
+    final_task_type = "pipeline_orchestrated"
+    if not (pipeline or {}).get("id") and requested_task_type and len(selected_tasks) == 1:
+        final_task_type = requested_task_type
     return {
         "model_id": None,
         "model_hash": router_output.get("metrics", {}).get("version", "pipeline") if router_output else "pipeline",
@@ -575,7 +783,7 @@ def _build_final_item(
         "result_json": {
             "schema_version": "orchestrator.result.v1",
             "stage": "final",
-            "task_type": "pipeline_orchestrated",
+            "task_type": final_task_type,
             "pipeline_id": (pipeline or {}).get("id"),
             "pipeline_code": (pipeline or {}).get("pipeline_code"),
             "scene_id": router_output.get("scene_id") if router_output else None,
@@ -677,6 +885,8 @@ def _select_tasks(router_output: dict[str, Any] | None, pipeline: dict[str, Any]
         tasks = []
         task_scores = router_output.get("task_scores") or []
         for index, task_key in enumerate(router_output.get("tasks") or []):
+            if task_key not in available_tasks:
+                continue
             score = float(task_scores[index]) if index < len(task_scores) else float(router_output.get("scene_score") or 0.0)
             if score >= _task_thresholds(pipeline, task_key):
                 tasks.append(task_key)
@@ -684,7 +894,9 @@ def _select_tasks(router_output: dict[str, Any] | None, pipeline: dict[str, Any]
             return tasks
         fallback = ((pipeline.get("router") or {}).get("fallback") or {}) if isinstance(pipeline.get("router"), dict) else {}
         top_k = int(fallback.get("expand_top_k", 1) or 1)
-        return [str(task) for task in (router_output.get("tasks") or [])[:top_k]]
+        fallback_tasks = [str(task) for task in (router_output.get("tasks") or []) if str(task) in available_tasks]
+        if fallback_tasks:
+            return fallback_tasks[:top_k]
     return available_tasks[:1]
 
 
@@ -892,6 +1104,7 @@ def run_inference(task: dict[str, Any], local_asset_path: str, model_artifacts: 
     items.append(
         _build_final_item(
             pipeline=pipeline,
+            requested_task_type=task.get("task_type"),
             selected_tasks=selected_tasks,
             router_output=router_output,
             fused_predictions=fused_predictions,

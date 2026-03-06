@@ -146,6 +146,7 @@ def generate_demo_model_packages() -> dict[str, Path]:
     ts = int(time.time())
     versions = {
         "scene_router": f"v1.0.{ts}",
+        "object_detect": f"v1.0.{ts}",
         "car_number_ocr": f"v1.0.{ts}",
         "bolt_missing_detect": f"v1.0.{ts}",
     }
@@ -164,13 +165,13 @@ def generate_demo_model_packages() -> dict[str, Path]:
     )
 
     for model_id, version in versions.items():
-        if model_id == "bolt_missing_detect":
+        if model_id in {"object_detect", "bolt_missing_detect"}:
             model_bin = "/app/app/uploads/open_models/mobilenet_ssd_bundle.zip"
         else:
             model_bin = f"/tmp/{model_id}.bin"
         output_zip = f"/app/app/uploads/{model_id}_model_package.zip"
         prep_cmd = ""
-        if model_id != "bolt_missing_detect":
+        if model_id not in {"object_detect", "bolt_missing_detect"}:
             prep_cmd = f"echo 'demo-{model_id}-payload' > {model_bin} && "
         cmd = compose + [
             "exec",

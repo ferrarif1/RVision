@@ -14,26 +14,73 @@ from app.security.dependencies import AuthUser
 from app.security.roles import is_buyer_user
 
 TASK_TYPE_LABELS = {
+    "object_detect": "快速识别",
     "car_number_ocr": "车号识别",
     "bolt_missing_detect": "螺栓缺失",
 }
 
 TASK_TYPE_KEYWORDS = {
-    "car_number_ocr": (
+    "object_detect": (
+        "object",
+        "objects",
+        "detect",
+        "detection",
+        "find object",
+        "box",
+        "bbox",
+        "locate",
+        "label",
+        "annotate",
+        "segment",
         "car",
+        "vehicle",
+        "bus",
+        "person",
+        "people",
+        "human",
+        "pedestrian",
+        "train",
+        "locomotive",
         "wagon",
+        "truck",
+        "motorbike",
+        "bicycle",
+        "boat",
+        "bottle",
+        "chair",
+        "dog",
+        "cat",
+        "horse",
+        "sheep",
+        "tv",
+        "monitor",
+        "目标",
+        "检测",
+        "框选",
+        "框出来",
+        "标注",
+        "识别物体",
+        "识别目标",
+        "找目标",
+        "找物体",
+        "车辆",
+        "行人",
+        "人员",
+        "列车",
+        "火车",
+    ),
+    "car_number_ocr": (
         "plate",
         "number",
         "ocr",
         "car_number",
         "车号",
         "车牌",
-        "车皮",
-        "车厢",
-        "货车",
         "车次",
         "编号",
         "识别车号",
+        "读取车号",
+        "ocr车号",
     ),
     "bolt_missing_detect": (
         "bolt",
@@ -200,7 +247,7 @@ def _infer_task_type(texts: list[str], requested_task_type: str | None, availabl
 
     if inferred and best_score > 0:
         terms = sorted(matched_terms[inferred])
-        signals.append(f"LLM 语义识别命中关键词：{', '.join(terms[:5])}")
+        signals.append(f"语义路由命中关键词：{', '.join(terms[:5])}")
         return inferred, signals
 
     if len(available_task_types) == 1:

@@ -271,7 +271,11 @@ def run_parity(allow_pending: bool, wait_seconds: int) -> dict[str, Any]:
     _assert(isinstance(models, list) and len(models) > 0, "buyer has no visible released models")
     chosen_model = models[0]
     model_id = chosen_model["id"]
-    task_type = chosen_model["model_code"] if chosen_model["model_code"] in {"car_number_ocr", "bolt_missing_detect"} else "car_number_ocr"
+    task_type = (
+        chosen_model["model_code"]
+        if chosen_model["model_code"] in {"object_detect", "car_number_ocr", "bolt_missing_detect"}
+        else "car_number_ocr"
+    )
 
     asset = _upload_asset(buyer_token, _load_demo_asset_bytes(), file_name=f"parity_{task_type}.png")
     asset_id = asset["id"]
@@ -290,6 +294,8 @@ def run_parity(allow_pending: bool, wait_seconds: int) -> dict[str, Any]:
                 "upload_frames": True,
                 "desensitize_frames": False,
                 "retention_days": 7,
+                "quick_detect": {"object_prompt": "car"} if task_type == "object_detect" else {},
+                "force_mock_object_detector": task_type == "object_detect",
                 "force_mock_ocr": True,
                 "force_fallback_detector": True,
             },

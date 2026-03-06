@@ -40,6 +40,7 @@ def _build_fixture_assets(tmp_dir: str) -> tuple[str, str]:
 def run_golden_checks() -> dict:
     ensure_plugins_loaded()
     plugin_names = list_registered_plugins()
+    _assert("object_detect" in plugin_names, "object_detect plugin missing")
     _assert("car_number_ocr" in plugin_names, "car_number_ocr plugin missing")
     _assert("bolt_missing_detect" in plugin_names, "bolt_missing_detect plugin missing")
     _assert("heuristic_router" in plugin_names, "heuristic_router plugin missing")
@@ -79,6 +80,44 @@ def run_golden_checks() -> dict:
         _assert(car_result["task_type"] == "car_number_ocr", "car task type mismatch")
         _assert(car_result["car_number"] == "CAR123456", "car number golden mismatch")
         _assert(car_result["engine"] == "mock", "car ocr engine should be mock in golden check")
+
+        object_task = {
+            "task_type": "object_detect",
+            "policy": {
+                "upload_frames": False,
+                "quick_detect": {"object_prompt": "car"},
+                "force_mock_object_detector": True,
+            },
+            "model": {"model_hash": "golden-object-hash"},
+            "models": {
+                "object-model": {
+                    "id": "object-model",
+                    "model_code": "object_detect",
+                    "version": "v-test",
+                    "model_hash": "golden-object-hash",
+                    "model_type": "expert",
+                    "plugin_name": "object_detect",
+                }
+            },
+        }
+        object_bundle = run_inference(
+            object_task,
+            car_path,
+            model_artifacts={
+                "object-model": {
+                    "manifest": {"task_type": "object_detect", "version": "v-test", "plugin_name": "object_detect"},
+                    "decrypted_path": "",
+                    "model_hash": "golden-object-hash",
+                }
+            },
+        )
+        object_items = object_bundle["items"]
+        _assert(len(object_items) >= 2, "object task produced no orchestrator result")
+        object_result = next(item["result_json"] for item in object_items if item["result_json"].get("stage") == "expert")
+        _assert(object_result["task_type"] == "object_detect", "object task type mismatch")
+        _assert(object_result["object_prompt"] == "car", "object prompt golden mismatch")
+        _assert(object_result["object_count"] >= 1, "object detector should emit at least one mocked box")
+        _assert("car" in (object_result.get("matched_labels") or []), "object detector should match car label")
 
         bolt_task = {
             "task_type": "bolt_missing_detect",
@@ -121,6 +160,7 @@ def run_golden_checks() -> dict:
         "status": "ok",
         "plugins": plugin_names,
         "checks": {
+            "object_detect": "passed",
             "car_number_ocr": "passed",
             "bolt_missing_detect": "passed",
         },

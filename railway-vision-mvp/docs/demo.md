@@ -150,9 +150,9 @@ docker compose -f docker/docker-compose.yml exec backend sh -lc '
 '
 ```
 
-### 1.2.3 螺栓缺失包（可选）
+### 1.2.3 开源检测包（可选）
 
-推荐一键方式（直接把开源 `MobileNet-SSD` 打包成我方加密模型包）：
+推荐一键方式（直接把开源 `MobileNet-SSD` 打包成我方加密模型包，默认生成 `object_detect` 快速识别包）：
 
 ```bash
 bash docker/scripts/build_open_model_package.sh
@@ -164,12 +164,12 @@ bash docker/scripts/build_open_model_package.sh
 docker compose -f docker/docker-compose.yml exec backend sh -lc '
   python -m app.services.model_package_tool \
     --model-path /app/app/uploads/open_models/mobilenet_ssd_bundle.zip \
-    --model-id bolt_missing_detect \
+    --model-id object_detect \
     --version v1.0.0-open \
-    --task-type bolt_missing_detect \
+    --task-type object_detect \
     --encrypt-key /app/keys/model_encrypt.key \
     --signing-private-key /app/keys/model_sign_private.pem \
-    --output /app/app/uploads/bolt_open_model_package.zip
+    --output /app/app/uploads/object_detect_open_model_package.zip
 '
 ```
 
@@ -177,7 +177,7 @@ docker compose -f docker/docker-compose.yml exec backend sh -lc '
 
 - `backend/app/uploads/car_number_model_package.zip`
 - `backend/app/uploads/scene_router_model_package.zip`
-- `backend/app/uploads/bolt_open_model_package.zip`
+- `backend/app/uploads/object_detect_open_model_package.zip`
 
 ## 1.3 登录后台
 
@@ -292,6 +292,7 @@ docker compose -f docker/docker-compose.yml logs -f edge-agent
 边缘端推理已改为插件注册表机制。内置插件：
 
 - `heuristic_router`
+- `object_detect`
 - `car_number_ocr`
 - `bolt_missing_detect`
 

@@ -1,5 +1,17 @@
 import { PERMISSIONS } from '../core/api.js';
 
+const ROLE_LABELS = {
+  platform_admin: '平台管理员',
+  platform_operator: '平台运营',
+  platform_auditor: '平台审计',
+  supplier_engineer: '供应商工程师',
+  buyer_operator: '客户操作员',
+  buyer_auditor: '客户审计',
+  admin: '平台管理员',
+  operator: '平台运营',
+  auditor: '平台审计',
+};
+
 const NAV_ITEMS = [
   { page: 'dashboard', title: 'Dashboard', group: '主线1：客户资产准备' },
   { page: 'assets', title: 'Assets', group: '主线1：客户资产准备' },
@@ -43,6 +55,11 @@ function buildGroups(can) {
     grouped.get(item.group).push(item);
   });
   return [...grouped.entries()].map(([title, items]) => ({ title, items }));
+}
+
+function primaryRoleLabel(user) {
+  const role = String((user?.roles || [])[0] || user?.role || '');
+  return ROLE_LABELS[role] || role || '-';
 }
 
 function renderBreadcrumb(routeView) {
@@ -124,7 +141,7 @@ export function renderShell({ state, routeView, contentHtml, commandPalette }) {
               <span>命令面板</span><kbd>Ctrl/⌘ K</kbd>
             </button>
             <span class="pill">${user?.username || '未登录'}</span>
-            <span class="pill">${(user?.roles || [])[0] || user?.role || '-'}</span>
+            <span class="pill">${primaryRoleLabel(user)}</span>
             <span class="pill">${user?.tenant_code || user?.tenant_id || '-'}</span>
             <button id="logoutBtn" class="ghost">退出登录</button>
           </div>
