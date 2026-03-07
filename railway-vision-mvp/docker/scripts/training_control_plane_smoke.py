@@ -459,6 +459,80 @@ def run_smoke(report_dir: Path) -> dict[str, Any]:
     _assert(empty_job["asset_count"] == 0, "empty training job did not keep asset_count=0")
     _assert(empty_job["validation_asset_count"] == 0, "empty training job did not keep validation_asset_count=0")
 
+    control_job = _json_request(
+        "POST",
+        "/training/jobs",
+        token=buyer_token,
+        payload={
+            "asset_ids": [train_asset["id"]],
+            "validation_asset_ids": [],
+            "base_model_id": base_model["id"],
+            "training_kind": "finetune",
+            "target_model_code": f"qa_control_{uuid.uuid4().hex[:8]}",
+            "target_version": f"v1.{int(time.time())}.control",
+            "worker_selector": {"hosts": ["qa-smoke.local"]},
+            "spec": {"note": "control action smoke"},
+        },
+    )
+    control_job_id = control_job["id"]
+    cancelled_control = _json_request(
+        "POST",
+        f"/training/jobs/{control_job_id}/cancel",
+        token=buyer_token,
+        payload={"note": "qa smoke cancel"},
+    )
+    _assert(cancelled_control["status"] == "CANCELLED", "control job did not enter CANCELLED")
+
+    retried_control = _json_request(
+        "POST",
+        f"/training/jobs/{control_job_id}/retry",
+        token=buyer_token,
+        payload={"note": "qa smoke retry"},
+    )
+    _assert(retried_control["status"] == "PENDING", "control job did not return to PENDING after retry")
+    _assert(retried_control["assigned_worker_code"] in (None, ""), "control job did not clear assigned worker on retry")
+
+    reassigned_control = _json_request(
+        "POST",
+        f"/training/jobs/{control_job_id}/reassign",
+        token=buyer_token,
+        payload={"worker_code": worker_code, "worker_host": "qa-smoke.local", "note": "qa smoke reassign"},
+    )
+    control_selector = reassigned_control.get("worker_selector") or {}
+    _assert(reassigned_control["status"] == "PENDING", "control job did not stay PENDING after reassign")
+    _assert(worker_code in (control_selector.get("worker_codes") or []), "control job reassign did not pin worker_code")
+    _assert("qa-smoke.local" in (control_selector.get("hosts") or []), "control job reassign did not pin worker host")
+
+    control_pull = _json_request(
+        "POST",
+        "/training/workers/pull-jobs",
+        payload={"limit": 5},
+        extra_headers=worker_headers,
+    )
+    assigned_control = next((row for row in control_pull["jobs"] if row["id"] == control_job_id), None)
+    _assert(assigned_control is not None, "reassigned control job was not assigned to QA worker")
+    control_signal_before_cancel = _json_request(
+        "GET",
+        f"/training/workers/job-control?{parse.urlencode({'job_id': control_job_id})}",
+        extra_headers=worker_headers,
+    )
+    _assert(control_signal_before_cancel["should_stop"] is False, "assigned control job should not request stop before cancel")
+
+    cancelled_assigned_control = _json_request(
+        "POST",
+        f"/training/jobs/{control_job_id}/cancel",
+        token=buyer_token,
+        payload={"note": "qa smoke cancel after assign"},
+    )
+    _assert(cancelled_assigned_control["status"] == "CANCELLED", "assigned control job did not cancel successfully")
+    control_signal_after_cancel = _json_request(
+        "GET",
+        f"/training/workers/job-control?{parse.urlencode({'job_id': control_job_id})}",
+        extra_headers=worker_headers,
+    )
+    _assert(control_signal_after_cancel["should_stop"] is True, "cancelled control job did not send stop signal")
+    _assert(control_signal_after_cancel["status"] == "CANCELLED", "cancelled control job stop signal status mismatch")
+
     audit_checks = {
         "TRAINING_JOB_CREATE": _query_audit(admin_token, "TRAINING_JOB_CREATE", resource_id=job_id),
         "TRAINING_JOB_ASSIGN": _query_audit(admin_token, "TRAINING_JOB_ASSIGN", resource_id=job_id),
@@ -469,6 +543,11 @@ def run_smoke(report_dir: Path) -> dict[str, Any]:
         "TRAINING_WORKER_REGISTER": _query_audit(admin_token, "TRAINING_WORKER_REGISTER", resource_id=worker["id"]),
         "TRAINING_WORKER_HEARTBEAT": _query_audit(admin_token, "TRAINING_WORKER_HEARTBEAT", limit=30),
     }
+    control_audit_checks = {
+        "TRAINING_JOB_CANCEL": _query_audit(admin_token, "TRAINING_JOB_CANCEL", resource_id=control_job_id),
+        "TRAINING_JOB_RETRY": _query_audit(admin_token, "TRAINING_JOB_RETRY", resource_id=control_job_id),
+        "TRAINING_JOB_REASSIGN": _query_audit(admin_token, "TRAINING_JOB_REASSIGN", resource_id=control_job_id),
+    }
     _assert(len(audit_checks["TRAINING_JOB_CREATE"]) >= 1, "missing TRAINING_JOB_CREATE audit log")
     _assert(len(audit_checks["TRAINING_JOB_ASSIGN"]) >= 1, "missing TRAINING_JOB_ASSIGN audit log")
     _assert(len(audit_checks["TRAINING_JOB_UPDATE"]) >= 2, "missing TRAINING_JOB_UPDATE audit logs")
@@ -476,6 +555,9 @@ def run_smoke(report_dir: Path) -> dict[str, Any]:
     _assert(len(audit_checks["TRAINING_MODEL_PULL"]) >= 1, "missing TRAINING_MODEL_PULL audit log")
     _assert(len(audit_checks["TRAINING_CANDIDATE_UPLOAD"]) >= 1, "missing TRAINING_CANDIDATE_UPLOAD audit log")
     _assert(len(audit_checks["TRAINING_WORKER_REGISTER"]) >= 1, "missing TRAINING_WORKER_REGISTER audit log")
+    _assert(len(control_audit_checks["TRAINING_JOB_CANCEL"]) >= 2, "missing TRAINING_JOB_CANCEL audit logs")
+    _assert(len(control_audit_checks["TRAINING_JOB_RETRY"]) >= 1, "missing TRAINING_JOB_RETRY audit log")
+    _assert(len(control_audit_checks["TRAINING_JOB_REASSIGN"]) >= 1, "missing TRAINING_JOB_REASSIGN audit log")
     heartbeat_logs = [
         row for row in audit_checks["TRAINING_WORKER_HEARTBEAT"] if (row.get("detail") or {}).get("worker_code") == worker_code
     ]
@@ -490,7 +572,14 @@ def run_smoke(report_dir: Path) -> dict[str, Any]:
         "candidate_model_code": candidate_model["model_code"],
         "candidate_model_version": candidate_model["version"],
         "empty_asset_job_id": empty_job["id"],
+        "control_job_id": control_job_id,
         "audit_counts": {key: len(value) if isinstance(value, list) else 0 for key, value in audit_checks.items()},
+        "control_audit_counts": {key: len(value) if isinstance(value, list) else 0 for key, value in control_audit_checks.items()},
+        "control_signal": {
+            "before_cancel_should_stop": control_signal_before_cancel["should_stop"],
+            "after_cancel_should_stop": control_signal_after_cancel["should_stop"],
+            "after_cancel_status": control_signal_after_cancel["status"],
+        },
     }
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

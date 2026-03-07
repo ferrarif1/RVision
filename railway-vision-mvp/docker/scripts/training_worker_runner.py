@@ -23,7 +23,7 @@ import sys
 import time
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 from cryptography.fernet import Fernet
@@ -31,6 +31,14 @@ from cryptography.fernet import Fernet
 
 class WorkerError(Exception):
     pass
+
+
+class JobInterrupted(WorkerError):
+    def __init__(self, job_id: str, reason: str, status: str):
+        self.job_id = job_id
+        self.reason = reason
+        self.status = status
+        super().__init__(f"job {job_id} interrupted: {reason} ({status})")
 
 
 DATASET_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
@@ -186,9 +194,18 @@ def _extract_archive_asset(archive_path: Path, extract_root: Path) -> dict[str, 
     }
 
 
-def _mock_train(output_model_path: Path, train_manifest: Path, val_manifest: Path, base_model_path: Path | None, spec: dict[str, Any]) -> dict[str, Any]:
+def _mock_train(
+    output_model_path: Path,
+    train_manifest: Path,
+    val_manifest: Path,
+    base_model_path: Path | None,
+    spec: dict[str, Any],
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     train_rows = json.loads(train_manifest.read_text(encoding="utf-8"))
     val_rows = json.loads(val_manifest.read_text(encoding="utf-8")) if val_manifest.exists() else []
+    if progress_callback:
+        progress_callback({"stage": "mock_training", "epoch": 0})
     train_resource_count = _resource_count_from_rows(train_rows)
     val_resource_count = _resource_count_from_rows(val_rows)
     payload = {
@@ -288,7 +305,14 @@ def _evaluate(data: list[tuple[list[float], int]], weights: list[list[float]], b
     return loss / len(data), correct / len(data)
 
 
-def _builtin_train(output_model_path: Path, train_manifest: Path, val_manifest: Path, base_model_path: Path | None, spec: dict[str, Any]) -> dict[str, Any]:
+def _builtin_train(
+    output_model_path: Path,
+    train_manifest: Path,
+    val_manifest: Path,
+    base_model_path: Path | None,
+    spec: dict[str, Any],
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     train_rows = json.loads(train_manifest.read_text(encoding="utf-8"))
     val_rows = json.loads(val_manifest.read_text(encoding="utf-8")) if val_manifest.exists() else []
 
@@ -343,6 +367,8 @@ def _builtin_train(output_model_path: Path, train_manifest: Path, val_manifest: 
 
     final_loss = 0.0
     for _epoch in range(epochs):
+        if progress_callback:
+            progress_callback({"stage": "training_epoch", "epoch": _epoch + 1, "epochs": epochs})
         for features, target in train_data:
             logits = [_dot(weight, features) + bias[idx] for idx, weight in enumerate(weights)]
             probs = _softmax(logits)
@@ -441,6 +467,14 @@ class TrainingWorkerRunner:
             },
         )
 
+    def job_control(self, job_id: str) -> dict[str, Any]:
+        return self._request_json("GET", f"/training/workers/job-control?job_id={job_id}")
+
+    def ensure_job_active(self, job_id: str, stage: str) -> None:
+        control = self.job_control(job_id)
+        if control.get("should_stop"):
+            raise JobInterrupted(job_id, str(control.get("reason") or stage), str(control.get("status") or "UNKNOWN"))
+
     def pull_asset(self, job_id: str, asset_id: str, target_file: Path) -> dict[str, Any]:
         data = self._request_json("GET", f"/training/workers/pull-asset?job_id={job_id}&asset_id={asset_id}")
         size = _decode_to_file(data["file_b64"], target_file)
@@ -519,9 +553,27 @@ class TrainingWorkerRunner:
             }
             return self._request_json("POST", "/training/workers/upload-candidate", data=data, files=files)
 
-    def _run_train_command(self, cmd_template: str, context: dict[str, str]) -> dict[str, Any]:
+    def _run_train_command(self, cmd_template: str, context: dict[str, str], job_id: str) -> dict[str, Any]:
         cmd = cmd_template.format(**context)
-        _run_cmd(cmd)
+        proc = subprocess.Popen(cmd, shell=True)
+        try:
+            while True:
+                rc = proc.poll()
+                if rc is not None:
+                    if rc != 0:
+                        raise WorkerError(f"command failed({rc}): {cmd}")
+                    break
+                self.ensure_job_active(job_id, "external_training")
+                time.sleep(max(1, int(self.args.control_poll_seconds)))
+        except Exception:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=5)
+            raise
         metrics_path = Path(context["metrics_json"])
         if metrics_path.exists():
             return json.loads(metrics_path.read_text(encoding="utf-8"))
@@ -537,15 +589,18 @@ class TrainingWorkerRunner:
         metrics_json = job_dir / "output" / "metrics.json"
         job_dir.mkdir(parents=True, exist_ok=True)
 
+        self.ensure_job_active(job_id, "start")
         self.push_update(job_id, "RUNNING", {"stage": "assets_sync"})
 
         train_rows: list[dict[str, Any]] = []
         for idx, asset in enumerate(job.get("assets", []), start=1):
+            self.ensure_job_active(job_id, "assets_sync")
             target_file = train_dir / f"train_{idx}_{asset.get('id', 'asset')}_{asset.get('file_name', 'blob.bin')}"
             train_rows.append(self.pull_asset(job_id, asset["id"], target_file))
 
         val_rows: list[dict[str, Any]] = []
         for idx, asset in enumerate(job.get("validation_assets", []), start=1):
+            self.ensure_job_active(job_id, "validation_assets_sync")
             target_file = val_dir / f"val_{idx}_{asset.get('id', 'asset')}_{asset.get('file_name', 'blob.bin')}"
             val_rows.append(self.pull_asset(job_id, asset["id"], target_file))
 
@@ -557,9 +612,11 @@ class TrainingWorkerRunner:
         base_model_path: Path | None = None
         base_manifest: dict[str, Any] = {}
         if job.get("base_model"):
+            self.ensure_job_active(job_id, "base_model_sync")
             self.push_update(job_id, "RUNNING", {"stage": "base_model_sync"})
             base_model_path, base_manifest = self.pull_base_model(job_id, job_dir)
 
+        self.ensure_job_active(job_id, "training_prepare")
         self.push_update(job_id, "RUNNING", {"stage": "training"})
         started = _now_ts()
         if self.args.trainer_cmd:
@@ -573,16 +630,32 @@ class TrainingWorkerRunner:
                 "metrics_json": str(metrics_json),
             }
             _safe_json_write(Path(context["job_json"]), job)
-            metrics = self._run_train_command(self.args.trainer_cmd, context)
+            metrics = self._run_train_command(self.args.trainer_cmd, context, job_id)
         else:
             if self.args.trainer_mode == "mock":
-                metrics = _mock_train(output_model, train_manifest, val_manifest, base_model_path, job.get("spec") or {})
+                metrics = _mock_train(
+                    output_model,
+                    train_manifest,
+                    val_manifest,
+                    base_model_path,
+                    job.get("spec") or {},
+                    progress_callback=lambda _meta: self.ensure_job_active(job_id, "mock_training"),
+                )
             else:
-                metrics = _builtin_train(output_model, train_manifest, val_manifest, base_model_path, job.get("spec") or {})
+                metrics = _builtin_train(
+                    output_model,
+                    train_manifest,
+                    val_manifest,
+                    base_model_path,
+                    job.get("spec") or {},
+                    progress_callback=lambda _meta: self.ensure_job_active(job_id, "builtin_training"),
+                )
             _safe_json_write(metrics_json, metrics)
 
+        self.ensure_job_active(job_id, "package_prepare")
         self.push_update(job_id, "RUNNING", {"stage": "package"})
         self.package_candidate(output_model, job, package_zip)
+        self.ensure_job_active(job_id, "candidate_upload")
         candidate = self.upload_candidate(job_id, package_zip)
 
         elapsed = round(_now_ts() - started, 3)
@@ -610,6 +683,9 @@ class TrainingWorkerRunner:
             for job in jobs:
                 try:
                     self.process_job(job)
+                    if self.args.once:
+                        return
+                except JobInterrupted:
                     if self.args.once:
                         return
                 except Exception as exc:  # noqa: BLE001
@@ -644,6 +720,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--training-summary", default=os.getenv("TRAINING_SUMMARY", "candidate generated by training_worker_runner"))
     parser.add_argument("--poll-seconds", type=int, default=int(os.getenv("TRAINING_POLL_SECONDS", "10")))
     parser.add_argument("--pull-limit", type=int, default=int(os.getenv("TRAINING_PULL_LIMIT", "1")))
+    parser.add_argument("--control-poll-seconds", type=int, default=int(os.getenv("TRAINING_CONTROL_POLL_SECONDS", "2")))
     parser.add_argument("--trainer-cmd", default=os.getenv("TRAINING_TRAINER_CMD", ""))
     parser.add_argument(
         "--trainer-mode",

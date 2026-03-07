@@ -9,11 +9,13 @@
 - `training_jobs`
   - 创建训练作业
   - 查询训练作业
+  - 取消 / 重试 / 改派训练作业
   - 记录作业状态、输入资产、目标模型、worker 选择器、输出摘要
 - `training_workers`
   - 注册 worker
   - worker 心跳
   - worker 拉取待执行作业
+  - worker 查询作业控制信号（继续 / 停止）
   - worker 受控拉取训练资产
   - worker 受控拉取基线模型包
   - worker 上传候选模型包
@@ -25,6 +27,9 @@
   - `TRAINING_JOB_CREATE`
   - `TRAINING_JOB_ASSIGN`
   - `TRAINING_JOB_UPDATE`
+  - `TRAINING_JOB_CANCEL`
+  - `TRAINING_JOB_RETRY`
+  - `TRAINING_JOB_REASSIGN`
   - `TRAINING_WORKER_REGISTER`
   - `TRAINING_WORKER_HEARTBEAT`
   - `TRAINING_ASSET_PULL`
@@ -35,6 +40,7 @@
 
 - 新增 `docker/scripts/training_worker_runner.py`，实现 worker 端完整执行循环：
   - 心跳、拉取作业
+  - 查询作业控制信号，支持运行中取消后的 worker 侧中止
   - 受控拉取训练/验证资产
   - 受控拉取并解密基线模型
   - 执行训练命令钩子（`--trainer-cmd`）或内置 mock 微调
@@ -55,6 +61,9 @@
 - `POST /training/jobs`
 - `GET /training/jobs`
 - `GET /training/jobs/{job_id}`
+- `POST /training/jobs/{job_id}/cancel`
+- `POST /training/jobs/{job_id}/retry`
+- `POST /training/jobs/{job_id}/reassign`
 - `POST /training/workers/register`
 - `GET /training/workers`
 
@@ -62,6 +71,7 @@ worker 侧：
 
 - `POST /training/workers/heartbeat`
 - `POST /training/workers/pull-jobs`
+- `GET /training/workers/job-control`
 - `GET /training/workers/pull-asset`
 - `POST /training/workers/pull-base-model`
 - `POST /training/workers/upload-candidate`
@@ -129,11 +139,12 @@ worker 侧：
 
 1. `POST /training/workers/heartbeat`
 2. `POST /training/workers/pull-jobs`
-3. `GET /training/workers/pull-asset`
-4. `POST /training/workers/pull-base-model`
-5. 本地训练（外部命令或内置 mock）
-6. `POST /training/workers/upload-candidate`
-7. `POST /training/workers/push-update`
+3. `GET /training/workers/job-control`
+4. `GET /training/workers/pull-asset`
+5. `POST /training/workers/pull-base-model`
+6. 本地训练（外部命令或内置 mock）
+7. `POST /training/workers/upload-candidate`
+8. `POST /training/workers/push-update`
 
 ### 6.2 快速运行
 

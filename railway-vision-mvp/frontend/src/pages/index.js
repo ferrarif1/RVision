@@ -1260,7 +1260,7 @@ function pageTraining(route, rawCtx) {
               <table class="table">
                 <thead>
                   <tr>
-                    <th>job_code(作业编码)</th><th>status(状态)</th><th>kind(类型)</th><th>train/val(资产数)</th><th>base_model(基础模型)</th><th>candidate_model(候选模型)</th><th>worker(执行节点)</th><th>创建时间</th>
+                    <th>job_code(作业编码)</th><th>status(状态)</th><th>kind(类型)</th><th>train/val(资产数)</th><th>base_model(基础模型)</th><th>candidate_model(候选模型)</th><th>worker(执行节点)</th><th>创建时间</th><th>操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1274,12 +1274,61 @@ function pageTraining(route, rawCtx) {
                       <td class="mono">${esc(row.candidate_model ? `${row.candidate_model.model_code}:${row.candidate_model.version}` : '-')}</td>
                       <td>${esc(row.assigned_worker_code || row.worker_selector?.host || row.worker_selector?.hosts?.[0] || '-')}</td>
                       <td>${formatDateTime(row.created_at)}</td>
+                      <td>
+                        <div class="row-actions">
+                          ${row.can_cancel ? `<button class="ghost" type="button" data-training-cancel="${esc(row.id)}">取消</button>` : ''}
+                          ${row.can_retry ? `<button class="ghost" type="button" data-training-retry="${esc(row.id)}">重试</button>` : ''}
+                          ${row.can_reassign ? `<button class="ghost" type="button" data-training-reassign="${esc(row.id)}">改派到当前训练机</button>` : ''}
+                        </div>
+                      </td>
                     </tr>
                   `).join('')}
                 </tbody>
               </table>
             </div>
           `;
+          jobsWrap.querySelectorAll('[data-training-cancel]').forEach((button) => {
+            button.addEventListener('click', async () => {
+              button.disabled = true;
+              await performTrainingJobAction(
+                button.getAttribute('data-training-cancel') || '',
+                'cancel',
+                { note: 'training_page_cancel' },
+                '训练作业已取消',
+              );
+              button.disabled = false;
+            });
+          });
+          jobsWrap.querySelectorAll('[data-training-retry]').forEach((button) => {
+            button.addEventListener('click', async () => {
+              button.disabled = true;
+              await performTrainingJobAction(
+                button.getAttribute('data-training-retry') || '',
+                'retry',
+                { note: 'training_page_retry' },
+                '训练作业已重置为待派发',
+              );
+              button.disabled = false;
+            });
+          });
+          jobsWrap.querySelectorAll('[data-training-reassign]').forEach((button) => {
+            button.addEventListener('click', async () => {
+              const workerCode = String(workerCodeInput?.value || '').trim();
+              const workerHost = String(workerHostInput?.value || '').trim();
+              if (!workerCode && !workerHost) {
+                ctx.toast('请先在训练机池里选一台机器，再执行改派', 'error');
+                return;
+              }
+              button.disabled = true;
+              await performTrainingJobAction(
+                button.getAttribute('data-training-reassign') || '',
+                'reassign',
+                { worker_code: workerCode || null, worker_host: workerHost || null, note: 'training_page_reassign' },
+                '训练作业已改派到当前训练机',
+              );
+              button.disabled = false;
+            });
+          });
         } catch (error) {
           jobsWrap.innerHTML = renderError(error.message);
         }
@@ -1371,6 +1420,16 @@ function pageTraining(route, rawCtx) {
           <span>训练集版本：${esc(selectedTrainVersions.length ? selectedTrainVersions.map((row) => `${row.dataset_label}:${row.version}`).join(' / ') : `${trainAssetIds.length} 个资产`)}</span>
           <span>验证集版本：${esc(selectedValidationVersions.length ? selectedValidationVersions.map((row) => `${row.dataset_label}:${row.version}`).join(' / ') : `${validationAssetIds.length} 个资产`)}</span>
         `;
+      }
+
+      async function performTrainingJobAction(jobId, action, payload, successMessage) {
+        try {
+          await ctx.post(`/training/jobs/${jobId}/${action}`, payload || {});
+          ctx.toast(successMessage);
+          await loadJobTable();
+        } catch (error) {
+          ctx.toast(error.message || '训练作业操作失败', 'error');
+        }
       }
 
       function fillModelSelection(modelId) {

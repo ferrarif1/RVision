@@ -91,6 +91,16 @@ class TrainingWorkerPullBaseModelRequest(BaseModel):
     job_id: str = Field(description="训练作业ID / Training job ID")
 
 
+class TrainingJobActionRequest(BaseModel):
+    note: str | None = Field(default=None, description="动作说明 / Optional operator note")
+
+
+class TrainingJobReassignRequest(BaseModel):
+    worker_code: str | None = Field(default=None, description="目标 Worker 编码 / Target worker code")
+    worker_host: str | None = Field(default=None, description="目标 Worker 主机 / Target worker host or IP")
+    note: str | None = Field(default=None, description="改派说明 / Optional reassign note")
+
+
 def _job_visible_to_user(job: TrainingJob, current_user: AuthUser) -> bool:
     if is_platform_user(current_user.roles):
         return True
@@ -209,6 +219,9 @@ def _serialize_job(db: Session, job: TrainingJob) -> dict[str, Any]:
         "output_summary": job.output_summary or {},
         "error_message": job.error_message,
         "dispatch_count": job.dispatch_count,
+        "can_cancel": job.status not in TRAINING_JOB_TERMINAL_STATUSES,
+        "can_retry": job.status in {TRAINING_JOB_STATUS_FAILED, TRAINING_JOB_STATUS_CANCELLED} and not bool(job.candidate_model_id),
+        "can_reassign": job.status in {TRAINING_JOB_STATUS_PENDING, TRAINING_JOB_STATUS_DISPATCHED, TRAINING_JOB_STATUS_FAILED, TRAINING_JOB_STATUS_CANCELLED} and not (job.status in TRAINING_JOB_TERMINAL_STATUSES and bool(job.candidate_model_id)),
         "created_at": job.created_at,
         "started_at": job.started_at,
         "finished_at": job.finished_at,
@@ -281,6 +294,47 @@ def _get_worker_job_or_403(db: Session, worker_code: str, job_id: str) -> Traini
     if not job.assigned_worker_code or job.assigned_worker_code != worker_code:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Training job assigned to a different worker")
     return job
+
+
+def _control_note(value: str | None) -> str | None:
+    cleaned = str(value or "").strip()
+    return cleaned or None
+
+
+def _ensure_retryable(job: TrainingJob, action_name: str) -> None:
+    if job.candidate_model_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Training job already linked a candidate model, cannot {action_name}",
+        )
+
+
+def _resolve_target_worker(db: Session, worker_code: str | None, worker_host: str | None) -> tuple[TrainingWorker | None, str | None, str | None]:
+    clean_code = _clean_optional(worker_code)
+    clean_host = _clean_optional(worker_host)
+    if not clean_code and not clean_host:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="worker_code or worker_host is required")
+
+    target_worker = None
+    if clean_code:
+        target_worker = db.query(TrainingWorker).filter(TrainingWorker.worker_code == clean_code).first()
+        if not target_worker:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target worker not found")
+        if target_worker.status != "ACTIVE":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Target worker is not ACTIVE")
+        if clean_host and str(target_worker.host or "").strip().lower() != clean_host.lower():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="worker_code does not match worker_host")
+        clean_host = clean_host or _clean_optional(target_worker.host)
+    elif clean_host:
+        target_worker = next(
+            (
+                row
+                for row in db.query(TrainingWorker).all()
+                if row.status == "ACTIVE" and str(row.host or "").strip().lower() == clean_host.lower()
+            ),
+            None,
+        )
+    return target_worker, clean_code, clean_host
 
 
 def _platform_meta_for_candidate(job: TrainingJob, base_model: ModelRecord | None, dataset_label: str | None, training_round: str | None, training_summary: str | None) -> dict[str, Any]:
@@ -422,6 +476,161 @@ def get_training_job(
     current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_READ_ROLES)),
 ):
     job = _get_training_job_or_404(db, job_id, current_user)
+    return _serialize_job(db, job)
+
+
+@router.post("/jobs/{job_id}/cancel")
+def cancel_training_job(
+    job_id: str,
+    payload: TrainingJobActionRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_CREATE_ROLES)),
+):
+    job = _get_training_job_or_404(db, job_id, current_user)
+    if job.status in TRAINING_JOB_TERMINAL_STATUSES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Training job already terminal")
+
+    previous_status = job.status
+    note = _control_note(payload.note)
+    existing_summary = job.output_summary if isinstance(job.output_summary, dict) else {}
+    job.status = TRAINING_JOB_STATUS_CANCELLED
+    job.finished_at = datetime.utcnow()
+    job.error_message = note or "Cancelled by operator"
+    job.output_summary = {
+        **existing_summary,
+        "last_control_action": "cancel",
+        "cancelled_at": datetime.utcnow().isoformat(),
+        "cancelled_by": current_user.username,
+        "cancel_note": note,
+        "previous_status": previous_status,
+    }
+    db.add(job)
+    db.commit()
+
+    record_audit(
+        db,
+        action=actions.TRAINING_JOB_CANCEL,
+        resource_type="training_job",
+        resource_id=job.id,
+        detail={"job_code": job.job_code, "previous_status": previous_status, "note": note},
+        request=request,
+        actor=current_user,
+    )
+    return _serialize_job(db, job)
+
+
+@router.post("/jobs/{job_id}/retry")
+def retry_training_job(
+    job_id: str,
+    payload: TrainingJobActionRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_CREATE_ROLES)),
+):
+    job = _get_training_job_or_404(db, job_id, current_user)
+    if job.status not in {TRAINING_JOB_STATUS_FAILED, TRAINING_JOB_STATUS_CANCELLED}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only FAILED or CANCELLED jobs can be retried")
+    _ensure_retryable(job, "retry")
+
+    previous_status = job.status
+    previous_error = job.error_message
+    note = _control_note(payload.note)
+    existing_summary = job.output_summary if isinstance(job.output_summary, dict) else {}
+    job.status = TRAINING_JOB_STATUS_PENDING
+    job.assigned_worker_code = None
+    job.started_at = None
+    job.finished_at = None
+    job.error_message = None
+    job.output_summary = {
+        **existing_summary,
+        "retry_count": int(existing_summary.get("retry_count") or 0) + 1,
+        "last_control_action": "retry",
+        "last_retry_at": datetime.utcnow().isoformat(),
+        "last_retry_by": current_user.username,
+        "last_retry_note": note,
+        "last_terminal_status": previous_status,
+        "last_terminal_error": previous_error,
+    }
+    db.add(job)
+    db.commit()
+
+    record_audit(
+        db,
+        action=actions.TRAINING_JOB_RETRY,
+        resource_type="training_job",
+        resource_id=job.id,
+        detail={"job_code": job.job_code, "previous_status": previous_status, "note": note},
+        request=request,
+        actor=current_user,
+    )
+    return _serialize_job(db, job)
+
+
+@router.post("/jobs/{job_id}/reassign")
+def reassign_training_job(
+    job_id: str,
+    payload: TrainingJobReassignRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_CREATE_ROLES)),
+):
+    job = _get_training_job_or_404(db, job_id, current_user)
+    if job.status == TRAINING_JOB_STATUS_RUNNING:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="RUNNING job cannot be reassigned directly, cancel it first")
+    if job.status == TRAINING_JOB_STATUS_SUCCEEDED:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SUCCEEDED job cannot be reassigned")
+    if job.status in TRAINING_JOB_TERMINAL_STATUSES:
+        _ensure_retryable(job, "reassign")
+
+    target_worker, target_worker_code, target_worker_host = _resolve_target_worker(db, payload.worker_code, payload.worker_host)
+    note = _control_note(payload.note)
+    previous_status = job.status
+    existing_summary = job.output_summary if isinstance(job.output_summary, dict) else {}
+    worker_selector = dict(job.worker_selector or {})
+    if target_worker_code:
+        worker_selector["worker_codes"] = [target_worker_code]
+    elif target_worker and target_worker.worker_code:
+        worker_selector["worker_codes"] = [target_worker.worker_code]
+    if target_worker_host:
+        worker_selector["hosts"] = [target_worker_host]
+        worker_selector["host"] = target_worker_host
+
+    job.worker_selector = worker_selector
+    job.assigned_worker_code = None
+    job.started_at = None
+    job.finished_at = None
+    job.error_message = None
+    job.status = TRAINING_JOB_STATUS_PENDING
+    job.output_summary = {
+        **existing_summary,
+        "reassign_count": int(existing_summary.get("reassign_count") or 0) + 1,
+        "last_control_action": "reassign",
+        "last_reassign_at": datetime.utcnow().isoformat(),
+        "last_reassign_by": current_user.username,
+        "last_reassign_note": note,
+        "last_reassign_worker_code": target_worker_code or (target_worker.worker_code if target_worker else None),
+        "last_reassign_worker_host": target_worker_host,
+        "previous_status": previous_status,
+    }
+    db.add(job)
+    db.commit()
+
+    record_audit(
+        db,
+        action=actions.TRAINING_JOB_REASSIGN,
+        resource_type="training_job",
+        resource_id=job.id,
+        detail={
+            "job_code": job.job_code,
+            "previous_status": previous_status,
+            "worker_code": target_worker_code or (target_worker.worker_code if target_worker else None),
+            "worker_host": target_worker_host,
+            "note": note,
+        },
+        request=request,
+        actor=current_user,
+    )
     return _serialize_job(db, job)
 
 
@@ -578,6 +787,39 @@ def training_worker_pull_jobs(
 
     db.commit()
     return {"worker_code": worker.worker_code, "jobs": jobs}
+
+
+@router.get("/workers/job-control")
+def training_worker_job_control(
+    job_id: str = Query(..., description="训练作业ID / Training job ID"),
+    db: Session = Depends(get_db),
+    worker_ctx: TrainingWorkerContext = Depends(get_training_worker),
+):
+    job = db.query(TrainingJob).filter(TrainingJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Training job not found")
+
+    reason = None
+    should_stop = False
+    if job.status in TRAINING_JOB_TERMINAL_STATUSES:
+        should_stop = True
+        reason = f"terminal:{job.status.lower()}"
+    elif not job.assigned_worker_code:
+        should_stop = True
+        reason = "unassigned"
+    elif job.assigned_worker_code != worker_ctx.code:
+        should_stop = True
+        reason = "reassigned"
+
+    return {
+        "job_id": job.id,
+        "job_code": job.job_code,
+        "status": job.status,
+        "assigned_worker_code": job.assigned_worker_code,
+        "should_stop": should_stop,
+        "reason": reason,
+        "output_summary": job.output_summary if isinstance(job.output_summary, dict) else {},
+    }
 
 
 @router.get("/workers/pull-asset")
@@ -813,7 +1055,9 @@ def training_worker_push_update(
     job = db.query(TrainingJob).filter(TrainingJob.id == payload.job_id).first()
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Training job not found")
-    if job.assigned_worker_code and job.assigned_worker_code != worker_ctx.code:
+    if not job.assigned_worker_code:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Training job is not assigned to any worker")
+    if job.assigned_worker_code != worker_ctx.code:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Training job assigned to a different worker")
     if job.status in TRAINING_JOB_TERMINAL_STATUSES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Training job already terminal")
