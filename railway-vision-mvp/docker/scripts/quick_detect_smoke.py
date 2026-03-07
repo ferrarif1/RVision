@@ -9,7 +9,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib import error, request
+from urllib import error, parse, request
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -57,6 +57,18 @@ def _json_request(method: str, path: str, payload: dict | None = None, token: st
         except json.JSONDecodeError:
             parsed = {"detail": raw}
         return exc.code, parsed
+
+
+def _binary_request(method: str, path: str, token: str | None = None, timeout: int = 45) -> tuple[int, bytes, dict[str, str]]:
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = request.Request(url=f"{API_BASE}{path}", method=method, headers=headers)
+    try:
+        with request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read(), dict(resp.headers.items())
+    except error.HTTPError as exc:
+        return exc.code, exc.read(), dict(exc.headers.items())
 
 
 def _multipart_body(fields: dict[str, str], file_name: str, file_bytes: bytes, content_type: str) -> tuple[bytes, str]:
@@ -235,6 +247,144 @@ def run_smoke(report_dir: Path) -> dict:
         "object_count": result_json.get("object_count"),
         "matched_labels": sorted(matched_labels),
     }
+
+    reviewed_predictions = list(predictions)
+    first_bbox = (reviewed_predictions[0] or {}).get("bbox") if reviewed_predictions else None
+    _assert(isinstance(first_bbox, list) and len(first_bbox) == 4, "quick-detect result did not provide a valid bbox for review")
+    reviewed_predictions = [
+        {
+            "label": "bus_confirmed",
+            "score": 0.99,
+            "bbox": first_bbox,
+            "attributes": {"review_source": "manual"},
+        }
+    ]
+    status_code, reviewed = _json_request(
+        "POST",
+        f"/results/{focus.get('id')}/review",
+        {"predictions": reviewed_predictions, "note": "quick-detect smoke review"},
+        token,
+    )
+    _assert(status_code == 200, "quick-detect review save failed")
+    reviewed_result = reviewed.get("result") or {}
+    reviewed_json = reviewed_result.get("result_json") or {}
+    reviewed_labels = set(reviewed_json.get("matched_labels") or [])
+    if not reviewed_labels:
+        reviewed_labels.update(str(pred.get("label")) for pred in (reviewed_json.get("predictions") or []) if pred.get("label"))
+    _assert(reviewed_json.get("review_status") == "revised", "reviewed result did not enter revised state")
+    _assert("bus_confirmed" in reviewed_labels, "reviewed result missing revised label")
+    _assert(isinstance(reviewed_json.get("auto_predictions"), list) and reviewed_json.get("auto_predictions"), "reviewed result did not preserve auto_predictions")
+    report["checks"]["review_save"] = {
+        "result_id": reviewed_result.get("id"),
+        "review_status": reviewed_json.get("review_status"),
+        "matched_labels": sorted(reviewed_labels),
+        "prediction_count": len(reviewed_json.get("predictions") or []),
+    }
+
+    status_code, exported = _json_request(
+        "POST",
+        "/results/export-dataset",
+        {
+            "task_ids": [task_id],
+            "dataset_label": "quick-detect-smoke-dataset",
+            "asset_purpose": "training",
+            "include_screenshots": True,
+        },
+        token,
+    )
+    _assert(status_code == 200, "quick-detect dataset export failed")
+    exported_asset = exported.get("asset") or {}
+    exported_meta = exported_asset.get("meta") or {}
+    _assert(exported_asset.get("asset_type") == "archive", "exported dataset asset type mismatch")
+    _assert(exported_meta.get("archive_kind") == "result_annotation_bundle", "exported dataset archive kind mismatch")
+    _assert(int(exported_meta.get("archive_resource_count") or 0) >= 1, "exported dataset resource count mismatch")
+    _assert("bus_confirmed" in set(exported_meta.get("label_vocab") or []), "exported dataset missing reviewed label")
+    dataset_version = exported.get("dataset_version") or {}
+    _assert(dataset_version.get("id"), "dataset export did not return dataset_version id")
+    _assert(dataset_version.get("asset_id") == exported_asset.get("id"), "dataset_version asset binding mismatch")
+    report["checks"]["dataset_export"] = {
+        "asset_id": exported_asset.get("id"),
+        "file_name": exported_asset.get("file_name"),
+        "archive_kind": exported_meta.get("archive_kind"),
+        "archive_resource_count": exported_meta.get("archive_resource_count"),
+        "label_vocab": exported_meta.get("label_vocab"),
+        "dataset_version": dataset_version,
+    }
+
+    status_code, dataset_versions = _json_request("GET", "/assets/dataset-versions?limit=20", token=token)
+    _assert(status_code == 200, "dataset version list query failed")
+    matched_dataset_version = next((row for row in (dataset_versions or []) if row.get("id") == dataset_version.get("id")), None)
+    _assert(matched_dataset_version is not None, "dataset version record not found in dataset version flow")
+    report["checks"]["dataset_version_flow"] = {
+        "dataset_version_id": matched_dataset_version.get("id"),
+        "dataset_label": matched_dataset_version.get("dataset_label"),
+        "version": matched_dataset_version.get("version"),
+        "asset_id": matched_dataset_version.get("asset_id"),
+    }
+
+    status_code, recommended = _json_request(
+        "POST",
+        f"/assets/dataset-versions/{dataset_version.get('id')}/recommend",
+        {"asset_purpose": "training", "note": "quick-detect smoke recommend"},
+        token,
+    )
+    _assert(status_code == 200, "dataset version recommend failed")
+    recommended_row = (recommended or {}).get("dataset_version") or {}
+    recommended_summary = recommended_row.get("summary") or {}
+    _assert(recommended_row.get("recommended") is True, "dataset version recommend did not set recommended flag")
+    _assert(recommended_summary.get("recommended_for") == "training", "dataset version recommend target purpose mismatch")
+    report["checks"]["dataset_version_recommend"] = {
+        "dataset_version_id": recommended_row.get("id"),
+        "recommended": recommended_row.get("recommended"),
+        "recommended_for": recommended_summary.get("recommended_for"),
+    }
+
+    status_code, compared = _json_request(
+        "GET",
+        f"/assets/dataset-versions/compare?left_id={dataset_version.get('id')}&right_id={dataset_version.get('id')}",
+        token=token,
+    )
+    _assert(status_code == 200, "dataset version compare failed")
+    diff = (compared or {}).get("diff") or {}
+    _assert(diff.get("same_dataset_key") is True, "dataset version compare same_dataset_key mismatch")
+    report["checks"]["dataset_version_compare"] = {
+        "same_dataset_key": diff.get("same_dataset_key"),
+        "task_count_delta": diff.get("task_count_delta"),
+        "resource_count_delta": diff.get("resource_count_delta"),
+        "reviewed_task_count_delta": diff.get("reviewed_task_count_delta"),
+    }
+
+    status_code, preview = _json_request(
+        "GET",
+        f"/assets/dataset-versions/{dataset_version.get('id')}/preview?sample_limit=3",
+        token=token,
+    )
+    _assert(status_code == 200, "dataset version preview failed")
+    preview_samples = preview.get("samples") or []
+    preview_manifest = preview.get("manifest") or {}
+    _assert(preview.get("dataset_version", {}).get("id") == dataset_version.get("id"), "dataset version preview id mismatch")
+    _assert(isinstance(preview_samples, list) and preview_samples, "dataset version preview returned no samples")
+    report["checks"]["dataset_version_preview"] = {
+        "dataset_version_id": preview.get("dataset_version", {}).get("id"),
+        "sample_count": len(preview_samples),
+        "manifest_task_count": preview_manifest.get("task_count"),
+        "preview_sample_ids": [row.get("sample_id") for row in preview_samples],
+    }
+
+    preview_member = next((row.get("preview_file") for row in preview_samples if row.get("preview_file")), None)
+    if preview_member:
+        status_code, preview_blob, preview_headers = _binary_request(
+            "GET",
+            f"/assets/dataset-versions/{dataset_version.get('id')}/preview-file?member={parse.quote(preview_member, safe='')}",
+            token=token,
+        )
+        _assert(status_code == 200, "dataset version preview file fetch failed")
+        _assert(len(preview_blob) > 0, "dataset version preview file is empty")
+        report["checks"]["dataset_version_preview_file"] = {
+            "member": preview_member,
+            "content_type": preview_headers.get("Content-Type") or preview_headers.get("content-type"),
+            "size": len(preview_blob),
+        }
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     _write_json(report_dir / f"quick_detect_smoke_{timestamp}.json", report)

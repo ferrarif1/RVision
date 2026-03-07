@@ -173,6 +173,24 @@ class DataAsset(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class DatasetVersion(Base):
+    __tablename__ = "dataset_versions"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    dataset_key = Column(String(128), nullable=False, index=True)
+    dataset_label = Column(String(255), nullable=False)
+    version = Column(String(64), nullable=False)
+    asset_id = Column(String(36), ForeignKey("data_assets.id", ondelete="CASCADE"), nullable=False, index=True)
+    asset_purpose = Column(String(32), nullable=False, default="training")
+    buyer_tenant_id = Column(String(36), ForeignKey("tenants.id"), nullable=True, index=True)
+    source_type = Column(String(32), nullable=False, default="result_export")
+    summary = Column(JSON, nullable=False, default=dict)
+    created_by = Column(String(36), ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint("dataset_key", "version", name="uq_dataset_key_version"),)
+
+
 class TrainingJob(Base):
     __tablename__ = "training_jobs"
 

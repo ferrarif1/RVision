@@ -1,17 +1,22 @@
 import hashlib
+import json
+import mimetypes
 import os
 import uuid
 import zipfile
+from datetime import datetime
 from pathlib import PurePosixPath
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import FileResponse, Response
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.audit import actions
 from app.core.config import get_settings
 from app.db.database import get_db
-from app.db.models import DataAsset, Tenant
+from app.db.models import DataAsset, DatasetVersion, Tenant
 from app.security.dependencies import AuthUser, require_roles
 from app.security.roles import ASSET_UPLOAD_ROLES, MODEL_READ_ROLES, is_buyer_user, is_platform_user, is_supplier_user
 from app.services.audit_service import record_audit
@@ -28,6 +33,11 @@ ARCHIVE_ALLOWED_PURPOSES = {"training", "finetune", "validation"}
 UPLOAD_CHUNK_BYTES = 1024 * 1024
 MAX_FILE_NAME_LENGTH = 255
 ARCHIVE_PREVIEW_LIMIT = 20
+
+
+class DatasetVersionRecommendRequest(BaseModel):
+    asset_purpose: str | None = Field(default=None, description="推荐用途 / Optional recommendation target purpose")
+    note: str | None = Field(default=None, description="推荐说明 / Optional recommendation note")
 
 
 def _safe_original_file_name(file_name: str | None) -> tuple[str, str]:
@@ -245,6 +255,56 @@ def _serialize_asset(asset: DataAsset) -> dict:
     }
 
 
+def _get_visible_asset_or_404(db: Session, asset_id: str, current_user: AuthUser) -> DataAsset:
+    asset = db.query(DataAsset).filter(DataAsset.id == asset_id).first()
+    if not asset:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+    if is_supplier_user(current_user.roles):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+    if is_buyer_user(current_user.roles) and asset.buyer_tenant_id != current_user.tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+    return asset
+
+
+def _get_visible_dataset_version_or_404(db: Session, version_id: str, current_user: AuthUser) -> DatasetVersion:
+    row = db.query(DatasetVersion).filter(DatasetVersion.id == version_id).first()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset version not found")
+    if is_supplier_user(current_user.roles):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset version not found")
+    if is_buyer_user(current_user.roles) and row.buyer_tenant_id != current_user.tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset version not found")
+    return row
+
+
+def _serialize_dataset_version(row: DatasetVersion, asset: DataAsset | None = None, buyer: Tenant | None = None) -> dict:
+    summary = row.summary or {}
+    return {
+        "id": row.id,
+        "dataset_key": row.dataset_key,
+        "dataset_label": row.dataset_label,
+        "version": row.version,
+        "asset_id": row.asset_id,
+        "asset_purpose": row.asset_purpose,
+        "buyer_tenant_id": row.buyer_tenant_id,
+        "buyer_tenant_code": buyer.tenant_code if buyer else None,
+        "buyer_tenant_name": buyer.name if buyer else None,
+        "source_type": row.source_type,
+        "summary": summary,
+        "recommended": bool(summary.get("recommended")),
+        "asset": {
+            "id": asset.id,
+            "file_name": asset.file_name,
+            "asset_type": asset.asset_type,
+            "meta": asset.meta if isinstance(asset.meta, dict) else {},
+            "created_at": asset.created_at,
+        }
+        if asset
+        else None,
+        "created_at": row.created_at,
+    }
+
+
 @router.get("")
 def list_assets(
     q: str | None = Query(default=None, description="关键词搜索 / Keyword search across file and metadata"),
@@ -323,6 +383,254 @@ def list_assets(
             }
         )
     return payload
+
+
+@router.get("/dataset-versions")
+def list_dataset_versions(
+    q: str | None = Query(default=None, description="关键词搜索 / Keyword search in dataset label or version"),
+    asset_purpose: str | None = Query(default=None, description="资产用途 / training|validation|finetune"),
+    buyer_tenant_code: str | None = Query(default=None, description="买家租户编码 / Buyer tenant code (platform role only)"),
+    limit: int = Query(default=100, ge=1, le=500, description="返回条数上限 / Max number of returned rows"),
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*MODEL_READ_ROLES)),
+):
+    if is_supplier_user(current_user.roles):
+        return []
+
+    query = db.query(DatasetVersion).order_by(DatasetVersion.created_at.desc())
+    if is_buyer_user(current_user.roles):
+        query = query.filter(DatasetVersion.buyer_tenant_id == current_user.tenant_id)
+    elif buyer_tenant_code and is_platform_user(current_user.roles):
+        buyer_tenant = (
+            db.query(Tenant)
+            .filter(Tenant.tenant_code == buyer_tenant_code, Tenant.tenant_type == "BUYER", Tenant.status == "ACTIVE")
+            .first()
+        )
+        if not buyer_tenant:
+            return []
+        query = query.filter(DatasetVersion.buyer_tenant_id == buyer_tenant.id)
+
+    if asset_purpose:
+        query = query.filter(DatasetVersion.asset_purpose == asset_purpose)
+
+    rows = query.limit(limit).all()
+    asset_ids = [row.asset_id for row in rows if row.asset_id]
+    asset_map = {row.id: row for row in db.query(DataAsset).filter(DataAsset.id.in_(asset_ids)).all()}
+    tenant_ids = {row.buyer_tenant_id for row in rows if row.buyer_tenant_id}
+    tenant_map = {row.id: row for row in db.query(Tenant).filter(Tenant.id.in_(tenant_ids)).all()}
+    keyword = str(q or "").strip().lower()
+    payload = []
+    for row in rows:
+        asset = asset_map.get(row.asset_id)
+        buyer = tenant_map.get(row.buyer_tenant_id)
+        if keyword:
+            haystacks = [
+                str(row.dataset_key or "").lower(),
+                str(row.dataset_label or "").lower(),
+                str(row.version or "").lower(),
+                str(row.asset_purpose or "").lower(),
+                str((row.summary or {}).get("label_vocab") or "").lower(),
+            ]
+            if not any(keyword in item for item in haystacks):
+                continue
+        payload.append(_serialize_dataset_version(row, asset=asset, buyer=buyer))
+    return payload
+
+
+@router.get("/dataset-versions/compare")
+def compare_dataset_versions(
+    left_id: str = Query(..., description="左侧版本ID / Left dataset version id"),
+    right_id: str = Query(..., description="右侧版本ID / Right dataset version id"),
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*MODEL_READ_ROLES)),
+):
+    left = _get_visible_dataset_version_or_404(db, left_id, current_user)
+    right = _get_visible_dataset_version_or_404(db, right_id, current_user)
+    left_asset = db.query(DataAsset).filter(DataAsset.id == left.asset_id).first() if left.asset_id else None
+    right_asset = db.query(DataAsset).filter(DataAsset.id == right.asset_id).first() if right.asset_id else None
+    left_summary = left.summary or {}
+    right_summary = right.summary or {}
+    left_labels = set(left_summary.get("label_vocab") or [])
+    right_labels = set(right_summary.get("label_vocab") or [])
+
+    return {
+        "left": _serialize_dataset_version(left, asset=left_asset),
+        "right": _serialize_dataset_version(right, asset=right_asset),
+        "diff": {
+            "same_dataset_key": left.dataset_key == right.dataset_key,
+            "task_count_delta": int(right_summary.get("task_count") or 0) - int(left_summary.get("task_count") or 0),
+            "resource_count_delta": int(right_summary.get("resource_count") or 0) - int(left_summary.get("resource_count") or 0),
+            "reviewed_task_count_delta": int(right_summary.get("reviewed_task_count") or 0) - int(left_summary.get("reviewed_task_count") or 0),
+            "labels_added": sorted(right_labels - left_labels),
+            "labels_removed": sorted(left_labels - right_labels),
+        },
+    }
+
+
+@router.post("/dataset-versions/{version_id}/recommend")
+def recommend_dataset_version(
+    version_id: str,
+    payload: DatasetVersionRecommendRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*ASSET_UPLOAD_ROLES)),
+):
+    row = _get_visible_dataset_version_or_404(db, version_id, current_user)
+    asset = _get_visible_asset_or_404(db, row.asset_id, current_user)
+    summary = dict(row.summary or {})
+    note = str(payload.note or "").strip() or None
+    target_purpose = str(payload.asset_purpose or row.asset_purpose or "").strip() or row.asset_purpose
+    summary.update(
+        {
+            "recommended": True,
+            "recommended_for": target_purpose,
+            "recommended_at": datetime.utcnow().isoformat(),
+            "recommended_by": current_user.username,
+            "recommended_note": note,
+        }
+    )
+    row.summary = summary
+    if target_purpose:
+        row.asset_purpose = target_purpose
+    db.add(row)
+
+    asset_meta = dict(asset.meta or {})
+    asset_meta.update(
+        {
+            "dataset_recommended": True,
+            "dataset_recommended_for": target_purpose,
+            "dataset_recommended_by": current_user.username,
+            "dataset_recommended_note": note,
+        }
+    )
+    asset.meta = asset_meta
+    db.add(asset)
+
+    record_audit(
+        db,
+        action=actions.DATASET_VERSION_RECOMMEND,
+        resource_type="dataset_version",
+        resource_id=row.id,
+        detail={
+            "dataset_key": row.dataset_key,
+            "dataset_label": row.dataset_label,
+            "version": row.version,
+            "asset_id": row.asset_id,
+            "asset_purpose": row.asset_purpose,
+            "recommended_for": target_purpose,
+            "note": note,
+        },
+        request=request,
+        actor=current_user,
+    )
+    db.commit()
+    db.refresh(row)
+    db.refresh(asset)
+    buyer = db.query(Tenant).filter(Tenant.id == row.buyer_tenant_id).first() if row.buyer_tenant_id else None
+    return {"dataset_version": _serialize_dataset_version(row, asset=asset, buyer=buyer)}
+
+
+@router.get("/dataset-versions/{version_id}/preview")
+def preview_dataset_version(
+    version_id: str,
+    sample_limit: int = Query(default=6, ge=1, le=20, description="样本预览条数 / Sample preview rows"),
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*MODEL_READ_ROLES)),
+):
+    row = _get_visible_dataset_version_or_404(db, version_id, current_user)
+    asset = _get_visible_asset_or_404(db, row.asset_id, current_user)
+    if asset.asset_type != "archive":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dataset preview is only available for archive assets")
+    if not os.path.exists(asset.storage_uri):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset archive file missing")
+
+    manifest: dict = {}
+    samples: list[dict] = []
+    try:
+        with zipfile.ZipFile(asset.storage_uri) as zf:
+            if "manifest.json" in zf.namelist():
+                manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+            if "annotations/records.jsonl" in zf.namelist():
+                lines = zf.read("annotations/records.jsonl").decode("utf-8").splitlines()
+                for line in lines[:sample_limit]:
+                    if not line.strip():
+                        continue
+                    record = json.loads(line)
+                    samples.append(
+                        {
+                            "sample_id": record.get("sample_id"),
+                            "task_id": record.get("task_id"),
+                            "asset_id": record.get("asset_id"),
+                            "asset_type": record.get("asset_type"),
+                            "source_file": record.get("source_file"),
+                            "source_file_name": record.get("source_file_name"),
+                            "object_prompt": record.get("object_prompt"),
+                            "object_count": record.get("object_count"),
+                            "matched_labels": record.get("matched_labels") or [],
+                            "review_status": record.get("review_status"),
+                            "preview_file": record.get("preview_file"),
+                        }
+                    )
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid dataset archive") from exc
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dataset archive metadata is malformed") from exc
+
+    buyer = db.query(Tenant).filter(Tenant.id == row.buyer_tenant_id).first() if row.buyer_tenant_id else None
+    return {
+        "dataset_version": _serialize_dataset_version(row, asset=asset, buyer=buyer),
+        "manifest": manifest,
+        "samples": samples,
+    }
+
+
+@router.get("/dataset-versions/{version_id}/preview-file")
+def get_dataset_version_preview_file(
+    version_id: str,
+    member: str = Query(..., description="压缩包成员路径 / Archive member path"),
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*MODEL_READ_ROLES)),
+):
+    row = _get_visible_dataset_version_or_404(db, version_id, current_user)
+    asset = _get_visible_asset_or_404(db, row.asset_id, current_user)
+    if asset.asset_type != "archive":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dataset preview file is only available for archive assets")
+    if not os.path.exists(asset.storage_uri):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset archive file missing")
+
+    normalized = str(_normalize_archive_member(member))
+    if not normalized.startswith(("previews/", "assets/")):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported dataset preview member")
+
+    try:
+        with zipfile.ZipFile(asset.storage_uri) as zf:
+            if normalized not in zf.namelist():
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset preview member missing")
+            payload = zf.read(normalized)
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid dataset archive") from exc
+
+    media_type = mimetypes.guess_type(normalized)[0] or "application/octet-stream"
+    return Response(content=payload, media_type=media_type)
+
+
+@router.get("/{asset_id}/content")
+def get_asset_content(
+    asset_id: str,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*MODEL_READ_ROLES)),
+):
+    asset = _get_visible_asset_or_404(db, asset_id, current_user)
+    if asset.asset_type not in {"image", "video", "screenshot"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Asset content preview is only available for image, video or screenshot assets")
+    if not os.path.exists(asset.storage_uri):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset file missing")
+    media_type = {
+        "image": "image/jpeg",
+        "video": "video/mp4",
+        "screenshot": "image/jpeg",
+    }.get(asset.asset_type, "application/octet-stream")
+    return FileResponse(asset.storage_uri, media_type=media_type, filename=asset.file_name)
 
 
 @router.post("/upload")

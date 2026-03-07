@@ -274,8 +274,8 @@ def run_smoke(report_dir: Path) -> dict[str, Any]:
     admin_token = admin["access_token"]
     buyer_token = buyer["access_token"]
 
-    models = _json_request("GET", "/models", token=admin_token)
-    base_model = _pick_base_model(models)
+    buyer_models = _json_request("GET", "/models", token=buyer_token)
+    base_model = _pick_base_model(buyer_models)
 
     train_asset = _upload_asset(
         buyer_token,
@@ -316,13 +316,15 @@ def run_smoke(report_dir: Path) -> dict[str, Any]:
     )
     worker_token = worker["bootstrap_token"]
     worker_headers = _worker_headers(worker_code, worker_token)
+    buyer_visible_workers = _json_request("GET", "/training/workers", token=buyer_token)
+    _assert(any(row["worker_code"] == worker_code for row in buyer_visible_workers), "buyer cannot view registered training worker")
 
     target_model_code = f"qa_candidate_{uuid.uuid4().hex[:8]}"
     target_version = f"v1.{int(time.time())}"
     job = _json_request(
         "POST",
         "/training/jobs",
-        token=admin_token,
+        token=buyer_token,
         payload={
             "asset_ids": [train_asset["id"]],
             "validation_asset_ids": [validation_asset["id"]],
@@ -330,11 +332,13 @@ def run_smoke(report_dir: Path) -> dict[str, Any]:
             "training_kind": "finetune",
             "target_model_code": target_model_code,
             "target_version": target_version,
-            "worker_selector": {"worker_codes": [worker_code], "labels": {"queue": "qa"}},
+            "worker_selector": {"hosts": ["qa-smoke.local"], "labels": {"queue": "qa"}},
             "spec": {"epochs": 2, "batch_size": 4, "note": "qa smoke"},
         },
     )
     job_id = job["id"]
+    buyer_job = _json_request("GET", f"/training/jobs/{job_id}", token=buyer_token)
+    _assert(buyer_job["id"] == job_id, "buyer cannot read own training job")
 
     heartbeat = _json_request(
         "POST",
@@ -440,7 +444,7 @@ def run_smoke(report_dir: Path) -> dict[str, Any]:
     empty_job = _json_request(
         "POST",
         "/training/jobs",
-        token=admin_token,
+        token=buyer_token,
         payload={
             "asset_ids": [],
             "validation_asset_ids": [],
@@ -448,7 +452,7 @@ def run_smoke(report_dir: Path) -> dict[str, Any]:
             "training_kind": "evaluate",
             "target_model_code": f"qa_empty_{uuid.uuid4().hex[:8]}",
             "target_version": f"v0.{int(time.time())}",
-            "worker_selector": {"worker_codes": [worker_code]},
+            "worker_selector": {"hosts": ["qa-smoke.local"]},
             "spec": {"note": "empty asset list support smoke"},
         },
     )

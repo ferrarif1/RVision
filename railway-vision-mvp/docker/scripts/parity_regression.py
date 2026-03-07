@@ -80,6 +80,8 @@ EXPECTED_PERMISSIONS = {
         "result.read",
         "settings.view",
         "task.create",
+        "training.job.create",
+        "training.job.view",
     },
     "buyer_auditor": {
         "dashboard.view",
@@ -87,6 +89,7 @@ EXPECTED_PERMISSIONS = {
         "model.view",
         "result.read",
         "settings.view",
+        "training.job.view",
     },
 }
 

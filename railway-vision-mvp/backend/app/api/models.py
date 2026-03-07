@@ -16,7 +16,7 @@ from app.core.constants import MODEL_STATUS_RELEASED
 from app.core.constants import MODEL_STATUS_SUBMITTED
 from app.core.config import get_settings
 from app.db.database import get_db
-from app.db.models import AuditLog, ModelRecord, ModelRelease, User
+from app.db.models import AuditLog, ModelRecord, ModelRelease, Tenant, User
 from app.security.dependencies import AuthUser, require_roles
 from app.security.roles import (
     MODEL_APPROVE_ROLES,
@@ -172,11 +172,18 @@ def list_models(
                 rows.append(row)
     else:
         rows = []
+    owner_tenant_ids = [row.owner_tenant_id for row in rows if row.owner_tenant_id]
+    owner_tenant_map = {
+        row.id: row
+        for row in db.query(Tenant).filter(Tenant.id.in_(owner_tenant_ids)).all()
+    }
     return [
         {
             **build_model_registry_payload(row),
             "status": row.status,
             "platform_meta": _build_platform_meta(row),
+            "owner_tenant_code": owner_tenant_map.get(row.owner_tenant_id).tenant_code if owner_tenant_map.get(row.owner_tenant_id) else None,
+            "owner_tenant_name": owner_tenant_map.get(row.owner_tenant_id).name if owner_tenant_map.get(row.owner_tenant_id) else None,
         }
         for row in rows
     ]

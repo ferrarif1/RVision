@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.audit import actions
 from app.core.config import get_settings
+from app.core.constants import MODEL_RELEASE_STATUS_RELEASED
 from app.core.constants import MODEL_STATUS_SUBMITTED
 from app.core.constants import MODEL_TYPE_EXPERT
 from app.core.constants import MODEL_TYPE_ROUTER
@@ -23,13 +24,15 @@ from app.core.constants import TRAINING_JOB_STATUS_RUNNING
 from app.core.constants import TRAINING_JOB_STATUS_SUCCEEDED
 from app.core.constants import TRAINING_JOB_TERMINAL_STATUSES
 from app.db.database import get_db
-from app.db.models import DataAsset, ModelRecord, Tenant, TrainingJob, TrainingWorker
+from app.db.models import DataAsset, ModelRecord, ModelRelease, Tenant, TrainingJob, TrainingWorker
 from app.security.auth import hash_password
 from app.security.dependencies import AuthUser, TrainingWorkerContext, get_training_worker, require_roles
 from app.security.roles import (
     TRAINING_JOB_CREATE_ROLES,
     TRAINING_JOB_READ_ROLES,
+    TRAINING_WORKER_READ_ROLES,
     TRAINING_WORKER_ADMIN_ROLES,
+    is_buyer_user,
     is_platform_user,
     is_supplier_user,
 )
@@ -93,6 +96,8 @@ def _job_visible_to_user(job: TrainingJob, current_user: AuthUser) -> bool:
         return True
     if is_supplier_user(current_user.roles):
         return bool(current_user.tenant_id and job.owner_tenant_id == current_user.tenant_id)
+    if is_buyer_user(current_user.roles):
+        return bool(current_user.tenant_id and job.buyer_tenant_id == current_user.tenant_id)
     return False
 
 
@@ -243,6 +248,17 @@ def _worker_matches_selector(job: TrainingJob, worker: TrainingWorker) -> bool:
     if isinstance(worker_codes, list) and worker_codes and worker.worker_code not in worker_codes:
         return False
 
+    worker_host = str(worker.host or "").strip().lower()
+    requested_hosts: list[str] = []
+    hosts = selector.get("hosts")
+    if isinstance(hosts, list):
+        requested_hosts.extend(str(item or "").strip().lower() for item in hosts if str(item or "").strip())
+    host = selector.get("host")
+    if str(host or "").strip():
+        requested_hosts.append(str(host).strip().lower())
+    if requested_hosts and worker_host not in requested_hosts:
+        return False
+
     labels = selector.get("labels")
     worker_labels = worker.labels if isinstance(worker.labels, dict) else {}
     if isinstance(labels, dict):
@@ -306,6 +322,10 @@ def create_training_job(
     # 关键约束：一次训练作业只能绑定同一个买家租户，避免跨租户数据混用。
     # Critical constraint: one training job must remain in a single buyer tenant scope.
     buyer_tenant_id = _ensure_single_buyer_scope([*train_assets, *validation_assets])
+    if is_buyer_user(current_user.roles):
+        if buyer_tenant_id and buyer_tenant_id != current_user.tenant_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Buyer training job cannot reference a different tenant scope")
+        buyer_tenant_id = current_user.tenant_id
 
     base_model = None
     owner_tenant_id = payload.owner_tenant_id
@@ -313,6 +333,22 @@ def create_training_job(
         base_model = db.query(ModelRecord).filter(ModelRecord.id == payload.base_model_id).first()
         if not base_model:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Base model not found")
+        if is_buyer_user(current_user.roles):
+            releases = (
+                db.query(ModelRelease)
+                .filter(ModelRelease.model_id == base_model.id, ModelRelease.status == MODEL_RELEASE_STATUS_RELEASED)
+                .order_by(ModelRelease.created_at.desc())
+                .all()
+            )
+            buyer_code = current_user.tenant_code
+            allowed = False
+            for release in releases:
+                targets = release.target_buyers or []
+                if not targets or (buyer_code and buyer_code in targets):
+                    allowed = True
+                    break
+            if not allowed:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Base model is not released to current buyer tenant")
         if owner_tenant_id and base_model.owner_tenant_id and owner_tenant_id != base_model.owner_tenant_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="owner_tenant_id does not match base model owner")
         owner_tenant_id = base_model.owner_tenant_id or owner_tenant_id
@@ -443,7 +479,7 @@ def register_training_worker(
 @router.get("/workers")
 def list_training_workers(
     db: Session = Depends(get_db),
-    current_user: AuthUser = Depends(require_roles(*TRAINING_WORKER_ADMIN_ROLES)),
+    current_user: AuthUser = Depends(require_roles(*TRAINING_WORKER_READ_ROLES, *TRAINING_WORKER_ADMIN_ROLES)),
 ):
     rows = db.query(TrainingWorker).order_by(TrainingWorker.created_at.desc()).all()
     return [_serialize_worker(db, row) for row in rows]
