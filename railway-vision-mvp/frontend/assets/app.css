@@ -974,6 +974,40 @@ label {
   font-size: 12px;
 }
 
+.dataset-compare-sample {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 220px;
+}
+
+.dataset-compare-thumb {
+  width: 76px;
+  height: 56px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #090a07;
+  flex: none;
+}
+
+.dataset-compare-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.dataset-compare-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.dataset-compare-meta span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 @media (max-width: 1180px) {
   .quick-review-stage {
     grid-template-columns: 1fr;

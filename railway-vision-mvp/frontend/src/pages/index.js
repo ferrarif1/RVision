@@ -45,6 +45,10 @@ function normalizeReviewBBox(value) {
   return next;
 }
 
+function clampNumber(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
 function makeReviewPrediction(prediction, fallbackLabel = 'object') {
   const bbox = normalizeReviewBBox(prediction?.bbox) || [12, 12, 120, 120];
   return {
@@ -1228,6 +1232,7 @@ function pageTraining(route, rawCtx) {
       let assistDatasetVersions = [];
       let activeDatasetCompare = null;
       let activeDatasetPreview = null;
+      let datasetCompareBlobUrls = [];
       let datasetPreviewBlobUrls = [];
 
       if (createForm && (prefillTrainingAssetIds || prefillTrainingDatasetVersionId)) {
@@ -1631,6 +1636,50 @@ function pageTraining(route, rawCtx) {
           return;
         }
         const diff = activeDatasetCompare.diff || {};
+        const formatJoined = (value) => esc((Array.isArray(value) ? value : []).join(', ') || '-');
+        const formatScalar = (value) => esc(String(value ?? '-'));
+        const renderSampleRows = (title, rows, mode) => {
+          if (!Array.isArray(rows) || !rows.length) return '';
+          return `
+            <div class="table-wrap">
+              <table class="table">
+                <thead><tr><th>${esc(title)}</th><th>source</th><th>labels</th><th>objects</th><th>review</th>${mode === 'changed' ? '<th>变更字段</th>' : ''}</tr></thead>
+                <tbody>
+                  ${rows.map((row) => {
+                    const sample = mode === 'changed' ? (row.right || row.left || {}) : row;
+                    const thumb = row.preview_url || sample.preview_url || null;
+                    return `
+                      <tr>
+                        <td>
+                          <div class="dataset-compare-sample">
+                            ${
+                              thumb
+                                ? `
+                                    <div class="dataset-compare-thumb">
+                                      <img src="${esc(thumb)}" alt="${esc(row.source_file_name || sample.source_file_name || row.sample_id || sample.sample_id || 'dataset-compare')}" />
+                                    </div>
+                                  `
+                                : ''
+                            }
+                            <div class="dataset-compare-meta">
+                              <strong class="mono">${esc(row.sample_id || sample.sample_id || '-')}</strong>
+                              <span>${esc(sample.object_prompt || '-')}</span>
+                            </div>
+                          </div>
+                        </td>
+                        <td>${esc(row.source_file_name || sample.source_file_name || '-')}</td>
+                        <td>${mode === 'changed' ? `${formatJoined(row.left?.matched_labels)} -> ${formatJoined(row.right?.matched_labels)}` : formatJoined(sample.matched_labels)}</td>
+                        <td>${mode === 'changed' ? `${formatScalar(row.left?.object_count ?? 0)} -> ${formatScalar(row.right?.object_count ?? 0)}` : formatScalar(sample.object_count ?? 0)}</td>
+                        <td>${mode === 'changed' ? `${formatScalar(row.left?.review_status || '-')} -> ${formatScalar(row.right?.review_status || '-')}` : formatScalar(sample.review_status || '-')}</td>
+                        ${mode === 'changed' ? `<td>${esc((row.change_fields || []).join(', ') || '-')}</td>` : ''}
+                      </tr>
+                    `;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          `;
+        };
         datasetCompareWrap.innerHTML = `
           <strong>版本对比</strong>
           <span>${esc(`${activeDatasetCompare.left?.dataset_label || '-'}:${activeDatasetCompare.left?.version || '-'} -> ${activeDatasetCompare.right?.dataset_label || '-'}:${activeDatasetCompare.right?.version || '-'}`)}</span>
@@ -1639,9 +1688,16 @@ function pageTraining(route, rawCtx) {
             <div><span>资源变化</span><strong>${esc(String(diff.resource_count_delta ?? 0))}</strong></div>
             <div><span>已复核变化</span><strong>${esc(String(diff.reviewed_task_count_delta ?? 0))}</strong></div>
             <div><span>同一数据集</span><strong>${esc(diff.same_dataset_key ? '是' : '否')}</strong></div>
+            <div><span>新增样本</span><strong>${esc(String(diff.sample_added_count ?? 0))}</strong></div>
+            <div><span>移除样本</span><strong>${esc(String(diff.sample_removed_count ?? 0))}</strong></div>
+            <div><span>变更样本</span><strong>${esc(String(diff.sample_changed_count ?? 0))}</strong></div>
+            <div><span>样本净变化</span><strong>${esc(String(diff.sample_task_count_delta ?? 0))}</strong></div>
           </div>
           <span>新增标签：${esc((diff.labels_added || []).join(', ') || '-')}</span>
           <span>移除标签：${esc((diff.labels_removed || []).join(', ') || '-')}</span>
+          ${renderSampleRows('新增样本', diff.added_samples || [], 'added')}
+          ${renderSampleRows('移除样本', diff.removed_samples || [], 'removed')}
+          ${renderSampleRows('变更样本', diff.changed_samples || [], 'changed')}
         `;
       }
 
@@ -1710,9 +1766,56 @@ function pageTraining(route, rawCtx) {
         datasetPreviewBlobUrls = [];
       }
 
+      function revokeDatasetCompareBlobUrls() {
+        datasetCompareBlobUrls.forEach((url) => URL.revokeObjectURL(url));
+        datasetCompareBlobUrls = [];
+      }
+
+      async function attachDatasetSamplePreview(row, versionId, bucket) {
+        if (!row) return row;
+        let previewUrl = null;
+        try {
+          if (row.preview_file && versionId) {
+            previewUrl = await fetchAuthorizedBlobUrl(
+              `/assets/dataset-versions/${versionId}/preview-file${toQuery({ member: row.preview_file })}`,
+              ctx.token,
+            );
+          } else if (row.asset_type === 'image' && row.asset_id) {
+            previewUrl = await fetchAuthorizedBlobUrl(`/assets/${row.asset_id}/content`, ctx.token);
+          }
+        } catch {
+          previewUrl = null;
+        }
+        if (previewUrl) bucket.push(previewUrl);
+        return { ...row, preview_url: previewUrl };
+      }
+
+      async function enrichDatasetComparePayload(payload) {
+        revokeDatasetCompareBlobUrls();
+        const leftVersionId = payload?.left?.id;
+        const rightVersionId = payload?.right?.id;
+        const addedSamples = await Promise.all((payload?.diff?.added_samples || []).map((row) => attachDatasetSamplePreview(row, rightVersionId, datasetCompareBlobUrls)));
+        const removedSamples = await Promise.all((payload?.diff?.removed_samples || []).map((row) => attachDatasetSamplePreview(row, leftVersionId, datasetCompareBlobUrls)));
+        const changedSamples = await Promise.all((payload?.diff?.changed_samples || []).map(async (row) => {
+          const left = await attachDatasetSamplePreview(row.left, leftVersionId, datasetCompareBlobUrls);
+          const right = await attachDatasetSamplePreview(row.right, rightVersionId, datasetCompareBlobUrls);
+          return { ...row, left, right, preview_url: right?.preview_url || left?.preview_url || null };
+        }));
+        return {
+          ...payload,
+          diff: {
+            ...(payload?.diff || {}),
+            added_samples: addedSamples,
+            removed_samples: removedSamples,
+            changed_samples: changedSamples,
+          },
+        };
+      }
+
       async function compareWithPreviousDatasetVersion(versionId) {
         const current = assistDatasetVersions.find((row) => row.id === versionId);
         if (!current) {
+          revokeDatasetCompareBlobUrls();
           activeDatasetCompare = null;
           renderDatasetCompare();
           return;
@@ -1722,6 +1825,7 @@ function pageTraining(route, rawCtx) {
           .sort((left, right) => parseVersionOrdinal(right.version) - parseVersionOrdinal(left.version))
           .find((row) => parseVersionOrdinal(row.version) < parseVersionOrdinal(current.version));
         if (!previous) {
+          revokeDatasetCompareBlobUrls();
           activeDatasetCompare = {
             left: current,
             right: current,
@@ -1739,9 +1843,11 @@ function pageTraining(route, rawCtx) {
         }
         datasetCompareWrap.innerHTML = renderLoading('加载版本对比...');
         try {
-          activeDatasetCompare = await ctx.get(`/assets/dataset-versions/compare${toQuery({ left_id: previous.id, right_id: current.id })}`);
+          const payload = await ctx.get(`/assets/dataset-versions/compare${toQuery({ left_id: previous.id, right_id: current.id, sample_limit: 6 })}`);
+          activeDatasetCompare = await enrichDatasetComparePayload(payload);
           renderDatasetCompare();
         } catch (error) {
+          revokeDatasetCompareBlobUrls();
           datasetCompareWrap.innerHTML = renderError(error.message);
         }
       }
@@ -2254,6 +2360,8 @@ function pageTasks(route, rawCtx) {
 
       function syncQuickReviewResult(outcome, { dirty = outcome.reviewDirty } = {}) {
         const editablePredictions = (outcome.predictions || []).map((prediction) => makeReviewPrediction(prediction, outcome.prompt));
+        const selectedExists = editablePredictions.some((prediction) => prediction._id === outcome.activePredictionId);
+        outcome.activePredictionId = selectedExists ? outcome.activePredictionId : (editablePredictions[0]?._id || null);
         const serializedPredictions = editablePredictions.map(({ _id, source, ...rest }) => ({
           ...rest,
           attributes: {
@@ -2325,8 +2433,19 @@ function pageTasks(route, rawCtx) {
             const height = ((y2 - y1) / outcome.previewHeight) * 100;
             const score = Number.isFinite(Number(prediction.score)) ? Number(prediction.score).toFixed(2) : '1.00';
             return `
-              <div class="quick-review-box ${prediction.source === 'manual' ? 'manual' : ''} ${prediction.source === 'draft' ? 'draft' : ''}" style="left:${left}%;top:${top}%;width:${width}%;height:${height}%;">
+              <div
+                class="quick-review-box ${prediction.source === 'manual' ? 'manual' : ''} ${prediction.source === 'draft' ? 'draft' : ''} ${prediction._id === outcome.activePredictionId ? 'selected' : ''}"
+                style="left:${left}%;top:${top}%;width:${width}%;height:${height}%;"
+                data-review-box="${esc(prediction._id)}"
+                data-review-index="${esc(String(outcome._index ?? 0))}"
+                data-review-pred="${esc(prediction._id)}"
+              >
                 <span>${esc(`${prediction.label} ${score}`)}</span>
+                ${
+                  prediction.source !== 'draft'
+                    ? `<button class="quick-review-handle" type="button" data-review-handle="${esc(prediction._id)}" data-review-index="${esc(String(outcome._index ?? 0))}" data-review-pred="${esc(prediction._id)}" aria-label="resize box"></button>`
+                    : ''
+                }
               </div>
             `;
           })
@@ -2363,6 +2482,7 @@ function pageTasks(route, rawCtx) {
           if (!image) return;
           canvas.addEventListener('mousedown', (event) => {
             if (event.button !== 0) return;
+            if (event.target?.closest?.('[data-review-box]')) return;
             const rect = image.getBoundingClientRect();
             if (!rect.width || !rect.height || !outcome.previewWidth || !outcome.previewHeight) return;
             const clampPoint = (clientX, clientY) => {
@@ -2425,6 +2545,7 @@ function pageTasks(route, rawCtx) {
                     outcome.prompt,
                   ),
                 ];
+                outcome.activePredictionId = outcome.predictions[outcome.predictions.length - 1]?._id || null;
                 markQuickReviewDirty(outcome);
               }
               renderQuickDetectBatchOutcome(outcomes);
@@ -2432,6 +2553,83 @@ function pageTasks(route, rawCtx) {
             document.addEventListener('mousemove', onMove);
             document.addEventListener('mouseup', onUp, { once: true });
           }, { once: true });
+        });
+      }
+
+      function bindQuickReviewDragResize(outcomes) {
+        const startInteraction = (event, outcome, prediction, mode) => {
+          if (event.button !== 0) return;
+          const canvas = event.currentTarget.closest('.quick-review-canvas');
+          const image = canvas?.querySelector('[data-review-preview-index]');
+          if (!canvas || !image || !outcome || !prediction || outcome.drawMode) return;
+          const rect = image.getBoundingClientRect();
+          if (!rect.width || !rect.height || !outcome.previewWidth || !outcome.previewHeight) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const startBBox = normalizeReviewBBox(prediction.bbox);
+          if (!startBBox) return;
+          outcome.activePredictionId = prediction._id;
+          const minBoxSize = 4;
+          const scaleX = outcome.previewWidth / rect.width;
+          const scaleY = outcome.previewHeight / rect.height;
+          const startClientX = event.clientX;
+          const startClientY = event.clientY;
+          const onMove = (moveEvent) => {
+            const dx = Math.round((moveEvent.clientX - startClientX) * scaleX);
+            const dy = Math.round((moveEvent.clientY - startClientY) * scaleY);
+            let nextBBox = [...startBBox];
+            if (mode === 'move') {
+              const boxWidth = startBBox[2] - startBBox[0];
+              const boxHeight = startBBox[3] - startBBox[1];
+              const nextX1 = clampNumber(startBBox[0] + dx, 0, Math.max(0, outcome.previewWidth - boxWidth));
+              const nextY1 = clampNumber(startBBox[1] + dy, 0, Math.max(0, outcome.previewHeight - boxHeight));
+              nextBBox = [nextX1, nextY1, nextX1 + boxWidth, nextY1 + boxHeight];
+            } else if (mode === 'resize') {
+              const nextX2 = clampNumber(startBBox[2] + dx, startBBox[0] + minBoxSize, outcome.previewWidth);
+              const nextY2 = clampNumber(startBBox[3] + dy, startBBox[1] + minBoxSize, outcome.previewHeight);
+              nextBBox = [startBBox[0], startBBox[1], nextX2, nextY2];
+            }
+            prediction.bbox = nextBBox;
+            syncQuickReviewResult(outcome, { dirty: true });
+            renderQuickDetectBatchOutcome(outcomes);
+          };
+          const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            markQuickReviewDirty(outcome);
+            renderQuickDetectBatchOutcome(outcomes);
+          };
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup', onUp, { once: true });
+        };
+
+        root.querySelectorAll('[data-review-box]').forEach((box) => {
+          const outcomeIndex = Number(box.getAttribute('data-review-index'));
+          const predictionId = box.getAttribute('data-review-pred') || '';
+          const outcome = outcomes[outcomeIndex];
+          const prediction = outcome?.predictions?.find((item) => item._id === predictionId);
+          if (!outcome || !prediction || outcome.drawMode) return;
+          box.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            outcome.activePredictionId = predictionId;
+            renderQuickDetectBatchOutcome(outcomes);
+          });
+          box.addEventListener('mousedown', (event) => {
+            if (event.target?.closest?.('[data-review-handle]')) return;
+            startInteraction(event, outcome, prediction, 'move');
+          });
+        });
+
+        root.querySelectorAll('[data-review-handle]').forEach((handle) => {
+          const outcomeIndex = Number(handle.getAttribute('data-review-index'));
+          const predictionId = handle.getAttribute('data-review-pred') || '';
+          const outcome = outcomes[outcomeIndex];
+          const prediction = outcome?.predictions?.find((item) => item._id === predictionId);
+          if (!outcome || !prediction || outcome.drawMode) return;
+          handle.addEventListener('mousedown', (event) => {
+            startInteraction(event, outcome, prediction, 'resize');
+          });
         });
       }
 
@@ -2454,6 +2652,7 @@ function pageTasks(route, rawCtx) {
         outcome.rows = (outcome.rows || []).map((row) => (row.id === updatedResult.id ? updatedResult : row));
         outcome.predictions = currentPredictions.map((prediction) => makeReviewPrediction(prediction, outcome.prompt));
         outcome.autoPredictions = autoPredictions.map((prediction) => makeReviewPrediction(prediction, outcome.prompt));
+        outcome.activePredictionId = outcome.predictions[0]?._id || null;
         outcome.reviewDirty = false;
         outcome.reviewStatus = resultJson.review_status || 'revised';
         quickDatasetExport = null;
@@ -2511,12 +2710,16 @@ function pageTasks(route, rawCtx) {
           reviewStatus: resultJson.review_status || (resultJson.manual_review ? 'revised' : 'auto'),
           drawMode: false,
           draftPrediction: null,
+          activePredictionId: null,
         };
         syncQuickReviewResult(outcome, { dirty: false });
         return outcome;
       }
 
       function renderQuickDetectBatchOutcome(outcomes) {
+        outcomes.forEach((item, outcomeIndex) => {
+          item._index = outcomeIndex;
+        });
         quickBatchTaskIds = outcomes.map((item) => item.task.id);
         const totalObjects = outcomes.reduce(
           (sum, item) => sum + Number(item?.predictions?.length ?? item?.focus?.result_json?.object_count ?? 0),
@@ -2598,7 +2801,7 @@ function pageTasks(route, rawCtx) {
                                 <img data-review-preview-index="${outcomeIndex}" class="quick-review-stage-image" src="${item.previewUrl}" alt="快速识别预览" />
                                 <div class="quick-review-overlay">${quickReviewBoxes(item)}</div>
                               </div>
-                              <div class="hint">${esc(item.drawMode ? '拖拽图片区域即可新增手工框，松开鼠标后会写入修订列表。' : (item.previewSource === 'asset' ? '当前预览使用原始图片，适合手工修订框。' : '当前预览使用任务标注图。若原始资产不可预览，修订框会叠加显示在标注图上。'))}</div>
+                              <div class="hint">${esc(item.drawMode ? '拖拽图片区域即可新增手工框，松开鼠标后会写入修订列表。' : (item.previewSource === 'asset' ? '当前预览使用原始图片。可直接拖动框体移动，拖右下角缩放。' : '当前预览使用任务标注图。若原始资产不可预览，修订框会叠加显示在标注图上，并支持拖动/缩放。'))}</div>
                             `
                           : renderEmpty('当前结果暂无可用预览图')
                       }
@@ -2621,7 +2824,7 @@ function pageTasks(route, rawCtx) {
                           ${
                             item.predictions.length
                               ? item.predictions.map((pred) => `
-                                  <div class="quick-review-row">
+                                  <div class="quick-review-row ${item.activePredictionId === pred._id ? 'selected' : ''}">
                                     <div class="quick-review-fields">
                                       <input data-review-index="${outcomeIndex}" data-review-pred="${esc(pred._id)}" data-review-field="label" value="${esc(pred.label)}" placeholder="label" />
                                       <input data-review-index="${outcomeIndex}" data-review-pred="${esc(pred._id)}" data-review-field="score" type="number" min="0" max="1" step="0.01" value="${esc(Number(pred.score ?? 1).toFixed(2))}" />
@@ -2632,6 +2835,7 @@ function pageTasks(route, rawCtx) {
                                     </div>
                                     <div class="row-actions">
                                       <span class="badge">${esc(pred.source === 'manual' ? 'manual' : 'auto')}</span>
+                                      <button class="ghost" type="button" data-review-focus="${outcomeIndex}" data-review-pred="${esc(pred._id)}">选中</button>
                                       <button class="ghost" type="button" data-review-remove="${outcomeIndex}" data-review-pred="${esc(pred._id)}">删掉误检</button>
                                     </div>
                                   </div>
@@ -2672,6 +2876,7 @@ function pageTasks(route, rawCtx) {
             const outcome = outcomes[outcomeIndex];
             const prediction = outcome?.predictions?.find((item) => item._id === predictionId);
             if (!outcome || !prediction) return;
+            outcome.activePredictionId = predictionId;
             const rawValue = input.value;
             if (field === 'label') prediction.label = rawValue;
             if (field === 'score') prediction.score = rawValue === '' ? 1 : Number(rawValue);
@@ -2683,6 +2888,16 @@ function pageTasks(route, rawCtx) {
             renderQuickDetectBatchOutcome(outcomes);
           });
         });
+        root.querySelectorAll('[data-review-focus]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const outcomeIndex = Number(button.getAttribute('data-review-focus'));
+            const predictionId = button.getAttribute('data-review-pred') || '';
+            const outcome = outcomes[outcomeIndex];
+            if (!outcome) return;
+            outcome.activePredictionId = predictionId;
+            renderQuickDetectBatchOutcome(outcomes);
+          });
+        });
         root.querySelectorAll('[data-review-remove]').forEach((button) => {
           button.addEventListener('click', () => {
             const outcomeIndex = Number(button.getAttribute('data-review-remove'));
@@ -2690,6 +2905,9 @@ function pageTasks(route, rawCtx) {
             const outcome = outcomes[outcomeIndex];
             if (!outcome) return;
             outcome.predictions = (outcome.predictions || []).filter((item) => item._id !== predictionId);
+            if (outcome.activePredictionId === predictionId) {
+              outcome.activePredictionId = outcome.predictions[0]?._id || null;
+            }
             markQuickReviewDirty(outcome);
             renderQuickDetectBatchOutcome(outcomes);
           });
@@ -2699,19 +2917,21 @@ function pageTasks(route, rawCtx) {
             const outcomeIndex = Number(button.getAttribute('data-review-add'));
             const outcome = outcomes[outcomeIndex];
             if (!outcome) return;
+            const nextPrediction = makeReviewPrediction(
+              {
+                label: outcome.prompt || 'object',
+                score: 1,
+                bbox: [24, 24, 160, 160],
+                attributes: { review_source: 'manual' },
+                source: 'manual',
+              },
+              outcome.prompt,
+            );
             outcome.predictions = [
               ...(outcome.predictions || []),
-              makeReviewPrediction(
-                {
-                  label: outcome.prompt || 'object',
-                  score: 1,
-                  bbox: [24, 24, 160, 160],
-                  attributes: { review_source: 'manual' },
-                  source: 'manual',
-                },
-                outcome.prompt,
-              ),
+              nextPrediction,
             ];
+            outcome.activePredictionId = nextPrediction._id;
             markQuickReviewDirty(outcome);
             renderQuickDetectBatchOutcome(outcomes);
           });
@@ -2732,6 +2952,7 @@ function pageTasks(route, rawCtx) {
             const outcome = outcomes[outcomeIndex];
             if (!outcome) return;
             outcome.predictions = (outcome.autoPredictions || []).map((prediction) => makeReviewPrediction(prediction, outcome.prompt));
+            outcome.activePredictionId = outcome.predictions[0]?._id || null;
             markQuickReviewDirty(outcome);
             renderQuickDetectBatchOutcome(outcomes);
           });
@@ -2756,6 +2977,7 @@ function pageTasks(route, rawCtx) {
         });
         bindQuickReviewPreviewMeasurements(outcomes);
         bindQuickReviewDrawing(outcomes);
+        bindQuickReviewDragResize(outcomes);
         root.querySelector('#quickDetectExportDatasetBtn')?.addEventListener('click', async () => {
           const exportBtn = root.querySelector('#quickDetectExportDatasetBtn');
           const datasetLabelEl = root.querySelector('#quickDetectDatasetLabel');

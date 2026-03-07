@@ -6,6 +6,7 @@ import uuid
 import zipfile
 from datetime import datetime
 from pathlib import PurePosixPath
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse, Response
@@ -33,6 +34,7 @@ ARCHIVE_ALLOWED_PURPOSES = {"training", "finetune", "validation"}
 UPLOAD_CHUNK_BYTES = 1024 * 1024
 MAX_FILE_NAME_LENGTH = 255
 ARCHIVE_PREVIEW_LIMIT = 20
+DATASET_COMPARE_SAMPLE_LIMIT = 8
 
 
 class DatasetVersionRecommendRequest(BaseModel):
@@ -305,6 +307,63 @@ def _serialize_dataset_version(row: DatasetVersion, asset: DataAsset | None = No
     }
 
 
+def _dataset_sample_summary(record: dict[str, Any]) -> dict[str, Any]:
+    matched_labels = sorted({str(item).strip() for item in (record.get("matched_labels") or []) if str(item).strip()})
+    return {
+        "sample_id": record.get("sample_id") or record.get("task_id") or record.get("asset_id"),
+        "task_id": record.get("task_id"),
+        "asset_id": record.get("asset_id"),
+        "source_file_name": record.get("source_file_name"),
+        "object_prompt": record.get("object_prompt"),
+        "object_count": int(record.get("object_count") or 0),
+        "matched_labels": matched_labels,
+        "review_status": record.get("review_status"),
+        "preview_file": record.get("preview_file"),
+    }
+
+
+def _dataset_sample_signature(summary: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        tuple(summary.get("matched_labels") or []),
+        summary.get("review_status"),
+        int(summary.get("object_count") or 0),
+        summary.get("object_prompt"),
+    )
+
+
+def _load_dataset_archive_payload(asset: DataAsset, *, preview_limit: int | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    if asset.asset_type != "archive":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dataset preview is only available for archive assets")
+    if not os.path.exists(asset.storage_uri):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset archive file missing")
+
+    manifest: dict[str, Any] = {}
+    samples: list[dict[str, Any]] = []
+    sample_map: dict[str, dict[str, Any]] = {}
+    try:
+        with zipfile.ZipFile(asset.storage_uri) as zf:
+            if "manifest.json" in zf.namelist():
+                manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+            if "annotations/records.jsonl" in zf.namelist():
+                lines = zf.read("annotations/records.jsonl").decode("utf-8").splitlines()
+                for line in lines:
+                    if not line.strip():
+                        continue
+                    record = json.loads(line)
+                    summary = _dataset_sample_summary(record)
+                    sample_id = str(summary.get("sample_id") or "").strip()
+                    if not sample_id:
+                        continue
+                    sample_map[sample_id] = summary
+                    if preview_limit is None or len(samples) < preview_limit:
+                        samples.append(summary)
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid dataset archive") from exc
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dataset archive metadata is malformed") from exc
+    return manifest, samples, sample_map
+
+
 @router.get("")
 def list_assets(
     q: str | None = Query(default=None, description="关键词搜索 / Keyword search across file and metadata"),
@@ -441,6 +500,7 @@ def list_dataset_versions(
 def compare_dataset_versions(
     left_id: str = Query(..., description="左侧版本ID / Left dataset version id"),
     right_id: str = Query(..., description="右侧版本ID / Right dataset version id"),
+    sample_limit: int = Query(default=DATASET_COMPARE_SAMPLE_LIMIT, ge=1, le=20, description="样本差异返回条数 / Sample diff rows"),
     db: Session = Depends(get_db),
     current_user: AuthUser = Depends(require_roles(*MODEL_READ_ROLES)),
 ):
@@ -452,6 +512,17 @@ def compare_dataset_versions(
     right_summary = right.summary or {}
     left_labels = set(left_summary.get("label_vocab") or [])
     right_labels = set(right_summary.get("label_vocab") or [])
+    left_manifest, _, left_samples = _load_dataset_archive_payload(left_asset, preview_limit=None) if left_asset else ({}, [], {})
+    right_manifest, _, right_samples = _load_dataset_archive_payload(right_asset, preview_limit=None) if right_asset else ({}, [], {})
+    left_sample_ids = set(left_samples.keys())
+    right_sample_ids = set(right_samples.keys())
+    added_ids = sorted(right_sample_ids - left_sample_ids)
+    removed_ids = sorted(left_sample_ids - right_sample_ids)
+    changed_ids = sorted(
+        sample_id
+        for sample_id in (left_sample_ids & right_sample_ids)
+        if _dataset_sample_signature(left_samples[sample_id]) != _dataset_sample_signature(right_samples[sample_id])
+    )
 
     return {
         "left": _serialize_dataset_version(left, asset=left_asset),
@@ -463,6 +534,26 @@ def compare_dataset_versions(
             "reviewed_task_count_delta": int(right_summary.get("reviewed_task_count") or 0) - int(left_summary.get("reviewed_task_count") or 0),
             "labels_added": sorted(right_labels - left_labels),
             "labels_removed": sorted(left_labels - right_labels),
+            "sample_added_count": len(added_ids),
+            "sample_removed_count": len(removed_ids),
+            "sample_changed_count": len(changed_ids),
+            "sample_task_count_delta": int(right_manifest.get("task_count") or len(right_sample_ids)) - int(left_manifest.get("task_count") or len(left_sample_ids)),
+            "added_samples": [right_samples[sample_id] for sample_id in added_ids[:sample_limit]],
+            "removed_samples": [left_samples[sample_id] for sample_id in removed_ids[:sample_limit]],
+            "changed_samples": [
+                {
+                    "sample_id": sample_id,
+                    "source_file_name": right_samples[sample_id].get("source_file_name") or left_samples[sample_id].get("source_file_name"),
+                    "change_fields": [
+                        field
+                        for field in ("matched_labels", "review_status", "object_count", "object_prompt")
+                        if left_samples[sample_id].get(field) != right_samples[sample_id].get(field)
+                    ],
+                    "left": left_samples[sample_id],
+                    "right": right_samples[sample_id],
+                }
+                for sample_id in changed_ids[:sample_limit]
+            ],
         },
     }
 

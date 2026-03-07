@@ -311,10 +311,60 @@ def run_smoke(report_dir: Path) -> dict:
         "dataset_version": dataset_version,
     }
 
+    second_review_predictions = [
+        {
+            "label": "bus_rechecked",
+            "score": 0.97,
+            "bbox": first_bbox,
+            "attributes": {"review_source": "manual_second_pass"},
+        }
+    ]
+    status_code, second_review = _json_request(
+        "POST",
+        f"/results/{focus.get('id')}/review",
+        {"predictions": second_review_predictions, "note": "quick-detect smoke review second pass"},
+        token,
+    )
+    _assert(status_code == 200, "quick-detect second review save failed")
+    second_review_result = second_review.get("result") or {}
+    second_review_json = second_review_result.get("result_json") or {}
+    second_review_labels = set(second_review_json.get("matched_labels") or [])
+    if not second_review_labels:
+        second_review_labels.update(str(pred.get("label")) for pred in (second_review_json.get("predictions") or []) if pred.get("label"))
+    _assert("bus_rechecked" in second_review_labels, "second reviewed result missing revised label")
+    report["checks"]["review_save_second_pass"] = {
+        "result_id": second_review_result.get("id"),
+        "review_status": second_review_json.get("review_status"),
+        "matched_labels": sorted(second_review_labels),
+    }
+
+    status_code, exported_second = _json_request(
+        "POST",
+        "/results/export-dataset",
+        {
+            "task_ids": [task_id],
+            "dataset_label": "quick-detect-smoke-dataset",
+            "asset_purpose": "training",
+            "include_screenshots": True,
+        },
+        token,
+    )
+    _assert(status_code == 200, "quick-detect second dataset export failed")
+    exported_second_asset = exported_second.get("asset") or {}
+    second_dataset_version = exported_second.get("dataset_version") or {}
+    _assert(second_dataset_version.get("id"), "second dataset export did not return dataset_version id")
+    _assert(second_dataset_version.get("id") != dataset_version.get("id"), "second dataset export did not create a new dataset version")
+    report["checks"]["dataset_export_second_pass"] = {
+        "asset_id": exported_second_asset.get("id"),
+        "dataset_version_id": second_dataset_version.get("id"),
+        "version": second_dataset_version.get("version"),
+        "label_vocab": (exported_second_asset.get("meta") or {}).get("label_vocab"),
+    }
+
     status_code, dataset_versions = _json_request("GET", "/assets/dataset-versions?limit=20", token=token)
     _assert(status_code == 200, "dataset version list query failed")
-    matched_dataset_version = next((row for row in (dataset_versions or []) if row.get("id") == dataset_version.get("id")), None)
-    _assert(matched_dataset_version is not None, "dataset version record not found in dataset version flow")
+    matched_dataset_version = next((row for row in (dataset_versions or []) if row.get("id") == second_dataset_version.get("id")), None)
+    _assert(matched_dataset_version is not None, "latest dataset version record not found in dataset version flow")
     report["checks"]["dataset_version_flow"] = {
         "dataset_version_id": matched_dataset_version.get("id"),
         "dataset_label": matched_dataset_version.get("dataset_label"),
@@ -324,7 +374,7 @@ def run_smoke(report_dir: Path) -> dict:
 
     status_code, recommended = _json_request(
         "POST",
-        f"/assets/dataset-versions/{dataset_version.get('id')}/recommend",
+        f"/assets/dataset-versions/{second_dataset_version.get('id')}/recommend",
         {"asset_purpose": "training", "note": "quick-detect smoke recommend"},
         token,
     )
@@ -341,28 +391,33 @@ def run_smoke(report_dir: Path) -> dict:
 
     status_code, compared = _json_request(
         "GET",
-        f"/assets/dataset-versions/compare?left_id={dataset_version.get('id')}&right_id={dataset_version.get('id')}",
+        f"/assets/dataset-versions/compare?left_id={dataset_version.get('id')}&right_id={second_dataset_version.get('id')}&sample_limit=3",
         token=token,
     )
     _assert(status_code == 200, "dataset version compare failed")
     diff = (compared or {}).get("diff") or {}
     _assert(diff.get("same_dataset_key") is True, "dataset version compare same_dataset_key mismatch")
+    _assert(int(diff.get("sample_changed_count") or 0) >= 1, "dataset version compare did not detect changed samples")
+    _assert("bus_rechecked" in set(diff.get("labels_added") or []), "dataset version compare missing added label")
+    _assert("bus_confirmed" in set(diff.get("labels_removed") or []), "dataset version compare missing removed label")
     report["checks"]["dataset_version_compare"] = {
         "same_dataset_key": diff.get("same_dataset_key"),
         "task_count_delta": diff.get("task_count_delta"),
         "resource_count_delta": diff.get("resource_count_delta"),
         "reviewed_task_count_delta": diff.get("reviewed_task_count_delta"),
+        "sample_changed_count": diff.get("sample_changed_count"),
+        "changed_sample_ids": [row.get("sample_id") for row in (diff.get("changed_samples") or [])],
     }
 
     status_code, preview = _json_request(
         "GET",
-        f"/assets/dataset-versions/{dataset_version.get('id')}/preview?sample_limit=3",
+        f"/assets/dataset-versions/{second_dataset_version.get('id')}/preview?sample_limit=3",
         token=token,
     )
     _assert(status_code == 200, "dataset version preview failed")
     preview_samples = preview.get("samples") or []
     preview_manifest = preview.get("manifest") or {}
-    _assert(preview.get("dataset_version", {}).get("id") == dataset_version.get("id"), "dataset version preview id mismatch")
+    _assert(preview.get("dataset_version", {}).get("id") == second_dataset_version.get("id"), "dataset version preview id mismatch")
     _assert(isinstance(preview_samples, list) and preview_samples, "dataset version preview returned no samples")
     report["checks"]["dataset_version_preview"] = {
         "dataset_version_id": preview.get("dataset_version", {}).get("id"),
@@ -375,7 +430,7 @@ def run_smoke(report_dir: Path) -> dict:
     if preview_member:
         status_code, preview_blob, preview_headers = _binary_request(
             "GET",
-            f"/assets/dataset-versions/{dataset_version.get('id')}/preview-file?member={parse.quote(preview_member, safe='')}",
+            f"/assets/dataset-versions/{second_dataset_version.get('id')}/preview-file?member={parse.quote(preview_member, safe='')}",
             token=token,
         )
         _assert(status_code == 200, "dataset version preview file fetch failed")
