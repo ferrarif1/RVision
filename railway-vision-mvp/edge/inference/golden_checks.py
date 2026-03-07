@@ -45,7 +45,7 @@ def run_golden_checks() -> dict:
     _assert("bolt_missing_detect" in plugin_names, "bolt_missing_detect plugin missing")
     _assert("heuristic_router" in plugin_names, "heuristic_router plugin missing")
 
-    with tempfile.TemporaryDirectory(prefix="rv_golden_") as tmp_dir:
+    with tempfile.TemporaryDirectory(prefix="vistral_golden_") as tmp_dir:
         car_path, bolt_path = _build_fixture_assets(tmp_dir)
 
         car_task = {

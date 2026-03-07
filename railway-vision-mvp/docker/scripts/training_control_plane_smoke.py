@@ -81,7 +81,7 @@ def _multipart_body(
     content_type: str,
     fields: dict[str, str],
 ) -> tuple[bytes, str]:
-    boundary = f"----rvtrain{uuid.uuid4().hex}"
+    boundary = f"----vistraltrain{uuid.uuid4().hex}"
     parts: list[bytes] = []
     for key, value in fields.items():
         parts.append(f"--{boundary}\r\n".encode("utf-8"))

@@ -1,4 +1,5 @@
 import { api, apiForm, apiPost, formatDateTime, toQuery } from '../core/api.js';
+import { BRAND_NAME, BRAND_TAGLINE, STORAGE_KEYS } from '../config/brand.js';
 
 function esc(value) {
   return String(value ?? '')
@@ -75,6 +76,49 @@ function mergeCsvValues(...values) {
 function parseVersionOrdinal(value) {
   const match = String(value || '').trim().toLowerCase().match(/^v(\d+)$/);
   return match ? Number.parseInt(match[1], 10) : 0;
+}
+
+function truncateMiddle(value, left = 12, right = 8) {
+  const text = String(value || '').trim();
+  if (!text) return '-';
+  if (text.length <= left + right + 3) return text;
+  return `${text.slice(0, left)}...${text.slice(-right)}`;
+}
+
+function formatMetricValue(value, options = {}) {
+  const { percent = false, digits = 4 } = options;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    const text = String(value ?? '').trim();
+    return text || '-';
+  }
+  if (percent) {
+    const normalized = numeric >= 0 && numeric <= 1 ? numeric * 100 : numeric;
+    const precision = Number.isInteger(normalized) ? 0 : Math.abs(normalized) >= 10 ? 1 : 2;
+    return `${normalized.toFixed(precision)}%`;
+  }
+  if (Number.isInteger(numeric)) return String(numeric);
+  return numeric.toFixed(digits).replace(/\.?0+$/, '');
+}
+
+function formatDurationWindow(startedAt, finishedAt, durationSec) {
+  let seconds = Number(durationSec);
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    const start = startedAt ? new Date(startedAt).getTime() : NaN;
+    const end = finishedAt ? new Date(finishedAt).getTime() : NaN;
+    if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
+      seconds = (end - start) / 1000;
+    }
+  }
+  if (!Number.isFinite(seconds) || seconds < 0) return '-';
+  if (seconds < 60) return `${seconds.toFixed(seconds >= 10 ? 0 : 1)} 秒`;
+  const totalSeconds = Math.round(seconds);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const remainder = totalSeconds % 60;
+  if (hours > 0) return `${hours} 小时 ${minutes} 分`;
+  if (minutes > 0) return `${minutes} 分 ${remainder} 秒`;
+  return `${remainder} 秒`;
 }
 
 const ENUM_ZH = {
@@ -273,7 +317,7 @@ function rolePreset(user) {
   if (role.startsWith('supplier')) return DASHBOARD_ROLE_PRESETS.supplier_engineer;
   if (role.startsWith('buyer_')) return DASHBOARD_ROLE_PRESETS.buyer_operator;
   return {
-    eyebrow: 'VisionHub 控制面',
+    eyebrow: `${BRAND_NAME} 控制面`,
     title: '围绕主权、协作、交付和审计完成业务闭环',
     subtitle: '从当前角色的默认路径进入，逐步完成资产、模型、任务和设备侧交付。',
     focus: ['当前角色默认路径', '关键对象状态', '下一步推荐动作'],
@@ -358,10 +402,10 @@ function pageLogin(route, rawCtx) {
   return {
     html: `
       <section class="login-shell">
-        <div class="login-brand"><span class="brand-mark"></span><span>VISIONHUB</span></div>
+        <div class="login-brand"><span class="brand-mark"></span><span>${BRAND_NAME}</span></div>
         <section class="login-card">
-          <h2>进入 VisionHub</h2>
-          <p class="login-subtitle">面向铁路与政企内网的模型主权、数据主权、受控协作与边缘安全交付控制台</p>
+          <h2>进入 ${BRAND_NAME}</h2>
+          <p class="login-subtitle">${BRAND_TAGLINE}</p>
           <div class="login-value-grid">
             <span class="login-value-chip">模型主权</span>
             <span class="login-value-chip">数据主权</span>
@@ -625,8 +669,8 @@ function pageAssets(route, rawCtx) {
       const tableWrap = root.querySelector('#assetsTableWrap');
 
       function prefillTrainingAssets(assetIds) {
-        const merged = [...new Set([...splitCsv(localStorage.getItem('rv_prefill_training_asset_ids') || ''), ...assetIds])];
-        localStorage.setItem('rv_prefill_training_asset_ids', merged.join(', '));
+        const merged = [...new Set([...splitCsv(localStorage.getItem(STORAGE_KEYS.prefillTrainingAssetIds) || ''), ...assetIds])];
+        localStorage.setItem(STORAGE_KEYS.prefillTrainingAssetIds, merged.join(', '));
       }
 
       async function loadAssets() {
@@ -682,7 +726,7 @@ function pageAssets(route, rawCtx) {
           });
           tableWrap.querySelectorAll('[data-use-asset]').forEach((btn) => {
             btn.addEventListener('click', () => {
-              localStorage.setItem('rv_prefill_asset_id', btn.getAttribute('data-use-asset') || '');
+              localStorage.setItem(STORAGE_KEYS.prefillAssetId, btn.getAttribute('data-use-asset') || '');
               ctx.navigate('tasks');
             });
           });
@@ -694,7 +738,7 @@ function pageAssets(route, rawCtx) {
           });
           tableWrap.querySelectorAll('[data-quick-detect-asset]').forEach((btn) => {
             btn.addEventListener('click', () => {
-              localStorage.setItem('rv_quick_detect_asset_id', btn.getAttribute('data-quick-detect-asset') || '');
+              localStorage.setItem(STORAGE_KEYS.quickDetectAssetId, btn.getAttribute('data-quick-detect-asset') || '');
               ctx.navigate('tasks');
             });
           });
@@ -740,11 +784,11 @@ function pageAssets(route, rawCtx) {
             }
           });
           root.querySelector('#gotoTaskFromAsset')?.addEventListener('click', () => {
-            localStorage.setItem('rv_prefill_asset_id', data.id);
+            localStorage.setItem(STORAGE_KEYS.prefillAssetId, data.id);
             ctx.navigate('tasks');
           });
           root.querySelector('#gotoQuickDetectFromAsset')?.addEventListener('click', () => {
-            localStorage.setItem('rv_quick_detect_asset_id', data.id);
+            localStorage.setItem(STORAGE_KEYS.quickDetectAssetId, data.id);
             ctx.navigate('tasks');
           });
           root.querySelector('#gotoTrainingFromAsset')?.addEventListener('click', () => {
@@ -872,6 +916,32 @@ function pageModels(route, rawCtx) {
       const trainingJobForm = root.querySelector('#trainingJobForm');
       const trainingJobMsg = root.querySelector('#trainingJobMsg');
       let cachedModels = [];
+      const requestedFocusModelId = localStorage.getItem(STORAGE_KEYS.focusModelId);
+      const requestedOpenModelTimeline = localStorage.getItem(STORAGE_KEYS.focusModelTimeline) === '1';
+
+      async function openModelTimeline(modelId) {
+        timelineWrap.innerHTML = renderLoading('加载模型时间线...');
+        try {
+          const data = await ctx.get(`/models/${modelId}/timeline`);
+          const timeline = data.timeline || [];
+          timelineWrap.innerHTML = timeline.length
+            ? `
+                <ol class="timeline-list">
+                  ${timeline.map((item) => `
+                    <li>
+                      <div><strong>${esc(item.title)}</strong><span>${esc(enumText('model_status', item.status || '-'))}</span></div>
+                      <p>${esc(item.summary || '-')}</p>
+                      <p class="muted">${esc(item.actor_username || '-')} · ${formatDateTime(item.created_at)}</p>
+                    </li>
+                  `).join('')}
+                </ol>
+                <details><summary>Advanced</summary><pre>${esc(safeJson(data))}</pre></details>
+              `
+            : renderEmpty('该模型暂无时间线数据');
+        } catch (error) {
+          timelineWrap.innerHTML = renderError(error.message);
+        }
+      }
 
       async function loadTrainingJobs() {
         if (!canViewTrainingJob || !trainingJobsWrap) return;
@@ -916,7 +986,7 @@ function pageModels(route, rawCtx) {
                 </thead>
                 <tbody>
                   ${rows.map((row) => `
-                    <tr>
+                    <tr data-model-row="${esc(row.id)}" class="${requestedFocusModelId === row.id ? 'active-row' : ''}">
                       <td>${esc(row.model_code)}</td>
                       <td>${esc(row.version)}</td>
                       <td>${esc(enumText('model_status', row.status))}</td>
@@ -937,27 +1007,7 @@ function pageModels(route, rawCtx) {
           modelsWrap.querySelectorAll('[data-model-timeline]').forEach((btn) => {
             btn.addEventListener('click', async () => {
               const modelId = btn.getAttribute('data-model-timeline');
-              timelineWrap.innerHTML = renderLoading('加载模型时间线...');
-              try {
-                const data = await ctx.get(`/models/${modelId}/timeline`);
-                const timeline = data.timeline || [];
-                timelineWrap.innerHTML = timeline.length
-                  ? `
-                      <ol class="timeline-list">
-                        ${timeline.map((item) => `
-                          <li>
-                            <div><strong>${esc(item.title)}</strong><span>${esc(enumText('model_status', item.status || '-'))}</span></div>
-                            <p>${esc(item.summary || '-')}</p>
-                            <p class="muted">${esc(item.actor_username || '-')} · ${formatDateTime(item.created_at)}</p>
-                          </li>
-                        `).join('')}
-                      </ol>
-                      <details><summary>Advanced</summary><pre>${esc(safeJson(data))}</pre></details>
-                    `
-                  : renderEmpty('该模型暂无时间线数据');
-              } catch (error) {
-                timelineWrap.innerHTML = renderError(error.message);
-              }
+              await openModelTimeline(modelId);
             });
           });
 
@@ -1001,6 +1051,16 @@ function pageModels(route, rawCtx) {
               }
             });
           });
+
+          if (requestedFocusModelId && rows.some((row) => row.id === requestedFocusModelId)) {
+            const focusRow = modelsWrap.querySelector(`[data-model-row="${requestedFocusModelId}"]`);
+            focusRow?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            if (requestedOpenModelTimeline) {
+              await openModelTimeline(requestedFocusModelId);
+            }
+          }
+          localStorage.removeItem(STORAGE_KEYS.focusModelId);
+          localStorage.removeItem(STORAGE_KEYS.focusModelTimeline);
         } catch (error) {
           modelsWrap.innerHTML = renderError(error.message);
         }
@@ -1125,6 +1185,11 @@ function pageTraining(route, rawCtx) {
           }
         </section>
       </section>
+      <section class="card">
+        <h3>训练结果摘要</h3>
+        <p class="hint">把基础模型、数据规模、关键指标和后续动作放在一屏里，方便快速判断这轮训练是否值得进入审批、发布或继续迭代。</p>
+        <div id="trainingRunSummaryWrap">${renderLoading('加载训练摘要...')}</div>
+      </section>
       ${
         canCreateTrainingJob
           ? `
@@ -1204,6 +1269,7 @@ function pageTraining(route, rawCtx) {
       const registerWorkerMsg = root.querySelector('#registerWorkerMsg');
       const createForm = root.querySelector('#trainingCreateForm');
       const createMsg = root.querySelector('#trainingCreateMsg');
+      const trainingRunSummaryWrap = root.querySelector('#trainingRunSummaryWrap');
       const assetsDatalist = root.querySelector('#trainingAssetsDatalist');
       const modelsDatalist = root.querySelector('#trainingModelsDatalist');
       const workerCodesDatalist = root.querySelector('#trainingWorkersCodeDatalist');
@@ -1214,10 +1280,10 @@ function pageTraining(route, rawCtx) {
       const datasetCompareWrap = root.querySelector('#trainingDatasetCompareWrap');
       const datasetPreviewWrap = root.querySelector('#trainingDatasetPreviewWrap');
       const selectionSummary = root.querySelector('#trainingSelectionSummary');
-      const prefillTrainingAssetIds = localStorage.getItem('rv_prefill_training_asset_ids');
-      const prefillTrainingDatasetLabel = localStorage.getItem('rv_prefill_training_dataset_label');
-      const prefillTrainingDatasetVersionId = localStorage.getItem('rv_prefill_training_dataset_version_id');
-      const prefillTrainingTargetModelCode = localStorage.getItem('rv_prefill_training_target_model_code');
+      const prefillTrainingAssetIds = localStorage.getItem(STORAGE_KEYS.prefillTrainingAssetIds);
+      const prefillTrainingDatasetLabel = localStorage.getItem(STORAGE_KEYS.prefillTrainingDatasetLabel);
+      const prefillTrainingDatasetVersionId = localStorage.getItem(STORAGE_KEYS.prefillTrainingDatasetVersionId);
+      const prefillTrainingTargetModelCode = localStorage.getItem(STORAGE_KEYS.prefillTrainingTargetModelCode);
       const assetIdsInput = createForm?.querySelector('input[name="asset_ids"]');
       const validationAssetIdsInput = createForm?.querySelector('input[name="validation_asset_ids"]');
       const baseModelInput = createForm?.querySelector('input[name="base_model_id"]');
@@ -1234,6 +1300,8 @@ function pageTraining(route, rawCtx) {
       let activeDatasetPreview = null;
       let datasetCompareBlobUrls = [];
       let datasetPreviewBlobUrls = [];
+      let cachedTrainingJobs = [];
+      let activeTrainingJobId = '';
 
       if (createForm && (prefillTrainingAssetIds || prefillTrainingDatasetVersionId)) {
         if (assetIdsInput && prefillTrainingAssetIds) assetIdsInput.value = prefillTrainingAssetIds;
@@ -1241,101 +1309,326 @@ function pageTraining(route, rawCtx) {
         if (createMsg) {
           createMsg.textContent = `已预填来自快速识别的数据集资产：${prefillTrainingAssetIds || '-'}${prefillTrainingDatasetLabel ? ` · ${prefillTrainingDatasetLabel}` : ''}${prefillTrainingDatasetVersionId ? ` · ${prefillTrainingDatasetVersionId}` : ''}`;
         }
-        localStorage.removeItem('rv_prefill_training_asset_ids');
-        localStorage.removeItem('rv_prefill_training_dataset_label');
-        localStorage.removeItem('rv_prefill_training_dataset_version_id');
-        localStorage.removeItem('rv_prefill_training_target_model_code');
+        localStorage.removeItem(STORAGE_KEYS.prefillTrainingAssetIds);
+        localStorage.removeItem(STORAGE_KEYS.prefillTrainingDatasetLabel);
+        localStorage.removeItem(STORAGE_KEYS.prefillTrainingDatasetVersionId);
+        localStorage.removeItem(STORAGE_KEYS.prefillTrainingTargetModelCode);
+      }
+
+      function pickDefaultTrainingJob(rows) {
+        if (!Array.isArray(rows) || !rows.length) return null;
+        return (
+          rows.find((row) => row.status === 'SUCCEEDED') ||
+          rows.find((row) => row.status === 'RUNNING') ||
+          rows.find((row) => row.status === 'DISPATCHED') ||
+          rows[0]
+        );
+      }
+
+      function getSelectedTrainingJob() {
+        return cachedTrainingJobs.find((row) => row.id === activeTrainingJobId) || null;
+      }
+
+      function compactValue(value) {
+        if (value === null || value === undefined || value === '') return '未声明';
+        if (Array.isArray(value)) return value.length ? value.join(', ') : '未声明';
+        if (typeof value === 'object') {
+          const keys = Object.keys(value);
+          return keys.length ? keys.map((key) => `${key}=${value[key]}`).join(' · ') : '未声明';
+        }
+        return String(value);
+      }
+
+      function buildTrainingAssetRefs(assetIds) {
+        return (Array.isArray(assetIds) ? assetIds : []).map((assetId) => {
+          const asset = assistAssets.find((row) => row.id === assetId) || null;
+          const version = assistDatasetVersions.find((row) => row.asset_id === assetId) || null;
+          return { assetId, asset, version };
+        });
+      }
+
+      function renderTrainingAssetRefList(title, refs) {
+        return `
+          <div class="training-run-ref-block">
+            <strong>${esc(title)}</strong>
+            ${
+              refs.length
+                ? `
+                    <div class="training-run-ref-list">
+                      ${refs.map((row) => `
+                        <article class="training-run-ref">
+                          <strong>${esc(row.version ? `${row.version.dataset_label}:${row.version.version}` : row.asset?.file_name || row.assetId)}</strong>
+                          <span class="mono">${esc(row.assetId)}</span>
+                          <span>${esc(row.asset ? `${enumText('asset_type', row.asset.asset_type)} · ${enumText('asset_purpose', row.asset.purpose || row.version?.asset_purpose || '-')}` : '资产详情未加载')}</span>
+                        </article>
+                      `).join('')}
+                    </div>
+                  `
+                : '<span class="muted">未绑定资产</span>'
+            }
+          </div>
+        `;
+      }
+
+      function renderTrainingRunSummary() {
+        if (!trainingRunSummaryWrap) return;
+        const job = getSelectedTrainingJob();
+        if (!job) {
+          trainingRunSummaryWrap.innerHTML = renderEmpty('选择一条训练作业后，这里会显示基础模型、指标摘要和下一步动作。');
+          return;
+        }
+        const output = job.output_summary || {};
+        const trainRefs = buildTrainingAssetRefs(job.asset_ids || []);
+        const validationRefs = buildTrainingAssetRefs(job.validation_asset_ids || []);
+        const trainResources = Number(output.train_resource_count ?? output.train_samples ?? job.asset_count ?? 0);
+        const validationResources = Number(output.validation_resource_count ?? output.val_samples ?? job.validation_asset_count ?? 0);
+        const totalResources = Math.max(0, trainResources) + Math.max(0, validationResources);
+        const trainShare = totalResources ? `${Math.round((Math.max(0, trainResources) / totalResources) * 100)}%` : '-';
+        const validationShare = totalResources ? `${Math.round((Math.max(0, validationResources) / totalResources) * 100)}%` : '-';
+        const trainer = output.trainer || job.spec?.trainer || '受控训练 Worker';
+        const currentStage = output.stage || (job.status === 'SUCCEEDED' ? 'completed' : job.status === 'RUNNING' ? 'training' : '-');
+        const candidateModel = job.candidate_model;
+        const canCreateTask = hasPermission(ctx.state, 'task.create');
+        const metrics = [
+          { label: '验证得分', value: formatMetricValue(output.val_score, { percent: true }), note: 'val_score' },
+          { label: '验证准确率', value: formatMetricValue(output.val_accuracy, { percent: true }), note: 'val_accuracy' },
+          { label: '训练准确率', value: formatMetricValue(output.train_accuracy, { percent: true }), note: 'train_accuracy' },
+          { label: '最终损失', value: formatMetricValue(output.final_loss), note: 'final_loss' },
+          { label: '轮次', value: formatMetricValue(output.epochs ?? job.spec?.epochs), note: 'epochs' },
+          { label: '学习率', value: formatMetricValue(output.learning_rate ?? job.spec?.learning_rate, { digits: 6 }), note: 'learning_rate' },
+        ];
+        trainingRunSummaryWrap.innerHTML = `
+          <div class="training-run-summary">
+            <section class="training-run-hero">
+              <div class="training-run-hero-main">
+                <div class="quick-review-statuses">
+                  <span class="badge">${esc(enumText('training_status', job.status))}</span>
+                  <span class="badge">${esc(enumText('training_kind', job.training_kind))}</span>
+                  <span class="badge">${esc(String(trainer))}</span>
+                </div>
+                <h4>${esc(`${job.target_model_code}:${job.target_version}`)}</h4>
+                <p>${esc(
+                  job.status === 'SUCCEEDED'
+                    ? '训练已完成，可以根据指标决定是否进入候选审批、发布授权或继续迭代。'
+                    : job.status === 'RUNNING'
+                      ? '训练正在执行中，当前摘要会随着 Worker 回写持续刷新。'
+                      : '当前展示的是这条训练作业的最新状态，适合快速核对基础模型、数据规模和目标节点。'
+                )}</p>
+              </div>
+              <div class="row-actions">
+                <button class="ghost" type="button" data-copy-training-job="${esc(job.id)}">复制作业ID</button>
+                ${
+                  candidateModel?.id
+                    ? `<button class="ghost" type="button" data-copy-candidate-model="${esc(candidateModel.id)}">复制候选模型ID</button>`
+                    : ''
+                }
+                ${
+                  candidateModel?.id
+                    ? `<button class="primary" type="button" data-open-candidate-model="${esc(candidateModel.id)}">查看候选模型</button>`
+                    : ''
+                }
+                ${canCreateTask ? '<button class="ghost" type="button" data-go-training-task>去任务中心做验证</button>' : ''}
+              </div>
+            </section>
+            <div class="keyvals">
+              <div><span>job_code</span><strong class="mono">${esc(job.job_code)}</strong></div>
+              <div><span>基础模型</span><strong>${esc(job.base_model ? `${job.base_model.model_code}:${job.base_model.version}` : '未指定')}</strong></div>
+              <div><span>候选模型</span><strong>${esc(candidateModel ? `${candidateModel.model_code}:${candidateModel.version}` : '等待回收')}</strong></div>
+              <div><span>执行节点</span><strong>${esc(job.assigned_worker_code || job.worker_selector?.host || job.worker_selector?.hosts?.[0] || '未派发')}</strong></div>
+              <div><span>当前阶段</span><strong>${esc(currentStage)}</strong></div>
+              <div><span>训练时长</span><strong>${esc(formatDurationWindow(job.started_at, job.finished_at, output.duration_sec))}</strong></div>
+              <div><span>创建时间</span><strong>${esc(formatDateTime(job.created_at))}</strong></div>
+              <div><span>完成时间</span><strong>${esc(formatDateTime(job.finished_at))}</strong></div>
+              <div><span>供应商</span><strong>${esc(job.owner_tenant_code || '-')}</strong></div>
+              <div><span>买家租户</span><strong>${esc(job.buyer_tenant_code || '-')}</strong></div>
+              <div><span>artifact_sha256</span><strong class="mono">${esc(truncateMiddle(output.artifact_sha256, 10, 8))}</strong></div>
+              <div><span>base_model_hash</span><strong class="mono">${esc(truncateMiddle(output.base_model_hash, 10, 8))}</strong></div>
+            </div>
+            <section class="training-run-metrics">
+              ${metrics.map((metric) => `
+                <article class="training-run-metric-card">
+                  <span>${esc(metric.label)}</span>
+                  <strong>${esc(metric.value)}</strong>
+                  <small>${esc(metric.note)}</small>
+                </article>
+              `).join('')}
+            </section>
+            <section class="training-run-splits">
+              <article class="training-run-split-card train">
+                <div class="training-run-split-head">
+                  <span>训练集</span>
+                  <strong>${esc(trainShare)}</strong>
+                </div>
+                <div class="training-run-split-value">${esc(String(trainResources))}</div>
+                <p>${esc(`asset=${job.asset_count ?? 0} · samples=${output.train_samples ?? '-'}`)}</p>
+              </article>
+              <article class="training-run-split-card validation">
+                <div class="training-run-split-head">
+                  <span>验证集</span>
+                  <strong>${esc(validationShare)}</strong>
+                </div>
+                <div class="training-run-split-value">${esc(String(validationResources))}</div>
+                <p>${esc(`asset=${job.validation_asset_count ?? 0} · samples=${output.val_samples ?? '-'}`)}</p>
+              </article>
+            </section>
+            <div class="grid-two">
+              <section class="selection-summary">
+                <strong>训练配置</strong>
+                <span>训练器：${esc(String(trainer))}</span>
+                <span>预处理：${esc(compactValue(job.spec?.preprocessing || job.spec?.preprocess || job.spec?.resize))}</span>
+                <span>增强：${esc(compactValue(job.spec?.augmentations || job.spec?.augmentation))}</span>
+                <span>特征说明：${esc(compactValue(output.feature_spec || job.spec?.feature_spec))}</span>
+                <details><summary>spec / output_summary</summary><pre>${esc(safeJson({ spec: job.spec || {}, output_summary: output }))}</pre></details>
+              </section>
+              <section class="selection-summary">
+                <strong>数据来源</strong>
+                <span>目标版本：${esc(`${job.target_model_code}:${job.target_version}`)}</span>
+                <span>训练资产：${esc(trainRefs.length ? trainRefs.map((row) => row.version ? `${row.version.dataset_label}:${row.version.version}` : row.asset?.file_name || row.assetId).join(' / ') : '未绑定')}</span>
+                <span>验证资产：${esc(validationRefs.length ? validationRefs.map((row) => row.version ? `${row.version.dataset_label}:${row.version.version}` : row.asset?.file_name || row.assetId).join(' / ') : '未绑定')}</span>
+                ${job.error_message ? `<span>错误摘要：${esc(job.error_message)}</span>` : '<span>错误摘要：无</span>'}
+              </section>
+            </div>
+            <div class="grid-two">
+              ${renderTrainingAssetRefList('训练资产明细', trainRefs)}
+              ${renderTrainingAssetRefList('验证资产明细', validationRefs)}
+            </div>
+          </div>
+        `;
+        trainingRunSummaryWrap.querySelector('[data-copy-training-job]')?.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(String(job.id || ''));
+            ctx.toast('训练作业ID已复制');
+          } catch {
+            ctx.toast('复制失败，请手工复制', 'error');
+          }
+        });
+        trainingRunSummaryWrap.querySelector('[data-copy-candidate-model]')?.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(String(candidateModel?.id || ''));
+            ctx.toast('候选模型ID已复制');
+          } catch {
+            ctx.toast('复制失败，请手工复制', 'error');
+          }
+        });
+        trainingRunSummaryWrap.querySelector('[data-open-candidate-model]')?.addEventListener('click', () => {
+          if (!candidateModel?.id) return;
+          localStorage.setItem(STORAGE_KEYS.focusModelId, candidateModel.id);
+          localStorage.setItem(STORAGE_KEYS.focusModelTimeline, '1');
+          ctx.navigate('models');
+        });
+        trainingRunSummaryWrap.querySelector('[data-go-training-task]')?.addEventListener('click', () => {
+          ctx.navigate('tasks');
+        });
+      }
+
+      function renderTrainingJobTable(rows) {
+        if (!rows.length) {
+          jobsWrap.innerHTML = renderEmpty('暂无训练作业，可从模型中心或本页下方创建一条训练 / 微调作业');
+          renderTrainingRunSummary();
+          return;
+        }
+        jobsWrap.innerHTML = `
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>job_code(作业编码)</th><th>status(状态)</th><th>kind(类型)</th><th>train/val(资产数)</th><th>base_model(基础模型)</th><th>candidate_model(候选模型)</th><th>worker(执行节点)</th><th>创建时间</th><th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows.map((row) => `
+                  <tr class="${activeTrainingJobId === row.id ? 'active-row' : ''}">
+                    <td class="mono">${esc(row.job_code)}</td>
+                    <td>${esc(enumText('training_status', row.status))}</td>
+                    <td>${esc(enumText('training_kind', row.training_kind))}</td>
+                    <td>${esc(`${row.asset_count ?? 0}/${row.validation_asset_count ?? 0}`)}</td>
+                    <td class="mono">${esc(row.base_model ? `${row.base_model.model_code}:${row.base_model.version}` : '-')}</td>
+                    <td class="mono">${esc(row.candidate_model ? `${row.candidate_model.model_code}:${row.candidate_model.version}` : '-')}</td>
+                    <td>${esc(row.assigned_worker_code || row.worker_selector?.host || row.worker_selector?.hosts?.[0] || '-')}</td>
+                    <td>${formatDateTime(row.created_at)}</td>
+                    <td>
+                      <div class="row-actions">
+                        <button class="ghost" type="button" data-training-open-summary="${esc(row.id)}">摘要</button>
+                        ${row.can_cancel ? `<button class="ghost" type="button" data-training-cancel="${esc(row.id)}">取消</button>` : ''}
+                        ${row.can_retry ? `<button class="ghost" type="button" data-training-retry="${esc(row.id)}">重试</button>` : ''}
+                        ${row.can_reassign ? `<button class="ghost" type="button" data-training-reassign="${esc(row.id)}">改派到当前训练机</button>` : ''}
+                      </div>
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        `;
+        jobsWrap.querySelectorAll('[data-training-open-summary]').forEach((button) => {
+          button.addEventListener('click', () => {
+            activeTrainingJobId = button.getAttribute('data-training-open-summary') || '';
+            renderTrainingJobTable(cachedTrainingJobs);
+            renderTrainingRunSummary();
+          });
+        });
+        jobsWrap.querySelectorAll('[data-training-cancel]').forEach((button) => {
+          button.addEventListener('click', async () => {
+            button.disabled = true;
+            await performTrainingJobAction(
+              button.getAttribute('data-training-cancel') || '',
+              'cancel',
+              { note: 'training_page_cancel' },
+              '训练作业已取消',
+            );
+            button.disabled = false;
+          });
+        });
+        jobsWrap.querySelectorAll('[data-training-retry]').forEach((button) => {
+          button.addEventListener('click', async () => {
+            button.disabled = true;
+            await performTrainingJobAction(
+              button.getAttribute('data-training-retry') || '',
+              'retry',
+              { note: 'training_page_retry' },
+              '训练作业已重置为待派发',
+            );
+            button.disabled = false;
+          });
+        });
+        jobsWrap.querySelectorAll('[data-training-reassign]').forEach((button) => {
+          button.addEventListener('click', async () => {
+            const workerCode = String(workerCodeInput?.value || '').trim();
+            const workerHost = String(workerHostInput?.value || '').trim();
+            if (!workerCode && !workerHost) {
+              ctx.toast('请先在训练机池里选一台机器，再执行改派', 'error');
+              return;
+            }
+            button.disabled = true;
+            await performTrainingJobAction(
+              button.getAttribute('data-training-reassign') || '',
+              'reassign',
+              { worker_code: workerCode || null, worker_host: workerHost || null, note: 'training_page_reassign' },
+              '训练作业已改派到当前训练机',
+            );
+            button.disabled = false;
+          });
+        });
       }
 
       async function loadJobTable() {
         jobsWrap.innerHTML = renderLoading('加载训练作业...');
+        if (trainingRunSummaryWrap) trainingRunSummaryWrap.innerHTML = renderLoading('加载训练摘要...');
         try {
           const fd = new FormData(filterForm);
           const query = toQuery({
             status: fd.get('status'),
             training_kind: fd.get('training_kind'),
           });
-          const rows = await ctx.get(`/training/jobs${query}`);
-          if (!rows.length) {
-            jobsWrap.innerHTML = renderEmpty('暂无训练作业，可从模型中心或本页下方创建一条训练 / 微调作业');
-            return;
+          cachedTrainingJobs = await ctx.get(`/training/jobs${query}`);
+          if (!activeTrainingJobId || !cachedTrainingJobs.some((row) => row.id === activeTrainingJobId)) {
+            activeTrainingJobId = pickDefaultTrainingJob(cachedTrainingJobs)?.id || '';
           }
-          jobsWrap.innerHTML = `
-            <div class="table-wrap">
-              <table class="table">
-                <thead>
-                  <tr>
-                    <th>job_code(作业编码)</th><th>status(状态)</th><th>kind(类型)</th><th>train/val(资产数)</th><th>base_model(基础模型)</th><th>candidate_model(候选模型)</th><th>worker(执行节点)</th><th>创建时间</th><th>操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${rows.map((row) => `
-                    <tr>
-                      <td class="mono">${esc(row.job_code)}</td>
-                      <td>${esc(enumText('training_status', row.status))}</td>
-                      <td>${esc(enumText('training_kind', row.training_kind))}</td>
-                      <td>${esc(`${row.asset_count ?? 0}/${row.validation_asset_count ?? 0}`)}</td>
-                      <td class="mono">${esc(row.base_model ? `${row.base_model.model_code}:${row.base_model.version}` : '-')}</td>
-                      <td class="mono">${esc(row.candidate_model ? `${row.candidate_model.model_code}:${row.candidate_model.version}` : '-')}</td>
-                      <td>${esc(row.assigned_worker_code || row.worker_selector?.host || row.worker_selector?.hosts?.[0] || '-')}</td>
-                      <td>${formatDateTime(row.created_at)}</td>
-                      <td>
-                        <div class="row-actions">
-                          ${row.can_cancel ? `<button class="ghost" type="button" data-training-cancel="${esc(row.id)}">取消</button>` : ''}
-                          ${row.can_retry ? `<button class="ghost" type="button" data-training-retry="${esc(row.id)}">重试</button>` : ''}
-                          ${row.can_reassign ? `<button class="ghost" type="button" data-training-reassign="${esc(row.id)}">改派到当前训练机</button>` : ''}
-                        </div>
-                      </td>
-                    </tr>
-                  `).join('')}
-                </tbody>
-              </table>
-            </div>
-          `;
-          jobsWrap.querySelectorAll('[data-training-cancel]').forEach((button) => {
-            button.addEventListener('click', async () => {
-              button.disabled = true;
-              await performTrainingJobAction(
-                button.getAttribute('data-training-cancel') || '',
-                'cancel',
-                { note: 'training_page_cancel' },
-                '训练作业已取消',
-              );
-              button.disabled = false;
-            });
-          });
-          jobsWrap.querySelectorAll('[data-training-retry]').forEach((button) => {
-            button.addEventListener('click', async () => {
-              button.disabled = true;
-              await performTrainingJobAction(
-                button.getAttribute('data-training-retry') || '',
-                'retry',
-                { note: 'training_page_retry' },
-                '训练作业已重置为待派发',
-              );
-              button.disabled = false;
-            });
-          });
-          jobsWrap.querySelectorAll('[data-training-reassign]').forEach((button) => {
-            button.addEventListener('click', async () => {
-              const workerCode = String(workerCodeInput?.value || '').trim();
-              const workerHost = String(workerHostInput?.value || '').trim();
-              if (!workerCode && !workerHost) {
-                ctx.toast('请先在训练机池里选一台机器，再执行改派', 'error');
-                return;
-              }
-              button.disabled = true;
-              await performTrainingJobAction(
-                button.getAttribute('data-training-reassign') || '',
-                'reassign',
-                { worker_code: workerCode || null, worker_host: workerHost || null, note: 'training_page_reassign' },
-                '训练作业已改派到当前训练机',
-              );
-              button.disabled = false;
-            });
-          });
+          renderTrainingJobTable(cachedTrainingJobs);
+          renderTrainingRunSummary();
         } catch (error) {
           jobsWrap.innerHTML = renderError(error.message);
+          if (trainingRunSummaryWrap) trainingRunSummaryWrap.innerHTML = renderError(error.message);
         }
       }
 
@@ -1910,11 +2203,13 @@ function pageTraining(route, rawCtx) {
             renderDatasetPreview();
           }
           refreshSelectionSummary();
+          renderTrainingRunSummary();
         } catch {
           if (modelLibrary) modelLibrary.innerHTML = renderEmpty('供应商算法加载失败，请稍后刷新');
           if (datasetVersionLibrary) datasetVersionLibrary.innerHTML = renderEmpty('数据集版本加载失败，请稍后刷新');
           if (datasetCompareWrap) datasetCompareWrap.innerHTML = renderEmpty('数据集版本对比不可用，请稍后刷新');
           if (datasetPreviewWrap) datasetPreviewWrap.innerHTML = renderEmpty('数据集版本预览不可用，请稍后刷新');
+          renderTrainingRunSummary();
         }
       }
 
@@ -2190,7 +2485,7 @@ function pageTasks(route, rawCtx) {
         </form>
         <section class="card">
           <h3>快速识别结果</h3>
-          <div id="quickDetectResult">${renderEmpty('上传一张或多张图片 / 视频，输入要识别的对象后，VisionHub 会自动选模、创建任务、回传标注图，并支持把本次结果直接打包为训练 / 验证数据集。')}</div>
+          <div id="quickDetectResult">${renderEmpty(`上传一张或多张图片 / 视频，输入要识别的对象后，${BRAND_NAME} 会自动选模、创建任务、回传标注图，并支持把本次结果直接打包为训练 / 验证数据集。`)}</div>
         </section>
       </section>
       <section class="grid-two">
@@ -2313,16 +2608,16 @@ function pageTasks(route, rawCtx) {
         `;
       }
 
-      const prefillAsset = localStorage.getItem('rv_prefill_asset_id');
+      const prefillAsset = localStorage.getItem(STORAGE_KEYS.prefillAssetId);
       if (prefillAsset) {
         const assetInput = root.querySelector('#taskAssetInput');
         if (assetInput) assetInput.value = prefillAsset;
-        localStorage.removeItem('rv_prefill_asset_id');
+        localStorage.removeItem(STORAGE_KEYS.prefillAssetId);
       }
-      const quickPrefillAsset = localStorage.getItem('rv_quick_detect_asset_id');
+      const quickPrefillAsset = localStorage.getItem(STORAGE_KEYS.quickDetectAssetId);
       if (quickPrefillAsset && quickDetectAssetInput) {
         quickDetectAssetInput.value = quickPrefillAsset;
-        localStorage.removeItem('rv_quick_detect_asset_id');
+        localStorage.removeItem(STORAGE_KEYS.quickDetectAssetId);
       }
       renderQuickPreview();
 
@@ -2997,10 +3292,10 @@ function pageTasks(route, rawCtx) {
               asset_purpose: String(purposeEl?.value || 'training').trim() || 'training',
               include_screenshots: includeEl?.checked !== false,
             });
-            localStorage.setItem('rv_prefill_training_asset_ids', quickDatasetExport.asset.id);
-            localStorage.setItem('rv_prefill_training_dataset_label', datasetLabel);
-            if (quickDatasetExport.dataset_version?.id) localStorage.setItem('rv_prefill_training_dataset_version_id', quickDatasetExport.dataset_version.id);
-            localStorage.setItem('rv_prefill_training_target_model_code', 'object_detect');
+            localStorage.setItem(STORAGE_KEYS.prefillTrainingAssetIds, quickDatasetExport.asset.id);
+            localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetLabel, datasetLabel);
+            if (quickDatasetExport.dataset_version?.id) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetVersionId, quickDatasetExport.dataset_version.id);
+            localStorage.setItem(STORAGE_KEYS.prefillTrainingTargetModelCode, 'object_detect');
             quickDetectMsg.textContent = `已生成数据集资产：${quickDatasetExport.asset.id}${quickDatasetExport.dataset_version?.version ? ` · ${quickDatasetExport.dataset_version.version}` : ''}`;
             ctx.toast('结果已打包为数据集版本');
             renderQuickDetectBatchOutcome(outcomes);
@@ -3060,7 +3355,7 @@ function pageTasks(route, rawCtx) {
             quick_detect: { object_prompt: prompt },
           },
         });
-        localStorage.setItem('rv_last_task_id', task.id);
+        localStorage.setItem(STORAGE_KEYS.lastTaskId, task.id);
         const settled = await waitForQuickDetect(task.id);
         return buildQuickDetectOutcome({
           uploadedAsset,
@@ -3203,7 +3498,7 @@ function pageTasks(route, rawCtx) {
           `;
           root.querySelector('#openTaskDetail')?.addEventListener('click', () => ctx.navigate(`tasks/${created.id}`));
           root.querySelector('#openTaskResults')?.addEventListener('click', () => ctx.navigate(`results/task/${created.id}`));
-          localStorage.setItem('rv_last_task_id', created.id);
+          localStorage.setItem(STORAGE_KEYS.lastTaskId, created.id);
           await loadTasks();
         } catch (error) {
           createMsg.textContent = error.message || '创建失败';
@@ -3282,7 +3577,7 @@ function buildResultListHtml(rows) {
 function pageResults(route, rawCtx) {
   const ctx = makeContext(route, rawCtx);
   const role = primaryRole(ctx.state.user);
-  const defaultTaskId = route.params?.task_id || localStorage.getItem('rv_last_task_id') || '';
+  const defaultTaskId = route.params?.task_id || localStorage.getItem(STORAGE_KEYS.lastTaskId) || '';
   const introText = role.startsWith('buyer_')
     ? '按 task_id 回查结构化结果、截图摘要和导出信息，支撑客户验收与复核。'
     : role.startsWith('platform_')
@@ -3349,7 +3644,7 @@ function pageResults(route, rawCtx) {
           const rows = await ctx.get(`/results${toQuery({ task_id: clean })}`);
           listWrap.innerHTML = buildResultListHtml(rows || []);
           resultMeta.textContent = `task_id=${clean} · 结果条数=${rows.length}`;
-          localStorage.setItem('rv_last_task_id', clean);
+          localStorage.setItem(STORAGE_KEYS.lastTaskId, clean);
           await bindScreenshotButtons();
         } catch (error) {
           listWrap.innerHTML = renderError(error.message);

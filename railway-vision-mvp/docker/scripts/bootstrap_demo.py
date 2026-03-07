@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-click demo bootstrap for VisionHub.
+"""One-click demo bootstrap for Vistral.
 
 This script will:
 1) Generate local certs/keys
@@ -30,6 +30,9 @@ COMPOSE_FILE = ROOT / "docker" / "docker-compose.yml"
 ENV_FILE = ROOT / "docker" / ".env"
 ASSET_GEN_SCRIPT = ROOT / "docker" / "scripts" / "generate_demo_assets.py"
 OPEN_MODEL_DOWNLOAD_SCRIPT = ROOT / "docker" / "scripts" / "download_open_model.py"
+LOCAL_CAR_NUMBER_DATASET_SCRIPT = ROOT / "docker" / "scripts" / "prepare_local_car_number_dataset.py"
+TRAINING_WORKER_SCRIPT = ROOT / "docker" / "scripts" / "training_worker_runner.py"
+LOCAL_CAR_NUMBER_SOURCE_DIR = ROOT / "demo_data" / "train"
 
 API_BASE = "http://localhost:8000"
 BOOTSTRAP_BUILD = os.getenv("BOOTSTRAP_BUILD", "1") != "0"
@@ -46,6 +49,23 @@ def _compose_base_cmd() -> list[str]:
 def run_cmd(cmd: list[str], cwd: Path | None = None) -> None:
     print("[cmd]", " ".join(cmd))
     subprocess.run(cmd, cwd=str(cwd or ROOT), check=True)
+
+
+def run_cmd_capture(cmd: list[str], cwd: Path | None = None) -> str:
+    print("[cmd]", " ".join(cmd))
+    completed = subprocess.run(
+        cmd,
+        cwd=str(cwd or ROOT),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    stdout = completed.stdout.strip()
+    if stdout:
+        print(stdout)
+    if completed.stderr.strip():
+        print(completed.stderr.strip())
+    return stdout
 
 def http_json(method: str, url: str, payload: dict[str, Any] | None = None, token: str | None = None) -> dict[str, Any]:
     data = None
@@ -66,7 +86,7 @@ def http_json(method: str, url: str, payload: dict[str, Any] | None = None, toke
 
 
 def _multipart_body(fields: dict[str, str], file_field: str, file_name: str, file_bytes: bytes, content_type: str) -> tuple[bytes, str]:
-    boundary = f"----rvdemo{uuid.uuid4().hex}"
+    boundary = f"----vistraldemo{uuid.uuid4().hex}"
     parts: list[bytes] = []
 
     for k, v in fields.items():
@@ -315,6 +335,33 @@ def generate_demo_assets() -> dict[str, Path]:
     return assets
 
 
+def prepare_local_car_number_datasets() -> dict[str, Any] | None:
+    annotations_path = LOCAL_CAR_NUMBER_SOURCE_DIR / "_annotations.txt"
+    if not LOCAL_CAR_NUMBER_SOURCE_DIR.exists() or not annotations_path.exists():
+        print("[info] local car-number dataset not found, skipping local training dataset bootstrap")
+        return None
+
+    print("[info] preparing local car-number training bundles from demo_data/train ...")
+    stdout = run_cmd_capture(
+        [
+            sys.executable,
+            str(LOCAL_CAR_NUMBER_DATASET_SCRIPT),
+            "--source-dir",
+            str(LOCAL_CAR_NUMBER_SOURCE_DIR),
+            "--output-dir",
+            str(ROOT / "demo_data" / "generated_datasets"),
+        ]
+    )
+    summary = json.loads(stdout)
+    print(
+        "[ok] prepared local car-number bundles: "
+        f"selected_images={summary.get('selected_images')} "
+        f"train={summary.get('bundles', {}).get('train', {}).get('sample_count')} "
+        f"validation={summary.get('bundles', {}).get('validation', {}).get('sample_count')}"
+    )
+    return summary
+
+
 def recommend_model_for_task(
     operator_token: str,
     *,
@@ -549,6 +596,149 @@ def upload_assets_and_create_tasks(operator_token: str, pipeline: dict[str, Any]
     return task_ids
 
 
+def get_model_detail(operator_token: str, model_id: str) -> dict[str, Any]:
+    rows = http_json("GET", f"{API_BASE}/models", token=operator_token)
+    for row in rows if isinstance(rows, list) else []:
+        if row.get("id") == model_id:
+            return row
+    raise RuntimeError(f"model not visible to operator: {model_id}")
+
+
+def upload_local_training_assets(operator_token: str, dataset_summary: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    print("[info] uploading local car-number training bundles...")
+    uploaded: dict[str, dict[str, Any]] = {}
+    split_to_purpose = {"train": "training", "validation": "validation"}
+    for split, purpose in split_to_purpose.items():
+        bundle = (dataset_summary.get("bundles") or {}).get(split) or {}
+        bundle_path = Path(bundle.get("zip_path") or "")
+        if not bundle_path.exists():
+            raise RuntimeError(f"prepared bundle missing for {split}: {bundle_path}")
+        uploaded[split] = http_upload_file(
+            url=f"{API_BASE}/assets/upload",
+            token=operator_token,
+            file_field="file",
+            file_path=bundle_path,
+            extra_fields={
+                "sensitivity_level": "L2",
+                "source_uri": f"demo://local-car-number/{split}",
+                "asset_purpose": purpose,
+                "dataset_label": str(bundle.get("dataset_label") or f"local-car-number-{split}"),
+                "use_case": "wagon-side-car-number-ocr-training",
+                "intended_model_code": "car_number_ocr",
+            },
+            content_type="application/zip",
+        )
+        print(
+            f"[ok] uploaded local {split} bundle: "
+            f"{uploaded[split]['id']} resources={(uploaded[split].get('meta') or {}).get('archive_resource_count')}"
+        )
+    return uploaded
+
+
+def register_bootstrap_training_worker(platform_admin_token: str) -> dict[str, Any]:
+    worker_code = f"bootstrap-train-worker-{uuid.uuid4().hex[:8]}"
+    worker = http_json(
+        "POST",
+        f"{API_BASE}/training/workers/register",
+        {
+            "worker_code": worker_code,
+            "name": "Bootstrap Local Trainer",
+            "host": "bootstrap-local-trainer",
+            "status": "ACTIVE",
+            "labels": {"source": "bootstrap_demo", "task_type": "car_number_ocr"},
+            "resources": {"cpu_cores": 4, "gpu_count": 0, "gpu_mem_mb": 0},
+        },
+        token=platform_admin_token,
+    )
+    print(f"[ok] registered bootstrap training worker: {worker['worker_code']}")
+    return worker
+
+
+def create_local_training_job(
+    operator_token: str,
+    *,
+    base_model: dict[str, Any],
+    train_asset_id: str,
+    validation_asset_id: str,
+    worker: dict[str, Any],
+) -> dict[str, Any]:
+    target_version = f"vlocal.{int(time.time())}"
+    job = http_json(
+        "POST",
+        f"{API_BASE}/training/jobs",
+        {
+            "asset_ids": [train_asset_id],
+            "validation_asset_ids": [validation_asset_id],
+            "base_model_id": base_model["id"],
+            "owner_tenant_id": base_model.get("owner_tenant_id"),
+            "training_kind": "finetune",
+            "target_model_code": "car_number_ocr_local_ft",
+            "target_version": target_version,
+            "worker_selector": {
+                "worker_codes": [worker["worker_code"]],
+                "hosts": [worker.get("host") or "bootstrap-local-trainer"],
+            },
+            "spec": {
+                "epochs": 3,
+                "learning_rate": 0.0005,
+                "dataset_source": "demo_data/train",
+                "annotation_type": "bbox_number",
+            },
+        },
+        token=operator_token,
+    )
+    print(f"[ok] created local car-number training job: {job['id']} code={job.get('job_code')}")
+    return job
+
+
+def run_training_worker_once(worker: dict[str, Any]) -> None:
+    bootstrap_token = worker.get("bootstrap_token")
+    if not bootstrap_token:
+        raise RuntimeError("bootstrap training worker token missing")
+    work_dir = ROOT / "tmp" / "bootstrap_training_worker"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[info] running bootstrap training worker once for {worker['worker_code']} ...")
+    run_cmd(
+        [
+            sys.executable,
+            str(TRAINING_WORKER_SCRIPT),
+            "--backend-base-url",
+            API_BASE,
+            "--worker-code",
+            worker["worker_code"],
+            "--worker-token",
+            bootstrap_token,
+            "--worker-host",
+            worker.get("host") or "bootstrap-local-trainer",
+            "--backend-root",
+            str(ROOT / "backend"),
+            "--model-encrypt-key",
+            str(ROOT / "docker" / "keys" / "model_encrypt.key"),
+            "--model-sign-private-key",
+            str(ROOT / "docker" / "keys" / "model_sign_private.pem"),
+            "--work-dir",
+            str(work_dir),
+            "--once",
+            "--trainer-mode",
+            "builtin",
+        ]
+    )
+
+
+def wait_training_job_done(operator_token: str, job_id: str, timeout_sec: int = 300) -> dict[str, Any]:
+    print(f"[info] waiting training job completion: {job_id}")
+    deadline = time.time() + timeout_sec
+    latest_status = None
+    while time.time() < deadline:
+        job = http_json("GET", f"{API_BASE}/training/jobs/{job_id}", token=operator_token)
+        latest_status = job.get("status")
+        if latest_status in {"SUCCEEDED", "FAILED", "CANCELLED"}:
+            print(f"[ok] training job finished: {job_id} status={latest_status}")
+            return job
+        time.sleep(3)
+    raise RuntimeError(f"training job timeout: {job_id}, latest_status={latest_status}")
+
+
 def verify_pipeline_runs(operator_token: str, task_ids: list[str], pipeline_id: str) -> None:
     print("[info] verifying pipeline results...")
     for task_id in task_ids:
@@ -624,6 +814,7 @@ def main() -> None:
 
     # 5) assets
     assets = generate_demo_assets()
+    local_dataset_summary = prepare_local_car_number_datasets()
     buyer_operator_token = login("buyer_operator", "buyer123")
     task_ids = upload_assets_and_create_tasks(buyer_operator_token, pipeline, model_ids, assets)
 
@@ -637,12 +828,30 @@ def main() -> None:
     wait_tasks_done(buyer_operator_token, task_ids)
     verify_pipeline_runs(buyer_operator_token, task_ids, pipeline["id"])
 
+    local_training_job: dict[str, Any] | None = None
+    if local_dataset_summary:
+        base_model = get_model_detail(buyer_operator_token, model_ids["car_number_ocr"])
+        uploaded_bundles = upload_local_training_assets(buyer_operator_token, local_dataset_summary)
+        bootstrap_worker = register_bootstrap_training_worker(platform_admin_token)
+        local_training_job = create_local_training_job(
+            buyer_operator_token,
+            base_model=base_model,
+            train_asset_id=uploaded_bundles["train"]["id"],
+            validation_asset_id=uploaded_bundles["validation"]["id"],
+            worker=bootstrap_worker,
+        )
+        run_training_worker_once(bootstrap_worker)
+        local_training_job = wait_training_job_done(buyer_operator_token, local_training_job["id"])
+
     print("\n[done] demo environment is ready.")
     print("frontend: https://localhost:8443")
     print("login: platform_admin/platform123 or buyer_operator/buyer123 or supplier_demo/supplier123")
     print("task ids:")
     for tid in task_ids:
         print(f"  - {tid}")
+    if local_training_job:
+        print("training job:")
+        print(f"  - {local_training_job['id']} status={local_training_job.get('status')} candidate={((local_training_job.get('candidate_model') or {}).get('model_code') or '-')}")
     print("\nYou can inspect results and audit logs from UI now.")
 
 

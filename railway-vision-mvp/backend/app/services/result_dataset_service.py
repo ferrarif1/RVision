@@ -12,6 +12,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.brand import RESULT_DATASET_SCHEMA_VERSION, RESULT_DATASET_SOURCE_SCHEME
 from app.core.config import get_settings
 from app.db.models import DataAsset, InferenceResult, InferenceTask
 from app.security.dependencies import AuthUser
@@ -19,7 +20,6 @@ from app.security.roles import is_buyer_user
 
 MEDIA_ASSET_TYPES = {"image", "video"}
 DATASET_EXPORT_ALLOWED_PURPOSES = {"training", "validation", "finetune"}
-RESULT_DATASET_SCHEMA_VERSION = "visionhub.result_dataset.v1"
 DATASET_PREVIEW_LIMIT = 20
 
 
@@ -253,7 +253,7 @@ def export_tasks_to_dataset_asset(
         file_name=f"{dataset_stem}.zip",
         asset_type="archive",
         storage_uri=zip_path,
-        source_uri=f"visionhub://results/export-dataset/{export_asset_id}",
+        source_uri=f"{RESULT_DATASET_SOURCE_SCHEME}://results/export-dataset/{export_asset_id}",
         sensitivity_level="L2",
         checksum=checksum.hexdigest(),
         buyer_tenant_id=next(iter(buyer_tenant_ids)),

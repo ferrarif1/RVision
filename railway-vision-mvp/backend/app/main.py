@@ -4,12 +4,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import assets, audit, auth, dashboard, devices, edge, models, pipelines, results, tasks, training, users
+from app.core.brand import BRAND_TAGLINE
 from app.core.config import get_settings
 from app.db.database import SessionLocal
 from app.services.bootstrap_service import bootstrap_defaults, initialize_database
 
 settings = get_settings()
-app = FastAPI(title=settings.app_name)
+app = FastAPI(
+    title=settings.app_name,
+    description=BRAND_TAGLINE,
+)
 
 app.add_middleware(
     CORSMiddleware,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Polling training worker runner for VisionHub training control plane.
+"""Polling training worker runner for Vistral training control plane.
 
 This script fills the gap between control-plane APIs and actual worker execution:
 - heartbeat + pull jobs
@@ -701,13 +701,13 @@ class TrainingWorkerRunner:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run VisionHub training worker execution loop.")
+    parser = argparse.ArgumentParser(description="Run Vistral training worker execution loop.")
     parser.add_argument("--backend-base-url", default=os.getenv("TRAINING_BACKEND_BASE_URL", "http://localhost:8000"))
     parser.add_argument("--worker-code", default=os.getenv("TRAINING_WORKER_CODE", ""))
     parser.add_argument("--worker-token", default=os.getenv("TRAINING_WORKER_TOKEN", ""))
     parser.add_argument("--worker-host", default=os.getenv("TRAINING_WORKER_HOST", "training-worker-local"))
     parser.add_argument("--backend-root", default=os.getenv("TRAINING_BACKEND_ROOT", "./backend"))
-    parser.add_argument("--work-dir", default=os.getenv("TRAINING_WORK_DIR", "/tmp/rv_training_worker"))
+    parser.add_argument("--work-dir", default=os.getenv("TRAINING_WORK_DIR", "/tmp/vistral_training_worker"))
     parser.add_argument("--model-decrypt-key", default=os.getenv("MODEL_DECRYPT_KEY", "./edge/keys/model_decrypt.key"))
     parser.add_argument("--model-encrypt-key", default=os.getenv("MODEL_ENCRYPT_KEY", "./docker/keys/model_encrypt.key"))
     parser.add_argument("--model-sign-private-key", default=os.getenv("MODEL_SIGN_PRIVATE_KEY", "./docker/keys/model_sign_private.pem"))

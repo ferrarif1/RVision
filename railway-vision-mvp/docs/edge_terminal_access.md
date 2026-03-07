@@ -48,7 +48,7 @@ Edge Device
 | `EDGE_DEVICE_CODE` | `edge-01` | 设备编码（唯一） | Unique edge device code |
 | `EDGE_TOKEN` | `EDGE_TOKEN_CHANGE_ME` | 设备鉴权令牌 | Device authentication token |
 | `EDGE_POLL_SECONDS` | `10` | 轮询间隔（秒） | Poll interval in seconds |
-| `EDGE_CACHE_DIR` | `/tmp/rv_edge_cache` | 本地缓存目录 | Local cache directory |
+| `EDGE_CACHE_DIR` | `/tmp/vistral_edge_cache` | 本地缓存目录 | Local cache directory |
 | `EDGE_DECRYPT_KEY_PATH` | `/app/keys/model_decrypt.key` | 模型解密密钥路径 | Decrypt key path |
 | `EDGE_SIGN_PUBLIC_KEY_PATH` | `/app/keys/model_sign_public.pem` | 模型签名公钥路径 | Signature public key path |
 | `EDGE_INFERENCE_MODE` | `mock` | 推理模式 | Inference mode |
@@ -59,7 +59,7 @@ Edge Device
 ### 5.1 使用 Docker Compose Profile（推荐）
 
 ```bash
-cd /Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp
+cd <repo-root>
 docker compose --env-file docker/.env -f docker/docker-compose.yml up -d --build edge-agent
 ```
 
@@ -72,7 +72,7 @@ docker compose --env-file docker/.env -f docker/docker-compose.yml logs -f edge-
 ### 5.2 本地 Python 进程运行（调试）
 
 ```bash
-cd /Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/edge
+cd <repo-root>/edge
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 

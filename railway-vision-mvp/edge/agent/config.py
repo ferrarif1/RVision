@@ -15,7 +15,7 @@ class EdgeSettings:
     # 轮询间隔秒数 / Poll interval in seconds.
     edge_poll_seconds: int = int(os.getenv("EDGE_POLL_SECONDS", "10"))
     # 本地缓存目录（资产、补传队列、临时文件）/ Local cache directory for assets and retry queue.
-    edge_cache_dir: str = os.getenv("EDGE_CACHE_DIR", "/tmp/rv_edge_cache")
+    edge_cache_dir: str = os.getenv("EDGE_CACHE_DIR", "/tmp/vistral_edge_cache")
     # 本地模型解密密钥路径 / Local decrypt key path for encrypted model artifacts.
     edge_decrypt_key_path: str = os.getenv("EDGE_DECRYPT_KEY_PATH", "/app/keys/model_decrypt.key")
     # 平台签名公钥路径（用于验签）/ Platform public key path for signature verification.

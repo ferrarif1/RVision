@@ -21,6 +21,8 @@ from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
+from app.core.brand import BRAND_NAME, MODEL_PACKAGE_PUBLISHER
+
 
 def _load_schema_arg(raw: str, fallback: dict) -> dict:
     text = str(raw or "").strip()
@@ -78,7 +80,7 @@ def build_package(
     signature = private_key.sign(manifest_bytes + encrypted_model_bytes, padding.PKCS1v15(), hashes.SHA256())
 
     readme_text = (
-        "VisionHub model package\n"
+        f"{BRAND_NAME} model package\n"
         "- manifest.json: model metadata and hash\n"
         "- model.enc: encrypted model bytes\n"
         "- signature.sig: RSA signature for manifest+model.enc\n"
@@ -102,7 +104,7 @@ def main() -> None:
     parser.add_argument("--task-type", default="car_number_ocr")
     parser.add_argument("--input-schema", default="image|video")
     parser.add_argument("--output-schema", default="json:bbox,text,confidence")
-    parser.add_argument("--publisher", default="railway-platform")
+    parser.add_argument("--publisher", default=MODEL_PACKAGE_PUBLISHER)
     parser.add_argument("--model-type", default="expert")
     parser.add_argument("--runtime", default="python")
     parser.add_argument("--plugin-name", default="")

@@ -49,7 +49,7 @@ def _json_request(method: str, path: str, payload: dict | None = None, token: st
 
 
 def _multipart_body(fields: dict[str, str], file_name: str, file_bytes: bytes, content_type: str) -> tuple[bytes, str]:
-    boundary = f"----rvhardening{uuid.uuid4().hex}"
+    boundary = f"----vistralhardening{uuid.uuid4().hex}"
     parts: list[bytes] = []
 
     for key, value in fields.items():

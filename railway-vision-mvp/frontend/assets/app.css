@@ -579,6 +579,10 @@ label {
   transition: background 0.15s ease;
 }
 
+.table tbody tr.active-row {
+  background: rgba(156, 128, 52, 0.14);
+}
+
 .mono {
   font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 12px;
@@ -1043,6 +1047,10 @@ label {
   .quick-review-stage {
     grid-template-columns: 1fr;
   }
+
+  .training-run-hero {
+    flex-direction: column;
+  }
 }
 
 @media (max-width: 720px) {
@@ -1121,6 +1129,137 @@ label {
 }
 
 .selection-summary span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.training-run-summary {
+  display: grid;
+  gap: 14px;
+}
+
+.training-run-hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(156, 128, 52, 0.18);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at top right, rgba(156, 128, 52, 0.12), transparent 42%),
+    linear-gradient(180deg, rgba(20, 21, 16, 0.98), rgba(14, 15, 11, 0.96));
+}
+
+.training-run-hero-main {
+  display: grid;
+  gap: 8px;
+}
+
+.training-run-hero-main h4 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.training-run-hero-main p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.training-run-metrics {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.training-run-metric-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid rgba(156, 128, 52, 0.18);
+  border-radius: 12px;
+  background: rgba(18, 19, 14, 0.92);
+}
+
+.training-run-metric-card span,
+.training-run-metric-card small {
+  color: var(--muted);
+}
+
+.training-run-metric-card strong {
+  font-size: 24px;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.training-run-splits {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.training-run-split-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(18, 19, 14, 0.92);
+}
+
+.training-run-split-card.train {
+  border-color: rgba(201, 157, 53, 0.45);
+}
+
+.training-run-split-card.validation {
+  border-color: rgba(94, 145, 214, 0.45);
+}
+
+.training-run-split-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.training-run-split-value {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.training-run-split-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.training-run-ref-block {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(156, 128, 52, 0.18);
+  border-radius: 12px;
+  background: rgba(18, 19, 14, 0.92);
+}
+
+.training-run-ref-list {
+  display: grid;
+  gap: 8px;
+}
+
+.training-run-ref {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(156, 128, 52, 0.12);
+  background: rgba(14, 15, 11, 0.95);
+}
+
+.training-run-ref span {
   color: var(--muted);
   font-size: 12px;
 }

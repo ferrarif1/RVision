@@ -1,4 +1,4 @@
-# 模型包规范（VisionHub）
+# 模型包规范（Vistral）
 
 ## 1. 固定目录结构
 
@@ -45,7 +45,7 @@ model_package.zip
   "input_schema": "image|video",
   "output_schema": "json:bbox,text,confidence",
   "published_at": "2026-02-27T01:02:03Z",
-  "publisher": "railway-platform"
+  "publisher": "vistral-platform"
 }
 ```
 

@@ -2,13 +2,15 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.brand import BACKEND_APP_NAME, DATABASE_NAME
+
 
 class Settings(BaseSettings):
-    app_name: str = Field(default="visionhub-backend", description="应用名称 / Backend application name")
+    app_name: str = Field(default=BACKEND_APP_NAME, description="应用名称 / Backend application name")
     app_env: str = Field(default="dev", description="运行环境 / Runtime environment, e.g. dev/staging/prod")
 
     database_url: str = Field(
-        default="postgresql+psycopg2://railway:railway123@localhost:5432/railway_vision",
+        default=f"postgresql+psycopg2://railway:railway123@localhost:5432/{DATABASE_NAME}",
         description="数据库连接串 / SQLAlchemy database connection URL",
     )
     redis_url: str = Field(default="redis://localhost:6379/0", description="Redis 连接串 / Redis connection URL")

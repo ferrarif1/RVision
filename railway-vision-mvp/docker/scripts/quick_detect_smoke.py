@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Runtime smoke checks for the VisionHub quick-detect flow."""
+"""Runtime smoke checks for the Vistral quick-detect flow."""
 
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ def _binary_request(method: str, path: str, token: str | None = None, timeout: i
 
 
 def _multipart_body(fields: dict[str, str], file_name: str, file_bytes: bytes, content_type: str) -> tuple[bytes, str]:
-    boundary = f"----rvquick{uuid.uuid4().hex}"
+    boundary = f"----vistralquick{uuid.uuid4().hex}"
     parts: list[bytes] = []
 
     for key, value in fields.items():
@@ -130,7 +130,7 @@ def _ensure_fixture() -> bytes:
         return FIXTURE_PATH.read_bytes()
 
     FIXTURE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    req = request.Request(QUICK_DETECT_SAMPLE_URL, headers={"User-Agent": "VisionHub-QA"})
+    req = request.Request(QUICK_DETECT_SAMPLE_URL, headers={"User-Agent": "Vistral-QA"})
     with request.urlopen(req, timeout=45) as resp:
         payload = resp.read()
     _assert(payload, "downloaded quick-detect sample is empty")

@@ -149,7 +149,7 @@ worker 侧：
 ### 6.2 快速运行
 
 ```bash
-cd railway-vision-mvp
+cd <repo-root>
 python docker/scripts/training_worker_runner.py   --backend-base-url http://localhost:8000   --worker-token trainwk_xxx   --backend-root ./backend   --model-encrypt-key ./docker/keys/model_encrypt.key   --model-sign-private-key ./docker/keys/model_sign_private.pem   --once
 ```
 

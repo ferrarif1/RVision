@@ -1,10 +1,13 @@
 import { createStore } from './core/store.js';
 import { createRouter } from './core/router.js';
 import { api, apiPost } from './core/api.js';
+import { buildDocumentTitle, migrateLegacyStorageKeys, STORAGE_KEYS } from './config/brand.js';
 import { renderShell, bindShellEvents } from './layout/AppShell.js';
 import { getPage } from './pages/index.js';
 
 const root = document.getElementById('app');
+
+migrateLegacyStorageKeys();
 
 const routes = [
   { name: 'login', pattern: 'login', requiresAuth: false, label: '登录', navPage: null },
@@ -38,27 +41,27 @@ const NAV_COMMANDS = [
 ];
 
 const store = createStore({
-  token: localStorage.getItem('rv_token') || '',
-  user: JSON.parse(localStorage.getItem('rv_user') || 'null'),
-  permissions: new Set(JSON.parse(localStorage.getItem('rv_permissions') || '[]')),
+  token: localStorage.getItem(STORAGE_KEYS.token) || '',
+  user: JSON.parse(localStorage.getItem(STORAGE_KEYS.user) || 'null'),
+  permissions: new Set(JSON.parse(localStorage.getItem(STORAGE_KEYS.permissions) || '[]')),
   route: routes[0],
-  sidebarCollapsed: localStorage.getItem('rv_sidebar_collapsed') === '1',
+  sidebarCollapsed: localStorage.getItem(STORAGE_KEYS.sidebarCollapsed) === '1',
   commandPaletteOpen: false,
   commandPaletteQuery: '',
   commandPaletteSelectedIndex: 0,
 });
 
 function saveSession(state) {
-  localStorage.setItem('rv_token', state.token || '');
-  localStorage.setItem('rv_user', JSON.stringify(state.user || null));
-  localStorage.setItem('rv_permissions', JSON.stringify([...(state.permissions || new Set())]));
+  localStorage.setItem(STORAGE_KEYS.token, state.token || '');
+  localStorage.setItem(STORAGE_KEYS.user, JSON.stringify(state.user || null));
+  localStorage.setItem(STORAGE_KEYS.permissions, JSON.stringify([...(state.permissions || new Set())]));
 }
 
 function clearSession() {
-  localStorage.removeItem('rv_token');
-  localStorage.removeItem('rv_user');
-  localStorage.removeItem('rv_permissions');
-  localStorage.removeItem('rv_last_route');
+  localStorage.removeItem(STORAGE_KEYS.token);
+  localStorage.removeItem(STORAGE_KEYS.user);
+  localStorage.removeItem(STORAGE_KEYS.permissions);
+  localStorage.removeItem(STORAGE_KEYS.lastRoute);
 }
 
 async function hydrateSession() {
@@ -254,7 +257,7 @@ async function login(username, password) {
   const permissions = new Set(me.permissions || resp.permissions || []);
   store.setState({ token: resp.access_token, user: me, permissions });
   saveSession(store.getState());
-  router.navigate(localStorage.getItem('rv_last_route') || 'dashboard');
+  router.navigate(localStorage.getItem(STORAGE_KEYS.lastRoute) || 'dashboard');
   return { ok: true };
 }
 
@@ -274,7 +277,7 @@ function logout() {
 function toggleSidebar() {
   const next = !store.getState().sidebarCollapsed;
   store.setState({ sidebarCollapsed: next });
-  localStorage.setItem('rv_sidebar_collapsed', next ? '1' : '0');
+  localStorage.setItem(STORAGE_KEYS.sidebarCollapsed, next ? '1' : '0');
   render();
 }
 
@@ -441,7 +444,7 @@ function render() {
   }
 
   if (hasUser && route.name === 'login') {
-    router.navigate(localStorage.getItem('rv_last_route') || 'dashboard');
+    router.navigate(localStorage.getItem(STORAGE_KEYS.lastRoute) || 'dashboard');
     return;
   }
 
@@ -453,8 +456,10 @@ function render() {
   }
 
   if (route.requiresAuth && !['403', '404', 'login'].includes(route.name)) {
-    localStorage.setItem('rv_last_route', routePathValue(route));
+    localStorage.setItem(STORAGE_KEYS.lastRoute, routePathValue(route));
   }
+
+  document.title = buildDocumentTitle(route.label || route.name);
 
   const page = getPage(route, pageCtxFor(route));
 
@@ -523,7 +528,7 @@ const router = createRouter({
 async function bootstrap() {
   await hydrateSession();
   if (store.getState().user) {
-    const start = localStorage.getItem('rv_last_route') || 'dashboard';
+    const start = localStorage.getItem(STORAGE_KEYS.lastRoute) || 'dashboard';
     window.location.hash = `#/${start}`;
   } else {
     window.location.hash = '#/login';

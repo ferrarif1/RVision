@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""API parity and release-gate regression checks for VisionHub."""
+"""API parity and release-gate regression checks for Vistral."""
 
 from __future__ import annotations
 
@@ -154,7 +154,7 @@ def _json_request(method: str, path: str, token: str | None = None, payload: dic
 
 
 def _multipart_body(file_field: str, file_name: str, file_bytes: bytes, fields: dict[str, str]) -> tuple[bytes, str]:
-    boundary = f"----rvparity{uuid.uuid4().hex}"
+    boundary = f"----vistralparity{uuid.uuid4().hex}"
     parts: list[bytes] = []
     for key, value in fields.items():
         parts.append(f"--{boundary}\r\n".encode())

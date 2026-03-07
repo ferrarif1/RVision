@@ -292,7 +292,7 @@ OBJECT_DETECT_GROUP_ALIASES: dict[str, tuple[str, ...]] = {
 @lru_cache(maxsize=2)
 def _prepare_model_bundle(bundle_path: str) -> tuple[str, str]:
     model_hash = hashlib.sha256(bundle_path.encode("utf-8")).hexdigest()[:16]
-    out_dir = os.path.join("/tmp", "rv_open_models", model_hash)
+    out_dir = os.path.join("/tmp", "vistral_open_models", model_hash)
     os.makedirs(out_dir, exist_ok=True)
 
     prototxt_path = os.path.join(out_dir, "deploy.prototxt")

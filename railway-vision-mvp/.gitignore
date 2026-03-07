@@ -24,3 +24,5 @@ backend/app/uploads/screenshots/*
 !backend/app/uploads/screenshots/.gitkeep
 docs/qa/reports/*.json
 !docs/qa/reports/.gitkeep
+demo_data/generated_datasets/
+tmp/

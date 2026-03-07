@@ -1,4 +1,5 @@
 import { PERMISSIONS } from '../core/api.js';
+import { BRAND_NAME } from '../config/brand.js';
 
 const ROLE_LABELS = {
   platform_admin: '平台管理员',
@@ -124,7 +125,7 @@ export function renderShell({ state, routeView, contentHtml, commandPalette }) {
     <div class="app-shell ${collapsed}">
       <aside class="sidebar">
         <div class="brand-row">
-          <div class="brand">VisionHub</div>
+          <div class="brand">${BRAND_NAME}</div>
           <button class="icon-btn" id="toggleSidebarBtn" title="切换侧栏">☰</button>
         </div>
         ${navHtml}

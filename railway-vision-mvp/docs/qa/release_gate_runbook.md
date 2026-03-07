@@ -39,7 +39,7 @@
 ### 4.1 Quality Gate
 
 ```bash
-cd /Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp
+cd <repo-root>
 bash docker/scripts/quality_gate.sh
 ```
 
@@ -53,21 +53,21 @@ bash docker/scripts/quality_gate.sh
 ### 4.2 API Parity Regression
 
 ```bash
-cd /Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp
+cd <repo-root>
 python3 docker/scripts/parity_regression.py --wait-seconds 120
 ```
 
 ### 4.3 Full GO / NO-GO
 
 ```bash
-cd /Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp
+cd <repo-root>
 bash docker/scripts/go_no_go.sh
 ```
 
 可指定报告目录与等待时间：
 
 ```bash
-cd /Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp
+cd <repo-root>
 bash docker/scripts/go_no_go.sh --wait-seconds 180 --report-dir docs/qa/reports
 ```
 
@@ -115,7 +115,7 @@ bash docker/scripts/go_no_go.sh --wait-seconds 180 --report-dir docs/qa/reports
 ### Task not terminal in time
 
 - 确认 `edge-agent` 是否已运行
-- 检查 `docker logs rv_edge_agent`
+- 检查 `docker logs vistral_edge_agent`
 - 检查 `/edge/pull_tasks` 与 `/edge/push_results` 审计痕迹
 
 ### Permission mismatch

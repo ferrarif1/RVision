@@ -5,7 +5,7 @@
 你现在没有任何视频/图片/模型时，直接运行：
 
 ```bash
-cd /Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp
+cd <repo-root>
 bash docker/scripts/bootstrap_demo.sh
 ```
 
@@ -19,6 +19,7 @@ bash docker/scripts/bootstrap_demo.sh
 - 自动生成演示图片（以及可选 mp4 视频）
 - 自动用买家账号上传资产，并按 Pipeline 创建任务
 - 启动 edge-agent 并等待任务完成
+- 如果检测到 `demo_data/train/` 本地车号数据集，则额外自动切分 `train/validation`、上传 ZIP 训练资产、创建一条 `car_number_ocr` 微调作业，并用 `training_worker_runner.py --once` 跑完整一轮候选模型回收
 
 本 demo 的文档口径也按同一 4 条业务线组织：
 
@@ -30,8 +31,8 @@ bash docker/scripts/bootstrap_demo.sh
 需要注意：
 
 - 这个 demo 真实覆盖的是“模型提审发布 + Pipeline 编排推理 + 结果回传”。
-- 它不会在 demo 过程中真的执行一次训练或微调作业。
-- `training / finetune` 在当前 demo 中体现为资产与模型治理语义，而不是训练引擎。
+- 若 `demo_data/train/` 不存在，则 demo 仍只覆盖“模型提审发布 + Pipeline 编排推理 + 结果回传”。
+- 若 `demo_data/train/` 存在并包含 `_annotations.txt`，则 demo 会补跑一次真实训练控制面闭环。
 
 完成后直接打开：
 
@@ -46,7 +47,7 @@ bash docker/scripts/bootstrap_demo.sh
 如果你只需要快速拉起中心端服务（不跑完整 demo），可直接使用：
 
 ```bash
-cd /Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp
+cd <repo-root>
 bash docker/scripts/start_one_click.sh
 ```
 
@@ -57,7 +58,7 @@ bash docker/scripts/start_one_click.sh
 若超时，会自动输出 backend/frontend 最近日志用于排障。
 
 ```bash
-cd /Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp
+cd <repo-root>
 ./docker/scripts/generate_local_materials.sh
 ```
 
@@ -75,7 +76,7 @@ docker compose -f docker/docker-compose.yml up -d --build
 如果出现 `auth.docker.io` 超时（拉不到 `python/nginx/postgres/redis`），先配置镜像源变量：
 
 ```bash
-cd /Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp
+cd <repo-root>
 cp docker/.env.example docker/.env
 ```
 
@@ -109,7 +110,7 @@ docker compose --env-file docker/.env -f docker/docker-compose.yml up -d --build
 ### 1.2.0 下载开源预训练模型（示例）
 
 ```bash
-cd /Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp
+cd <repo-root>
 python3 docker/scripts/download_open_model.py --output backend/app/uploads/open_models/mobilenet_ssd_bundle.zip
 ```
 
@@ -211,6 +212,21 @@ docker compose -f docker/docker-compose.yml exec backend sh -lc '
 3. 选择敏感级别（推荐 `L2`）。
 4. 上传成功后记录 `asset_id`。
 
+## 1.5.1 本地车号素材自动训练（可选）
+
+若你已经把货车车号图片和标注放在 `demo_data/train/` 下，`bootstrap_demo.sh` 会自动：
+
+1. 读取 `_classes.txt` 和 `_annotations.txt`
+2. 跳过“只有文件名、没有 bbox”的空标注行
+3. 按稳定规则切出 `train / validation`
+4. 生成：
+   - `demo_data/generated_datasets/car_number_ocr_train_bundle.zip`
+   - `demo_data/generated_datasets/car_number_ocr_validation_bundle.zip`
+   - `demo_data/generated_datasets/car_number_ocr_dataset_summary.json`
+5. 自动上传为 `training / validation` 资产
+6. 以 `car_number_ocr` 为基模创建一条微调作业
+7. 通过 `training_worker_runner.py --once` 跑完一次候选模型生成
+
 ## 1.6 创建任务
 
 推荐路径：
@@ -310,7 +326,7 @@ EDGE_PLUGIN_MODULES=inference.plugins_supplier_example
 ## 1.12 发布前质量门禁
 
 ```bash
-cd /Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp
+cd <repo-root>
 bash docker/scripts/quality_gate.sh
 ```
 
@@ -323,7 +339,7 @@ bash docker/scripts/quality_gate.sh
 ## 1.13 发布 GO/NO-GO 检查
 
 ```bash
-cd /Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp
+cd <repo-root>
 bash docker/scripts/go_no_go.sh
 ```
 

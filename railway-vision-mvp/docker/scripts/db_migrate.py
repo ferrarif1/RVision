@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Inspect or apply versioned schema migrations.
 
-Default behavior prefers running inside the `rv_backend` container so the
+Default behavior prefers running inside the `vistral_backend` container so the
 database URL and Python dependencies match the live backend runtime.
 """
 
@@ -14,7 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 BACKEND_ROOT = ROOT / "backend"
-CONTAINER_NAME = "rv_backend"
+CONTAINER_NAME = "vistral_backend"
 
 
 def _can_use_container() -> bool:
