@@ -315,6 +315,7 @@ def _score_car_number_text(text: str | None, confidence: float = 0.0) -> float:
     digits = sum(char.isdigit() for char in cleaned)
     letters = sum(char.isalpha() for char in cleaned)
     digit_ratio = digits / max(len(cleaned), 1)
+    alpha_clusters = re.findall(r"[A-Z]+", cleaned)
     score = float(confidence)
 
     if re.fullmatch(r"\d{7,8}", cleaned):
@@ -335,9 +336,22 @@ def _score_car_number_text(text: str | None, confidence: float = 0.0) -> float:
     else:
         score -= 0.25
 
+    if digits == len(cleaned):
+        score += 0.18
+    elif re.fullmatch(r"[A-Z]{1,3}\d{4,8}", cleaned):
+        score += 0.14
+    elif re.fullmatch(r"[A-Z0-9]{6,10}", cleaned) and digit_ratio >= 0.65:
+        score += 0.08
+
     score += digit_ratio * 0.45
     if letters >= 2 and digit_ratio < 0.6:
         score -= 0.35
+    if len(alpha_clusters) > 1:
+        score -= 0.16 * (len(alpha_clusters) - 1)
+    if cleaned.endswith(tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ")) and not re.fullmatch(r"[A-Z]{1,3}\d{4,8}", cleaned):
+        score -= 0.18
+    if letters >= 2 and not re.fullmatch(r"[A-Z]{1,3}\d{4,8}", cleaned):
+        score -= 0.08 * letters
     if len(cleaned) <= 4:
         score -= 0.5
     return round(score, 4)
@@ -395,7 +409,7 @@ def _car_number_preprocess_variants(frame: np.ndarray) -> list[tuple[str, np.nda
     ]
 
 
-def _dedupe_rois(rois: list[list[int]], *, limit: int = 6) -> list[list[int]]:
+def _dedupe_rois(rois: list[list[int]], *, limit: int = 10) -> list[list[int]]:
     deduped: list[list[int]] = []
     for roi in rois:
         x1, y1, x2, y2 = [int(value) for value in roi]
@@ -417,13 +431,34 @@ def _dedupe_rois(rois: list[list[int]], *, limit: int = 6) -> list[list[int]]:
     return deduped
 
 
+def _anchor_car_number_rois(frame: np.ndarray) -> list[list[int]]:
+    h, w = frame.shape[:2]
+    normalized_boxes = [
+        (0.10, 0.26, 0.28, 0.40),
+        (0.10, 0.30, 0.45, 0.44),
+        (0.18, 0.27, 0.48, 0.42),
+        (0.28, 0.28, 0.72, 0.42),
+        (0.46, 0.28, 0.96, 0.43),
+        (0.56, 0.29, 0.99, 0.44),
+    ]
+    return [
+        [
+            max(0, int(w * x1)),
+            max(0, int(h * y1)),
+            min(w, int(w * x2)),
+            min(h, int(h * y2)),
+        ]
+        for x1, y1, x2, y2 in normalized_boxes
+    ]
+
+
 def _detect_text_band_rois(frame: np.ndarray) -> list[list[int]]:
     h, w = frame.shape[:2]
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    y1 = int(h * 0.14)
+    y1 = int(h * 0.18)
     y2 = int(h * 0.5)
-    x1 = int(w * 0.12)
-    x2 = int(w * 0.82)
+    x1 = int(w * 0.02)
+    x2 = int(w * 0.98)
     search = gray[y1:y2, x1:x2]
     if not search.size:
         return []
@@ -438,7 +473,7 @@ def _detect_text_band_rois(frame: np.ndarray) -> list[list[int]]:
     rois: list[list[int]] = []
     for contour in contours:
         x, y, bw, bh = cv2.boundingRect(contour)
-        if bw < int(w * 0.12) or bh < int(h * 0.018):
+        if bw < int(w * 0.08) or bh < int(h * 0.018):
             continue
         if bh > int(h * 0.14) or (bw / max(bh, 1)) < 2.4:
             continue
@@ -482,6 +517,8 @@ def _detect_text_band_rois(frame: np.ndarray) -> list[list[int]]:
 def _candidate_car_number_rois(frame: np.ndarray) -> list[list[int]]:
     h, w = frame.shape[:2]
     rois = [
+        *_anchor_car_number_rois(frame),
+        *_detect_text_band_rois(frame),
         [int(w * 0.28), int(h * 0.28), int(w * 0.65), int(h * 0.4)],
         [int(w * 0.26), int(h * 0.27), int(w * 0.67), int(h * 0.4)],
         [int(w * 0.22), int(h * 0.24), int(w * 0.7), int(h * 0.42)],
@@ -491,7 +528,6 @@ def _candidate_car_number_rois(frame: np.ndarray) -> list[list[int]]:
         [int(w * 0.18), int(h * 0.3), int(w * 0.68), int(h * 0.56)],
         [int(w * 0.2), int(h * 0.35), int(w * 0.8), int(h * 0.55)],
     ]
-    rois = _detect_text_band_rois(frame) + rois
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     search = gray[: int(h * 0.65), : int(w * 0.75)]
     if search.size:
