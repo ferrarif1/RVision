@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -16,6 +17,8 @@ import numpy as np
 from inference.pipelines import ensure_plugins_loaded
 from inference.pipelines import list_registered_plugins
 from inference.pipelines import run_inference
+
+KNOWN_FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "railcar_number_known"
 
 
 def _assert(condition: bool, message: str) -> None:
@@ -156,6 +159,51 @@ def run_golden_checks() -> dict:
             "bolt detector should be fallback in golden check",
         )
 
+    fixture_results = {}
+    manifest_path = KNOWN_FIXTURE_DIR / "manifest.json"
+    if manifest_path.exists():
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        samples = payload.get("samples") or []
+        for item in samples:
+            if not isinstance(item, dict):
+                continue
+            file_name = str(item.get("file_name") or "").strip()
+            label = str(item.get("label") or "").strip()
+            if not file_name or not label:
+                continue
+            image_path = KNOWN_FIXTURE_DIR / file_name
+            _assert(image_path.exists(), f"known fixture image missing: {file_name}")
+            task = {
+                "task_type": "car_number_ocr",
+                "policy": {"upload_frames": False},
+                "model": {"model_hash": "known-fixture-car-hash"},
+                "models": {
+                    "car-model": {
+                        "id": "car-model",
+                        "model_code": "car_number_ocr",
+                        "version": "v-known-fixture",
+                        "model_hash": "known-fixture-car-hash",
+                        "model_type": "expert",
+                        "plugin_name": "car_number_ocr",
+                    }
+                },
+            }
+            bundle = run_inference(
+                task,
+                str(image_path),
+                model_artifacts={
+                    "car-model": {
+                        "manifest": {"task_type": "car_number_ocr", "version": "v-known-fixture", "plugin_name": "car_number_ocr"},
+                        "decrypted_path": "",
+                        "model_hash": "known-fixture-car-hash",
+                    }
+                },
+            )
+            expert = next(item_["result_json"] for item_ in bundle["items"] if item_["result_json"].get("stage") == "expert")
+            actual = str(expert.get("car_number") or "")
+            _assert(actual == label, f"known fixture mismatch for {file_name}: expected {label}, got {actual}")
+            fixture_results[file_name] = actual
+
     return {
         "status": "ok",
         "plugins": plugin_names,
@@ -163,6 +211,7 @@ def run_golden_checks() -> dict:
             "object_detect": "passed",
             "car_number_ocr": "passed",
             "bolt_missing_detect": "passed",
+            "known_railcar_fixtures": f"{len(fixture_results)} passed" if fixture_results else "skipped",
         },
     }
 

@@ -38,7 +38,7 @@
 
 已补齐（MVP 执行层）：
 
-- 新增 `docker/scripts/training_worker_runner.py`，实现 worker 端完整执行循环：
+- 源脚本 `docker/scripts/training_worker_runner.py` 实现 worker 端完整执行循环：
   - 心跳、拉取作业
   - 查询作业控制信号，支持运行中取消后的 worker 侧中止
   - 受控拉取训练/验证资产
@@ -46,13 +46,15 @@
   - 执行训练命令钩子（`--trainer-cmd`）或内置 mock 微调
   - 候选模型打包（复用 `model_package_tool`）并上传
   - 回传 `RUNNING/SUCCEEDED/FAILED` 状态与指标摘要
+  - 内置 / mock trainer 会按 epoch 回写 `history` 和 `best_checkpoint`，训练页可直接展示收敛曲线
+  - 控制面可自动识别 stale worker、DISPATCHED 超时、RUNNING 超时，并将作业回收到 `FAILED` 且写入告警摘要
 
 仍未实现（平台级增强）：
 
 - 分布式训练执行器（多 worker 协同调度）
 - 训练日志流式上传与长期留存（当前只回传摘要）
 - 候选模型自动审批、自动晋级
-- 调度队列重试、超时回收、容量治理
+- 容量治理与更精细的资源调度
 
 ## 2. API Surface
 
@@ -66,6 +68,7 @@
 - `POST /training/jobs/{job_id}/reassign`
 - `POST /training/workers/register`
 - `GET /training/workers`
+- `POST /training/runtime/reconcile`
 
 worker 侧：
 
@@ -112,11 +115,11 @@ worker 侧：
 - 控制面：作业、worker、状态机、审计
 - 受控分发：训练资产和基线模型按作业授权下发
 - 产物回收：候选模型包回传后自动入库并等待审批
+- 运行健康：worker 心跳过期、派发超时、执行超时可自动转成结构化告警与失败原因
 
 但还没有真正完成：
 
 - 分布式训练执行器
-- 失败重试与超时回收
 - 数据预热、缓存复用、容量调度
 
 ## 5. Next Step
@@ -125,13 +128,21 @@ worker 侧：
 
 1. worker 真实执行协议、训练日志与指标流
 2. 训练完成后的自动验证、审批编排与发布串联
-3. 训练重试、超时回收、容量治理与告警
+3. 容量治理、资源排序与更细粒度的调度策略
 4. 数据缓存复用和更细粒度的数据访问控制
 
 
 ## 6. Worker Runner（新增）
 
-新增脚本：`docker/scripts/training_worker_runner.py`。
+独立部署目录：`deploy/training-worker/`。
+
+其中：
+
+- `run_worker.sh`：worker 启动入口
+- `worker.env.example`：环境变量模板
+- `requirements.txt`：最小依赖
+- `build_bundle.py`：构建独立部署包
+- `training_worker_runner.py`：bundle 内的真实执行脚本（由构建脚本从 `docker/scripts/training_worker_runner.py` 复制）
 
 ### 6.1 作用
 
@@ -150,8 +161,20 @@ worker 侧：
 
 ```bash
 cd <repo-root>
-python docker/scripts/training_worker_runner.py   --backend-base-url http://localhost:8000   --worker-token trainwk_xxx   --backend-root ./backend   --model-encrypt-key ./docker/keys/model_encrypt.key   --model-sign-private-key ./docker/keys/model_sign_private.pem   --once
+cp deploy/training-worker/worker.env.example deploy/training-worker/worker.env
+bash deploy/training-worker/run_worker.sh --once
 ```
+
+如果需要下发到远端训练机：
+
+```bash
+cd <repo-root>
+python3 deploy/training-worker/build_bundle.py
+```
+
+输出目录：
+
+- `deploy/training-worker/dist/vistral-training-worker/`
 
 ### 6.3 接入真实训练
 
@@ -165,7 +188,26 @@ python docker/scripts/training_worker_runner.py   --backend-base-url http://loca
 - `{job_json}`
 - `{metrics_json}`
 
+外部训练命令契约版本：`vistral.external_trainer.v1`
+
+退出码约定：
+
+- `10`：配置错误（不可重试）
+- `11`：输入契约错误（不可重试）
+- `12`：训练数据错误（不可重试）
+- `20`：训练运行时错误（可重试）
+- `21`：依赖不可用（可重试）
+- `22`：中断退出（可重试）
+
 真实训练命令需至少产出：
 
 - 模型文件：`{output_model_path}`
-- 指标文件（可选）：`{metrics_json}`（JSON object）
+- 指标文件：`{metrics_json}`（JSON object）
+
+`metrics_json` 固定字段：
+
+- 顶层：`epochs / learning_rate / train_loss / val_loss / train_accuracy / val_accuracy / final_loss / val_score`
+- 历史：`history: [{epoch, train_loss, val_loss, train_accuracy, val_accuracy, learning_rate, duration_sec, note}]`
+- 最优 checkpoint：`best_checkpoint: {epoch, metric, value, path}`
+
+如果外部 trainer 返回非零退出码，worker 会把失败分类、是否可重试、退出码以及 stdout/stderr 末尾摘要写入 `output_summary`，便于控制台直接展示与后续重试决策。

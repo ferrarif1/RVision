@@ -145,14 +145,23 @@ def edge_pull_tasks(
         .filter((InferenceTask.device_code == device.code) | (InferenceTask.device_code.is_(None)))
         .order_by(InferenceTask.created_at.asc())
     )
-    tasks = query.limit(min(payload.limit, 20)).all()
+    requested_limit = min(payload.limit, 20)
+    # Read deeper than the requested limit so invalid stale rows do not block later valid tasks.
+    tasks = query.limit(max(requested_limit * 5, 50)).all()
 
     result = []
     reclaimed = 0
+    invalid = 0
     for task in tasks:
+        if len(result) >= requested_limit:
+            break
         asset = db.query(DataAsset).filter(DataAsset.id == task.asset_id).first()
         model = db.query(ModelRecord).filter(ModelRecord.id == task.model_id).first()
         if not asset or not model:
+            task.status = TASK_STATUS_FAILED
+            task.finished_at = datetime.utcnow()
+            task.error_message = "Task asset or model missing during edge dispatch"
+            invalid += 1
             continue
 
         if task.status == TASK_STATUS_DISPATCHED:
@@ -219,7 +228,7 @@ def edge_pull_tasks(
         action=actions.EDGE_PULL_TASKS,
         resource_type="edge_task_pull",
         resource_id=device.code,
-        detail={"count": len(result), "reclaimed_dispatched_count": reclaimed},
+        detail={"count": len(result), "reclaimed_dispatched_count": reclaimed, "invalid_task_count": invalid},
         request=request,
         actor_role="edge-agent",
     )

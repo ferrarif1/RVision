@@ -74,10 +74,24 @@ TASK_TYPE_KEYWORDS = {
         "number",
         "ocr",
         "car_number",
+        "wagon number",
+        "wagon no",
+        "car id",
+        "railcar number",
+        "serial number",
         "车号",
+        "车厢号",
+        "车皮号",
         "车牌",
         "车次",
         "编号",
+        "号码",
+        "数字编号",
+        "车号内容",
+        "车号文字",
+        "货车号",
+        "货车编号",
+        "车体编号",
         "识别车号",
         "读取车号",
         "ocr车号",
@@ -400,3 +414,41 @@ def recommend_small_models(
         selected_model=selected,
         alternatives=ranked[: max(1, limit)],
     )
+
+
+def latest_schedulable_models_by_task_type(
+    db: Session,
+    current_user: AuthUser,
+    *,
+    device_code: str | None,
+    task_types: set[str] | None = None,
+) -> dict[str, ModelRouteCandidate]:
+    schedulable = _list_schedulable_models(db, current_user, device_code=device_code)
+    latest: dict[str, ModelRouteCandidate] = {}
+    for model, release in schedulable:
+        task_type = task_type_from_model(model)
+        if not task_type:
+            continue
+        if task_types and task_type not in task_types:
+            continue
+        candidate = ModelRouteCandidate(
+            model_id=model.id,
+            model_code=model.model_code,
+            version=model.version,
+            model_hash=model.model_hash,
+            task_type=task_type,
+            score=0,
+            reasons=["按任务类型选择当前最新可调度模型"],
+            target_devices=release.target_devices or [],
+            target_buyers=release.target_buyers or [],
+            created_at=model.created_at,
+        )
+        current = latest.get(task_type)
+        if not current:
+            latest[task_type] = candidate
+            continue
+        current_exact_match = current.model_code == task_type
+        next_exact_match = model.model_code == task_type
+        if next_exact_match and not current_exact_match:
+            latest[task_type] = candidate
+    return latest

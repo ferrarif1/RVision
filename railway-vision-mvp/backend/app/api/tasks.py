@@ -1,20 +1,23 @@
 import uuid
 from datetime import datetime
+import time
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.audit import actions
 from app.core.constants import MODEL_RELEASE_STATUS_RELEASED
+from app.core.constants import TASK_STATUS_FAILED
 from app.core.constants import TASK_STATUS_PENDING
+from app.core.constants import TASK_STATUS_SUCCEEDED
 from app.db.database import get_db
 from app.db.models import DataAsset, InferenceResult, InferenceRun, InferenceTask, ModelRecord, ModelRelease, ReviewQueue
 from app.security.dependencies import AuthUser, require_roles
 from app.security.roles import TASK_CREATE_ROLES, TASK_READ_ROLES, is_buyer_user
 from app.services.audit_service import record_audit
-from app.services.model_router_service import recommend_small_models, task_type_from_model
+from app.services.model_router_service import TASK_TYPE_LABELS, latest_schedulable_models_by_task_type, recommend_small_models, task_type_from_model
 from app.services.pipeline_service import get_accessible_pipeline_or_404
 from app.services.pipeline_service import get_pipeline_catalog
 from app.services.pipeline_service import serialize_pipeline
@@ -26,6 +29,7 @@ DEFAULT_TASK_POLICY = {
     "desensitize_frames": False,
     "retention_days": 30,
 }
+PREFLIGHT_TASK_TYPES = ("object_detect", "car_number_ocr", "bolt_missing_detect")
 
 
 class TaskModelRecommendRequest(BaseModel):
@@ -47,6 +51,14 @@ class TaskCreateRequest(BaseModel):
     intent_text: str | None = Field(default=None, description="业务意图文本 / Free text intent for scheduler")
     context: dict[str, Any] = Field(default_factory=dict, description="上下文参数 / Runtime context, e.g. camera_id/scene_hint")
     options: dict[str, Any] = Field(default_factory=dict, description="运行选项 / Runtime options for pipeline/plugins")
+
+
+class TaskPreflightInspectRequest(BaseModel):
+    asset_id: str = Field(description="资产ID / Asset ID to inspect")
+    device_code: str | None = Field(default=None, description="目标设备编码 / Edge device code")
+    prompt_hint: str | None = Field(default=None, description="可选提示词 / Optional user-provided prompt hint")
+    task_types: list[str] = Field(default_factory=list, description="预检任务类型范围 / Optional task type shortlist")
+    wait_timeout_seconds: int = Field(default=25, ge=5, le=90, description="等待预检完成秒数 / Timeout in seconds")
 
 
 def _is_model_released_to_buyer(
@@ -117,6 +129,174 @@ def _json_ready(value: Any) -> Any:
     return value
 
 
+def _is_internal_task(task: InferenceTask) -> bool:
+    policy = task.policy if isinstance(task.policy, dict) else {}
+    return bool(policy.get("internal_kind"))
+
+
+def _create_direct_task(
+    *,
+    db: Session,
+    current_user: AuthUser,
+    asset: DataAsset,
+    model: ModelRecord,
+    task_type: str,
+    device_code: str | None,
+    policy_overrides: dict[str, Any] | None = None,
+    context: dict[str, Any] | None = None,
+    options: dict[str, Any] | None = None,
+) -> InferenceTask:
+    buyer_tenant_id = asset.buyer_tenant_id
+    if is_buyer_user(current_user.roles):
+        buyer_tenant_id = current_user.tenant_id
+    merged_policy = dict(DEFAULT_TASK_POLICY)
+    merged_policy.update(policy_overrides or {})
+    task = InferenceTask(
+        id=str(uuid.uuid4()),
+        model_id=model.id,
+        pipeline_id=None,
+        asset_id=asset.id,
+        device_code=device_code,
+        task_type=task_type,
+        status=TASK_STATUS_PENDING,
+        buyer_tenant_id=buyer_tenant_id,
+        policy=merged_policy,
+        created_by=current_user.id,
+        created_at=datetime.utcnow(),
+    )
+    db.add(task)
+    db.commit()
+    return task
+
+
+def _preflight_candidate_from_result(
+    *,
+    task: InferenceTask,
+    model: ModelRecord,
+    result: InferenceResult | None,
+    prompt_hint: str | None,
+) -> dict[str, Any]:
+    prompt_text = str(prompt_hint or "").strip().lower()
+    wants_car_number = any(keyword in prompt_text for keyword in ("车号", "车厢号", "车皮号", "编号", "号码", "number", "ocr"))
+    wants_object = any(keyword in prompt_text for keyword in ("car", "person", "train", "bus", "目标", "检测", "框"))
+    wants_bolt = any(keyword in prompt_text for keyword in ("bolt", "螺栓", "紧固件", "缺失"))
+    if task.status == TASK_STATUS_FAILED:
+        return {
+            "task_id": task.id,
+            "task_type": task.task_type,
+            "task_type_label": TASK_TYPE_LABELS.get(task.task_type, task.task_type),
+            "title": TASK_TYPE_LABELS.get(task.task_type, task.task_type),
+            "score": 35 if task.task_type == "car_number_ocr" and wants_car_number else 5,
+            "recommended_prompt": prompt_hint or task.task_type,
+            "summary": task.error_message or "预检执行失败",
+            "matched_labels": [],
+            "recognized_texts": [],
+            "object_count": 0,
+            "preview_result_id": result.id if result else None,
+            "model": {
+                "id": model.id,
+                "model_code": model.model_code,
+                "version": model.version,
+            },
+            "raw_summary": {},
+            "status": task.status,
+        }
+    if task.status != TASK_STATUS_SUCCEEDED:
+        return {
+            "task_id": task.id,
+            "task_type": task.task_type,
+            "task_type_label": TASK_TYPE_LABELS.get(task.task_type, task.task_type),
+            "title": TASK_TYPE_LABELS.get(task.task_type, task.task_type),
+            "score": 25 if task.task_type == "car_number_ocr" and wants_car_number else 10,
+            "recommended_prompt": prompt_hint or task.task_type,
+            "summary": "预检仍在执行或尚未返回结果",
+            "matched_labels": [],
+            "recognized_texts": [],
+            "object_count": 0,
+            "preview_result_id": result.id if result else None,
+            "model": {
+                "id": model.id,
+                "model_code": model.model_code,
+                "version": model.version,
+            },
+            "raw_summary": {},
+            "status": task.status,
+        }
+    result_json = result.result_json if result and isinstance(result.result_json, dict) else {}
+    summary = result_json.get("summary") if isinstance(result_json.get("summary"), dict) else {}
+    predictions = result_json.get("predictions") if isinstance(result_json.get("predictions"), list) else []
+    matched_labels = [str(item).strip() for item in (result_json.get("matched_labels") or summary.get("matched_labels") or []) if str(item).strip()]
+    recognized_texts = [
+        str(item.get("text") or item.get("attributes", {}).get("text") or "").strip()
+        for item in predictions
+        if isinstance(item, dict)
+    ]
+    recognized_texts = [text for text in recognized_texts if text]
+    if str(summary.get("car_number") or "").strip():
+        recognized_texts.insert(0, str(summary.get("car_number")).strip())
+    deduped_texts = list(dict.fromkeys(recognized_texts))
+
+    score = 30
+    title = TASK_TYPE_LABELS.get(task.task_type, task.task_type)
+    recommended_prompt = prompt_hint or task.task_type
+    recommendation_summary = "预检已完成，可按该任务类型继续识别。"
+
+    if task.task_type == "car_number_ocr":
+        if deduped_texts:
+            score = 95
+            title = "车号内容"
+            recommended_prompt = "车号"
+            recommendation_summary = f"预检已读出候选车号：{deduped_texts[0]}。建议直接走车号 OCR。"
+        else:
+            score = 60 if wants_car_number else 55
+            title = "车号内容"
+            recommended_prompt = "车号"
+            recommendation_summary = "预检已跑过车号 OCR，但当前没有稳定文本，可继续复检。"
+    elif task.task_type == "object_detect":
+        if matched_labels:
+            score = 88 if not wants_car_number else 72
+            title = "目标框选"
+            recommended_prompt = matched_labels[0]
+            recommendation_summary = f"预检命中了目标标签：{', '.join(matched_labels[:4])}。建议按目标检测继续。"
+        else:
+            score = 40 if wants_object else 18
+            title = "目标框选"
+            recommended_prompt = prompt_hint or "car"
+            recommendation_summary = "预检没有稳定命中标签，可按通用目标检测继续。"
+    elif task.task_type == "bolt_missing_detect":
+        missing = bool(summary.get("missing"))
+        bolt_count = int(summary.get("bolt_count") or 0)
+        score = 86 if missing else (70 if bolt_count else (42 if wants_bolt else 12))
+        title = "螺栓缺失"
+        recommended_prompt = "螺栓缺失"
+        recommendation_summary = (
+            "预检发现疑似螺栓缺失或异常，建议走螺栓缺失检测。"
+            if missing
+            else f"预检统计到 {bolt_count} 个螺栓候选，可继续做缺失检测。"
+        )
+
+    return {
+        "task_id": task.id,
+        "task_type": task.task_type,
+        "task_type_label": TASK_TYPE_LABELS.get(task.task_type, task.task_type),
+        "title": title,
+        "score": score,
+        "recommended_prompt": recommended_prompt,
+        "summary": recommendation_summary,
+        "matched_labels": matched_labels,
+        "recognized_texts": deduped_texts,
+        "object_count": int(result_json.get("object_count") or summary.get("object_count") or len(predictions) or 0),
+        "preview_result_id": result.id if result else None,
+        "model": {
+            "id": model.id,
+            "model_code": model.model_code,
+            "version": model.version,
+        },
+        "raw_summary": summary,
+        "status": task.status,
+    }
+
+
 def _build_orchestrator_policy(
     *,
     pipeline_payload: dict[str, Any],
@@ -166,6 +346,109 @@ def recommend_task_model(
         actor=current_user,
     )
     return decision
+
+
+@router.post("/preflight-inspect")
+def preflight_inspect_task_targets(
+    payload: TaskPreflightInspectRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*TASK_CREATE_ROLES)),
+):
+    asset = _get_asset_in_scope(db, payload.asset_id, current_user)
+    _ensure_inference_ready_asset(asset)
+    requested_types = {str(item or "").strip() for item in payload.task_types if str(item or "").strip()}
+    effective_task_types = requested_types or set(PREFLIGHT_TASK_TYPES)
+    latest_models = latest_schedulable_models_by_task_type(
+        db,
+        current_user,
+        device_code=payload.device_code,
+        task_types=effective_task_types,
+    )
+    if not latest_models:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No schedulable models available for preflight inspection")
+
+    created_tasks: list[tuple[InferenceTask, ModelRecord]] = []
+    for task_type in PREFLIGHT_TASK_TYPES:
+        candidate = latest_models.get(task_type)
+        if not candidate:
+            continue
+        model = db.query(ModelRecord).filter(ModelRecord.id == candidate.model_id).first()
+        if not model:
+            continue
+        task = _create_direct_task(
+            db=db,
+            current_user=current_user,
+            asset=asset,
+            model=model,
+            task_type=task_type,
+            device_code=payload.device_code,
+            policy_overrides={
+                "internal_kind": "quick_detect_preflight",
+                "preflight_inspect": True,
+                "retention_days": 1,
+                "quick_detect": {"stage": "preflight", "prompt_hint": payload.prompt_hint},
+            },
+            context={},
+            options={},
+        )
+        created_tasks.append((task, model))
+
+    deadline = time.time() + payload.wait_timeout_seconds
+    pending_ids = {task.id for task, _ in created_tasks}
+    while pending_ids and time.time() < deadline:
+        rows = db.query(InferenceTask).filter(InferenceTask.id.in_(tuple(pending_ids))).all()
+        for row in rows:
+            if row.status in {TASK_STATUS_SUCCEEDED, TASK_STATUS_FAILED}:
+                pending_ids.discard(row.id)
+        if pending_ids:
+            time.sleep(1.0)
+            db.expire_all()
+
+    completed_tasks = db.query(InferenceTask).filter(InferenceTask.id.in_([task.id for task, _ in created_tasks])).all()
+    task_map = {task.id: task for task in completed_tasks}
+    result_rows = db.query(InferenceResult).filter(InferenceResult.task_id.in_(tuple(task_map.keys()))).order_by(InferenceResult.created_at.asc()).all() if task_map else []
+    result_map: dict[str, InferenceResult] = {}
+    for row in result_rows:
+        result_map[row.task_id] = row
+
+    candidates = []
+    for task, model in created_tasks:
+        resolved_task = task_map.get(task.id, task)
+        candidates.append(
+            _preflight_candidate_from_result(
+                task=resolved_task,
+                model=model,
+                result=result_map.get(task.id),
+                prompt_hint=payload.prompt_hint,
+            )
+        )
+    candidates.sort(key=lambda item: item["score"], reverse=True)
+
+    record_audit(
+        db,
+        action=actions.TASK_ROUTE,
+        resource_type="asset",
+        resource_id=asset.id,
+        detail={
+            "asset_id": asset.id,
+            "device_code": payload.device_code,
+            "prompt_hint": payload.prompt_hint,
+            "preflight_candidates": candidates,
+        },
+        request=request,
+        actor=current_user,
+    )
+
+    return {
+        "asset_id": asset.id,
+        "device_code": payload.device_code,
+        "prompt_hint": payload.prompt_hint,
+        "timed_out": bool(pending_ids),
+        "candidates": candidates,
+        "selected_candidate": candidates[0] if candidates else None,
+        "created_task_ids": [task.id for task, _ in created_tasks],
+    }
 
 
 @router.post("/create")
@@ -387,6 +670,7 @@ def get_task(
 @router.get("")
 def list_tasks(
     status_filter: str | None = None,
+    include_internal: bool = Query(default=False, description="是否包含内部预检任务 / Include internal preflight tasks"),
     db: Session = Depends(get_db),
     current_user: AuthUser = Depends(require_roles(*TASK_READ_ROLES)),
 ):
@@ -396,6 +680,8 @@ def list_tasks(
     if status_filter:
         query = query.filter(InferenceTask.status == status_filter)
     tasks = query.limit(100).all()
+    if not include_internal:
+        tasks = [task for task in tasks if not _is_internal_task(task)]
 
     return [
         {

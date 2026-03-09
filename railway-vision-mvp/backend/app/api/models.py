@@ -1,6 +1,7 @@
 import json
 import os
 import uuid
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
@@ -30,6 +31,9 @@ from app.security.roles import (
     is_supplier_user,
 )
 from app.services.audit_service import record_audit
+from app.services.model_readiness_service import build_model_release_risk_summary
+from app.services.model_readiness_service import build_model_validation_report
+from app.services.model_readiness_service import merge_platform_meta
 from app.services.model_package_service import (
     ModelPackageError,
     parse_and_validate_model_package,
@@ -89,6 +93,11 @@ def _build_platform_meta(model: ModelRecord) -> dict[str, Any]:
     payload = dict(model.manifest or {})
     meta = payload.get("platform_meta")
     return meta if isinstance(meta, dict) else {}
+
+
+def _readiness_summary(meta: dict[str, Any], key: str) -> dict[str, Any] | None:
+    value = meta.get(key)
+    return value if isinstance(value, dict) else None
 
 
 def _source_label(source_type: str | None) -> str:
@@ -182,6 +191,8 @@ def list_models(
             **build_model_registry_payload(row),
             "status": row.status,
             "platform_meta": _build_platform_meta(row),
+            "validation_report": _readiness_summary(_build_platform_meta(row), "validation_report"),
+            "latest_release_risk_summary": _readiness_summary(_build_platform_meta(row), "latest_release_risk_summary"),
             "owner_tenant_code": owner_tenant_map.get(row.owner_tenant_id).tenant_code if owner_tenant_map.get(row.owner_tenant_id) else None,
             "owner_tenant_name": owner_tenant_map.get(row.owner_tenant_id).name if owner_tenant_map.get(row.owner_tenant_id) else None,
         }
@@ -265,7 +276,10 @@ def get_model_timeline(
                 "created_at": approve_log.created_at if approve_log else None,
                 "actor_username": approve_log.actor_username if approve_log else "-",
                 "summary": "平台已确认模型版本、来源和交付口径。",
-                "meta": approve_log.detail if approve_log else {},
+                "meta": {
+                    **(approve_log.detail if approve_log else {}),
+                    "validation_report": _readiness_summary(_build_platform_meta(model), "validation_report"),
+                },
             }
         )
 
@@ -289,6 +303,7 @@ def get_model_timeline(
                     "runtime_encryption": (release_log.detail or {}).get("runtime_encryption") if release_log else None,
                     "api_access_key_preview": (release_log.detail or {}).get("api_access_key_preview") if release_log else None,
                     "local_key_label": (release_log.detail or {}).get("local_key_label") if release_log else None,
+                    "release_risk_summary": (release_log.detail or {}).get("release_risk_summary") if release_log else None,
                 },
             }
         )
@@ -317,6 +332,66 @@ def get_model_timeline(
             }
             for row in release_rows
         ],
+    }
+
+
+@router.get("/{model_id}/readiness")
+def get_model_readiness(
+    model_id: str,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*MODEL_READ_ROLES)),
+):
+    model = _get_accessible_model_or_404(db, current_user, model_id)
+    validation_report = build_model_validation_report(db, model)
+    default_release_risk_summary = build_model_release_risk_summary(
+        model,
+        validation_report,
+        target_devices=[],
+        target_buyers=[],
+        delivery_mode="local_key",
+        authorization_mode="device_key",
+        runtime_encryption=True,
+        api_access_key_label=None,
+        local_key_label=None,
+    )
+    platform_meta = _build_platform_meta(model)
+    return {
+        "model": {
+            **build_model_registry_payload(model),
+            "status": model.status,
+            "platform_meta": platform_meta,
+        },
+        "validation_report": validation_report,
+        "default_release_risk_summary": default_release_risk_summary,
+        "stored_validation_report": _readiness_summary(platform_meta, "validation_report"),
+        "stored_release_risk_summary": _readiness_summary(platform_meta, "latest_release_risk_summary"),
+    }
+
+
+@router.post("/release-readiness")
+def get_model_release_readiness(
+    payload: ReleaseRequest,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*MODEL_RELEASE_ROLES)),
+):
+    model = _get_accessible_model_or_404(db, current_user, payload.model_id)
+    validation_report = build_model_validation_report(db, model)
+    release_risk_summary = build_model_release_risk_summary(
+        model,
+        validation_report,
+        target_devices=payload.target_devices,
+        target_buyers=payload.target_buyers,
+        delivery_mode=payload.delivery_mode,
+        authorization_mode=payload.authorization_mode,
+        runtime_encryption=payload.runtime_encryption,
+        api_access_key_label=payload.api_access_key_label,
+        local_key_label=payload.local_key_label,
+    )
+    return {
+        "model_id": model.id,
+        "status": model.status,
+        "validation_report": validation_report,
+        "release_risk_summary": release_risk_summary,
     }
 
 
@@ -452,10 +527,29 @@ def approve_model(
     if not model:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
 
-    if model.status in {MODEL_STATUS_APPROVED, MODEL_STATUS_RELEASED}:
-        return {"model_id": model.id, "status": model.status}
+    validation_report = build_model_validation_report(db, model, override_validation_asset_ids=payload.validation_asset_ids)
+    if not validation_report.get("can_approve"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Model failed validation gate: {validation_report.get('summary')}")
 
-    model.status = MODEL_STATUS_APPROVED
+    resolved_validation_asset_ids = payload.validation_asset_ids or validation_report.get("validation_asset_ids") or []
+    resolved_validation_summary = _clean_optional(payload.validation_summary) or validation_report.get("summary")
+    enriched_validation_report = {
+        **validation_report,
+        "validation_asset_ids": resolved_validation_asset_ids,
+        "approved_by": current_user.username,
+        "approved_at": datetime.utcnow().isoformat(),
+    }
+
+    if model.status not in {MODEL_STATUS_APPROVED, MODEL_STATUS_RELEASED}:
+        model.status = MODEL_STATUS_APPROVED
+    merge_platform_meta(
+        model,
+        {
+            "validation_asset_ids": resolved_validation_asset_ids,
+            "validation_report": enriched_validation_report,
+            "validation_summary": resolved_validation_summary,
+        },
+    )
     db.add(model)
     db.commit()
 
@@ -467,9 +561,10 @@ def approve_model(
         detail={
             "model_code": model.model_code,
             "version": model.version,
-            "validation_asset_ids": payload.validation_asset_ids,
-            "validation_result": payload.validation_result,
-            "validation_summary": _clean_optional(payload.validation_summary),
+            "validation_asset_ids": resolved_validation_asset_ids,
+            "validation_result": validation_report.get("validation_result") or payload.validation_result,
+            "validation_summary": resolved_validation_summary,
+            "validation_report": enriched_validation_report,
         },
         request=request,
         actor=current_user,
@@ -478,9 +573,10 @@ def approve_model(
     return {
         "model_id": model.id,
         "status": model.status,
-        "validation_asset_ids": payload.validation_asset_ids,
-        "validation_result": payload.validation_result,
-        "validation_summary": _clean_optional(payload.validation_summary),
+        "validation_asset_ids": resolved_validation_asset_ids,
+        "validation_result": validation_report.get("validation_result") or payload.validation_result,
+        "validation_summary": resolved_validation_summary,
+        "validation_report": enriched_validation_report,
     }
 
 
@@ -508,6 +604,21 @@ def release_model(
     if payload.delivery_mode == "hybrid" and payload.authorization_mode != "hybrid":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Hybrid delivery requires hybrid authorization_mode")
 
+    validation_report = build_model_validation_report(db, model)
+    release_risk_summary = build_model_release_risk_summary(
+        model,
+        validation_report,
+        target_devices=payload.target_devices,
+        target_buyers=payload.target_buyers,
+        delivery_mode=payload.delivery_mode,
+        authorization_mode=payload.authorization_mode,
+        runtime_encryption=payload.runtime_encryption,
+        api_access_key_label=payload.api_access_key_label,
+        local_key_label=payload.local_key_label,
+    )
+    if not release_risk_summary.get("can_release"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Release blocked: {release_risk_summary.get('summary')}")
+
     api_access_key_preview = None
     if payload.delivery_mode in {"api", "hybrid"}:
         label = _clean_optional(payload.api_access_key_label) or "vh_api"
@@ -527,6 +638,15 @@ def release_model(
     )
 
     model.status = MODEL_STATUS_RELEASED
+    merge_platform_meta(
+        model,
+        {
+            "latest_release_risk_summary": {
+                **release_risk_summary,
+                "released_by": current_user.username,
+            }
+        },
+    )
     db.add(release)
     db.add(model)
     db.commit()
@@ -545,6 +665,7 @@ def release_model(
             "runtime_encryption": payload.runtime_encryption,
             "api_access_key_preview": api_access_key_preview,
             "local_key_label": local_key_label,
+            "release_risk_summary": release_risk_summary,
         },
         request=request,
         actor=current_user,
@@ -561,4 +682,5 @@ def release_model(
         "runtime_encryption": payload.runtime_encryption,
         "api_access_key_preview": api_access_key_preview,
         "local_key_label": local_key_label,
+        "release_risk_summary": release_risk_summary,
     }

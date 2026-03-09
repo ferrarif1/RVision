@@ -2,7 +2,7 @@
 
 - Owner: Product + Engineering + QA
 - Status: In Execution
-- Last Updated: 2026-03-05
+- Last Updated: 2026-03-08
 - Parent: `platform_user_centric_implementation_v1.md`
 
 ## 1. 执行策略
@@ -80,9 +80,9 @@
 
 ## 4. Week 6-8（验证与审批）
 
-- [ ] 候选模型自动验证门禁（精度、鲁棒、性能）
+- [x] 候选模型自动验证门禁（验证资产 / 指标 / best checkpoint / runtime 契约）
 - [ ] 审批编排（通过/拒绝/补充材料）
-- [ ] 发布前风险摘要卡片
+- [x] 发布前风险摘要卡片
 
 验收标准：
 
@@ -119,15 +119,30 @@
 - [ ] 角色工作台线框
 - [ ] 训练中心作业页信息模型
 
-## 8. 当前工程待办（2026-03-06）
+## 8. 当前工程待办（2026-03-08）
 
 已记录，后续按优先级继续推进：
 
 - [x] 训练/验证资产支持 0-n 个 asset_id；允许空列表创建训练作业
 - [x] 训练/验证资产支持 ZIP 数据集包；ZIP 内支持多层文件夹与多图片/多视频资源
-- [ ] 后端 API 自动化回归：`auth / assets / training / edge / tasks`
-- [ ] 训练作业详情页：展示 asset_count / validation_asset_count / resource_count / 失败原因
-- [ ] 训练 Worker 外部训练命令契约：失败分类、退出码归一、指标文件 schema 固化
-- [ ] 数据集包增强：标注文件、manifest、类别映射、采样预览
+- [x] 快速识别结果支持误检删除、手工补框、图上拖拽修订
+- [x] 快速识别导出数据集资产时自动生成版本记录，并进入训练数据集版本流
+- [x] 训练作业支持取消 / 重试 / 改派到指定 worker host
+- [x] 运行中取消支持 worker 侧停止协议
+- [x] worker 独立部署物料已收口到 `deploy/training-worker/`，并支持构建独立 bundle
+- [x] 后端 API 自动化回归：`auth / assets / training / edge / tasks / results`
+- [x] 训练 Worker 外部训练命令契约：失败分类、退出码归一、指标历史 schema 固化
+- [x] 训练页真实曲线：epoch 级 metrics history、best checkpoint、收敛趋势
+- [x] 数据集版本高级操作：推荐验证集、回滚到某版、版本间样本级差异筛选
+- [x] 训练作业超时回收与告警：worker 失联、长时间 RUNNING、产物上传超时
 - [ ] 数据保留策略：训练产物、上传临时文件、历史 QA 报告自动清理
 - [ ] schema 快照自动导出，替代当前 `snapshot-at-tip + --write` 人工同步
+
+## 9. 下一阶段执行顺序（建议）
+
+按当前收益和风险排序，建议继续按下面顺序推进：
+
+1. schema 快照自动导出，减少手工同步动作。
+2. 数据保留策略自动化，避免运行期产物持续堆积。
+3. 审批编排（通过 / 拒绝 / 补充材料）和发布前证据包导出。
+4. 更细粒度的训练资源调度与容量治理。

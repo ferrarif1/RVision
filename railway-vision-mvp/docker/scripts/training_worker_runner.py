@@ -41,12 +41,178 @@ class JobInterrupted(WorkerError):
         super().__init__(f"job {job_id} interrupted: {reason} ({status})")
 
 
+class ExternalTrainerError(WorkerError):
+    def __init__(
+        self,
+        *,
+        command: str,
+        exit_code: int,
+        category: str,
+        retryable: bool,
+        message: str,
+        stdout_tail: list[str] | None = None,
+        stderr_tail: list[str] | None = None,
+    ):
+        self.command = command
+        self.exit_code = exit_code
+        self.category = category
+        self.retryable = retryable
+        self.message = message
+        self.stdout_tail = stdout_tail or []
+        self.stderr_tail = stderr_tail or []
+        super().__init__(message)
+
+
 DATASET_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
 DATASET_VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov"}
 DATASET_MEDIA_EXTENSIONS = DATASET_IMAGE_EXTENSIONS | DATASET_VIDEO_EXTENSIONS
 ARCHIVE_PREVIEW_LIMIT = 20
 ARCHIVE_MAX_ENTRIES = 10000
 ARCHIVE_MAX_UNCOMPRESSED_BYTES = 1073741824
+TRAINER_CONTRACT_VERSION = "vistral.external_trainer.v1"
+TRAINER_STDIO_TAIL_LINES = 20
+TRAINER_EXIT_CODE_MAP: dict[int, dict[str, Any]] = {
+    10: {"category": "config_error", "retryable": False, "summary": "trainer configuration is invalid"},
+    11: {"category": "input_contract_error", "retryable": False, "summary": "trainer input contract is invalid"},
+    12: {"category": "data_error", "retryable": False, "summary": "training data is invalid or unreadable"},
+    20: {"category": "runtime_error", "retryable": True, "summary": "trainer runtime failed"},
+    21: {"category": "dependency_unavailable", "retryable": True, "summary": "trainer dependency is unavailable"},
+    22: {"category": "interrupted", "retryable": True, "summary": "trainer was interrupted"},
+}
+
+
+def _default_existing_path(*candidates: str) -> str:
+    for candidate in candidates:
+        if candidate and Path(candidate).expanduser().exists():
+            return candidate
+    return candidates[0] if candidates else ""
+
+
+def _tail_lines(text: str, limit: int = TRAINER_STDIO_TAIL_LINES) -> list[str]:
+    return [line for line in str(text or "").splitlines()[-limit:] if line.strip()]
+
+
+def classify_trainer_exit_code(exit_code: int) -> dict[str, Any]:
+    if exit_code in TRAINER_EXIT_CODE_MAP:
+        return dict(TRAINER_EXIT_CODE_MAP[exit_code])
+    if exit_code < 0:
+        return {
+            "category": "signal_terminated",
+            "retryable": True,
+            "summary": f"trainer terminated by signal {-exit_code}",
+        }
+    if exit_code >= 128:
+        return {
+            "category": "signal_terminated",
+            "retryable": True,
+            "summary": f"trainer terminated by signal-like exit code {exit_code}",
+        }
+    return {
+        "category": "unknown_error",
+        "retryable": False,
+        "summary": f"trainer exited with unmapped code {exit_code}",
+    }
+
+
+def _coerce_metric_number(value: Any, field_name: str, *, allow_none: bool = True) -> float | int | None:
+    if value is None and allow_none:
+        return None
+    if isinstance(value, bool):
+        raise WorkerError(f"metrics field {field_name} must be numeric, got bool")
+    if isinstance(value, (int, float)):
+        return value
+    try:
+        text = str(value).strip()
+        if not text:
+            return None if allow_none else 0.0
+        if "." in text or "e" in text.lower():
+            return float(text)
+        return int(text)
+    except (TypeError, ValueError) as exc:
+        raise WorkerError(f"metrics field {field_name} must be numeric") from exc
+
+
+def _normalize_history_entry(item: dict[str, Any], index: int) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        raise WorkerError(f"metrics history item #{index + 1} must be an object")
+    epoch = _coerce_metric_number(item.get("epoch"), f"history[{index}].epoch", allow_none=False)
+    if not isinstance(epoch, int) or epoch <= 0:
+        raise WorkerError(f"metrics history item #{index + 1} must contain positive integer epoch")
+    return {
+        "epoch": epoch,
+        "train_loss": _coerce_metric_number(item.get("train_loss"), f"history[{index}].train_loss"),
+        "val_loss": _coerce_metric_number(item.get("val_loss"), f"history[{index}].val_loss"),
+        "train_accuracy": _coerce_metric_number(item.get("train_accuracy"), f"history[{index}].train_accuracy"),
+        "val_accuracy": _coerce_metric_number(item.get("val_accuracy"), f"history[{index}].val_accuracy"),
+        "learning_rate": _coerce_metric_number(item.get("learning_rate"), f"history[{index}].learning_rate"),
+        "duration_sec": _coerce_metric_number(item.get("duration_sec"), f"history[{index}].duration_sec"),
+        "note": str(item.get("note") or "").strip() or None,
+    }
+
+
+def normalize_external_metrics(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise WorkerError("metrics file must contain a JSON object")
+
+    history_raw = payload.get("history") or []
+    if not isinstance(history_raw, list):
+        raise WorkerError("metrics history must be a JSON array")
+    history = [_normalize_history_entry(item, index) for index, item in enumerate(history_raw)]
+
+    best_checkpoint_raw = payload.get("best_checkpoint")
+    best_checkpoint = None
+    if best_checkpoint_raw is not None:
+        if not isinstance(best_checkpoint_raw, dict):
+            raise WorkerError("best_checkpoint must be a JSON object")
+        best_epoch = _coerce_metric_number(best_checkpoint_raw.get("epoch"), "best_checkpoint.epoch", allow_none=False)
+        if not isinstance(best_epoch, int) or best_epoch <= 0:
+            raise WorkerError("best_checkpoint.epoch must be a positive integer")
+        best_checkpoint = {
+            "epoch": best_epoch,
+            "metric": str(best_checkpoint_raw.get("metric") or "").strip() or "val_score",
+            "value": _coerce_metric_number(best_checkpoint_raw.get("value"), "best_checkpoint.value"),
+            "path": str(best_checkpoint_raw.get("path") or "").strip() or None,
+        }
+
+    normalized = {
+        "trainer": str(payload.get("trainer") or "external").strip() or "external",
+        "trainer_contract_version": TRAINER_CONTRACT_VERSION,
+        "epochs": _coerce_metric_number(payload.get("epochs"), "epochs"),
+        "learning_rate": _coerce_metric_number(payload.get("learning_rate"), "learning_rate"),
+        "train_loss": _coerce_metric_number(payload.get("train_loss"), "train_loss"),
+        "val_loss": _coerce_metric_number(payload.get("val_loss"), "val_loss"),
+        "train_accuracy": _coerce_metric_number(payload.get("train_accuracy"), "train_accuracy"),
+        "val_accuracy": _coerce_metric_number(payload.get("val_accuracy"), "val_accuracy"),
+        "final_loss": _coerce_metric_number(payload.get("final_loss"), "final_loss"),
+        "val_score": _coerce_metric_number(payload.get("val_score"), "val_score"),
+        "train_samples": _coerce_metric_number(payload.get("train_samples"), "train_samples"),
+        "val_samples": _coerce_metric_number(payload.get("val_samples"), "val_samples"),
+        "history": history,
+        "history_count": len(history),
+        "best_checkpoint": best_checkpoint,
+        "note": str(payload.get("note") or "").strip() or None,
+    }
+    if normalized["val_score"] is None and normalized["val_accuracy"] is not None:
+        normalized["val_score"] = normalized["val_accuracy"]
+    if normalized["epochs"] is None and history:
+        normalized["epochs"] = history[-1]["epoch"]
+    return normalized
+
+
+def load_external_metrics(metrics_path: Path) -> dict[str, Any]:
+    if not metrics_path.exists():
+        return {
+            "trainer": "external",
+            "trainer_contract_version": TRAINER_CONTRACT_VERSION,
+            "history": [],
+            "history_count": 0,
+            "note": "metrics file not produced",
+        }
+    try:
+        payload = json.loads(metrics_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise WorkerError(f"metrics file is not valid JSON: {metrics_path}") from exc
+    return normalize_external_metrics(payload)
 
 
 def _now_ts() -> float:
@@ -204,24 +370,101 @@ def _mock_train(
 ) -> dict[str, Any]:
     train_rows = json.loads(train_manifest.read_text(encoding="utf-8"))
     val_rows = json.loads(val_manifest.read_text(encoding="utf-8")) if val_manifest.exists() else []
-    if progress_callback:
-        progress_callback({"stage": "mock_training", "epoch": 0})
     train_resource_count = _resource_count_from_rows(train_rows)
     val_resource_count = _resource_count_from_rows(val_rows)
+    epochs = max(1, int(spec.get("epochs", 3)))
+    learning_rate = float(spec.get("learning_rate", 0.0005))
+    history: list[dict[str, Any]] = []
+    best_checkpoint: dict[str, Any] | None = None
+    checkpoints_dir = output_model_path.parent / "checkpoints"
+    checkpoints_dir.mkdir(parents=True, exist_ok=True)
+    loss_floor = 0.04 if train_resource_count else 0.08
+    train_loss_seed = max(0.85 - (math.log1p(train_resource_count) * 0.08), 0.24)
+    val_loss_gap = 0.03 + (0.04 if not val_resource_count else 0.0)
+    accuracy_seed = min(0.72 + math.log1p(max(train_resource_count, 1)) * 0.03, 0.88)
+    val_seed = max(0.58, accuracy_seed - 0.08)
+    for epoch in range(1, epochs + 1):
+        epoch_duration = round(0.25 + (0.05 * epoch), 3)
+        train_loss = max(loss_floor, train_loss_seed * (0.76 ** (epoch - 1)))
+        val_loss = max(loss_floor + 0.01, train_loss + val_loss_gap - (epoch * 0.003))
+        train_accuracy = min(0.995, accuracy_seed + ((epoch - 1) * 0.028))
+        val_accuracy = min(0.985, val_seed + ((epoch - 1) * 0.024))
+        history_entry = {
+            "epoch": epoch,
+            "train_loss": round(train_loss, 6),
+            "val_loss": round(val_loss, 6),
+            "train_accuracy": round(train_accuracy, 4),
+            "val_accuracy": round(val_accuracy, 4),
+            "learning_rate": round(learning_rate, 6),
+            "duration_sec": epoch_duration,
+        }
+        history.append(history_entry)
+        current_best = history_entry["val_accuracy"]
+        if best_checkpoint is None or current_best >= float(best_checkpoint["value"]):
+            checkpoint_rel_path = f"checkpoints/best_epoch_{epoch}.mock.json"
+            checkpoint_path = checkpoints_dir / f"best_epoch_{epoch}.mock.json"
+            checkpoint_path.write_text(
+                json.dumps(
+                    {
+                        "epoch": epoch,
+                        "metric": "val_accuracy",
+                        "value": current_best,
+                        "trainer": "mock",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            best_checkpoint = {
+                "epoch": epoch,
+                "metric": "val_accuracy",
+                "value": current_best,
+                "path": checkpoint_rel_path,
+            }
+        if progress_callback:
+            progress_callback(
+                {
+                    "stage": "mock_training",
+                    "epoch": epoch,
+                    "epochs": epochs,
+                    "history_entry": history_entry,
+                    "history": history.copy(),
+                    "best_checkpoint": best_checkpoint,
+                }
+            )
     payload = {
         "trainer": "mock",
-        "epochs": spec.get("epochs", 3),
-        "lr": spec.get("learning_rate", 0.0005),
+        "epochs": epochs,
+        "lr": learning_rate,
         "train_samples": train_resource_count,
         "val_samples": val_resource_count,
         "base_model": str(base_model_path) if base_model_path else None,
+        "history": history,
+        "best_checkpoint": best_checkpoint,
         "generated_at": int(_now_ts()),
     }
     model_bytes = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     output_model_path.parent.mkdir(parents=True, exist_ok=True)
     output_model_path.write_bytes(model_bytes)
     digest = hashlib.sha256(model_bytes).hexdigest()
-    return {"final_loss": 0.03, "val_score": 0.91, "artifact_sha256": digest}
+    final_metrics = history[-1] if history else {}
+    return {
+        "trainer": "mock",
+        "epochs": epochs,
+        "learning_rate": round(learning_rate, 6),
+        "train_loss": final_metrics.get("train_loss", 0.0),
+        "val_loss": final_metrics.get("val_loss", 0.0),
+        "train_accuracy": final_metrics.get("train_accuracy", 0.0),
+        "val_accuracy": final_metrics.get("val_accuracy", 0.0),
+        "final_loss": final_metrics.get("train_loss", 0.0),
+        "val_score": final_metrics.get("val_accuracy", 0.0),
+        "artifact_sha256": digest,
+        "history": history,
+        "history_count": len(history),
+        "best_checkpoint": best_checkpoint,
+    }
 
 
 def _label_from_row(row: dict[str, Any]) -> str:
@@ -355,6 +598,9 @@ def _builtin_train(
             "final_loss": 0.0,
             "val_score": round(val_acc, 4),
             "artifact_sha256": digest,
+            "history": [],
+            "history_count": 0,
+            "best_checkpoint": None,
             "note": "no readable training assets; placeholder candidate artifact generated",
         }
 
@@ -364,11 +610,14 @@ def _builtin_train(
     learning_rate = float(spec.get("learning_rate", 0.25))
     weights = [[0.0 for _ in range(dim)] for _ in range(class_count)]
     bias = [0.0 for _ in range(class_count)]
+    history: list[dict[str, Any]] = []
+    best_checkpoint: dict[str, Any] | None = None
+    checkpoints_dir = output_model_path.parent / "checkpoints"
+    checkpoints_dir.mkdir(parents=True, exist_ok=True)
 
     final_loss = 0.0
     for _epoch in range(epochs):
-        if progress_callback:
-            progress_callback({"stage": "training_epoch", "epoch": _epoch + 1, "epochs": epochs})
+        epoch_started = _now_ts()
         for features, target in train_data:
             logits = [_dot(weight, features) + bias[idx] for idx, weight in enumerate(weights)]
             probs = _softmax(logits)
@@ -379,7 +628,55 @@ def _builtin_train(
                 for index in range(dim):
                     weights[cls][index] -= learning_rate * grad * features[index]
                 bias[cls] -= learning_rate * grad
-        final_loss, _ = _evaluate(train_data, weights, bias)
+        train_loss, train_acc = _evaluate(train_data, weights, bias)
+        val_loss, val_acc = _evaluate(val_data, weights, bias) if val_data else (train_loss, train_acc)
+        final_loss = train_loss
+        history_entry = {
+            "epoch": _epoch + 1,
+            "train_loss": round(train_loss, 6),
+            "val_loss": round(val_loss, 6),
+            "train_accuracy": round(train_acc, 4),
+            "val_accuracy": round(val_acc, 4),
+            "learning_rate": round(learning_rate, 6),
+            "duration_sec": round(_now_ts() - epoch_started, 3),
+        }
+        history.append(history_entry)
+        best_metric_name = "val_accuracy" if val_data else "train_accuracy"
+        best_metric_value = history_entry[best_metric_name]
+        if best_checkpoint is None or best_metric_value >= float(best_checkpoint["value"]):
+            checkpoint_rel_path = f"checkpoints/best_epoch_{_epoch + 1}.builtin.json"
+            checkpoint_path = checkpoints_dir / f"best_epoch_{_epoch + 1}.builtin.json"
+            checkpoint_path.write_text(
+                json.dumps(
+                    {
+                        "epoch": _epoch + 1,
+                        "metric": best_metric_name,
+                        "value": best_metric_value,
+                        "labels": labels,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            best_checkpoint = {
+                "epoch": _epoch + 1,
+                "metric": best_metric_name,
+                "value": best_metric_value,
+                "path": checkpoint_rel_path,
+            }
+        if progress_callback:
+            progress_callback(
+                {
+                    "stage": "training_epoch",
+                    "epoch": _epoch + 1,
+                    "epochs": epochs,
+                    "history_entry": history_entry,
+                    "history": history.copy(),
+                    "best_checkpoint": best_checkpoint,
+                }
+            )
 
     train_loss, train_acc = _evaluate(train_data, weights, bias)
     val_loss, val_acc = _evaluate(val_data, weights, bias) if val_data else (train_loss, train_acc)
@@ -412,6 +709,9 @@ def _builtin_train(
         "final_loss": round(final_loss, 6),
         "val_score": round(val_acc, 4),
         "artifact_sha256": digest,
+        "history": history,
+        "history_count": len(history),
+        "best_checkpoint": best_checkpoint,
     }
 
 
@@ -555,13 +855,26 @@ class TrainingWorkerRunner:
 
     def _run_train_command(self, cmd_template: str, context: dict[str, str], job_id: str) -> dict[str, Any]:
         cmd = cmd_template.format(**context)
-        proc = subprocess.Popen(cmd, shell=True)
+        proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        stdout = ""
+        stderr = ""
         try:
             while True:
                 rc = proc.poll()
                 if rc is not None:
                     if rc != 0:
-                        raise WorkerError(f"command failed({rc}): {cmd}")
+                        stdout, stderr = proc.communicate()
+                        exit_meta = classify_trainer_exit_code(rc)
+                        raise ExternalTrainerError(
+                            command=cmd,
+                            exit_code=rc,
+                            category=str(exit_meta["category"]),
+                            retryable=bool(exit_meta["retryable"]),
+                            message=f"{exit_meta['summary']}: {cmd}",
+                            stdout_tail=_tail_lines(stdout),
+                            stderr_tail=_tail_lines(stderr),
+                        )
+                    stdout, stderr = proc.communicate()
                     break
                 self.ensure_job_active(job_id, "external_training")
                 time.sleep(max(1, int(self.args.control_poll_seconds)))
@@ -574,10 +887,23 @@ class TrainingWorkerRunner:
                     proc.kill()
                     proc.wait(timeout=5)
             raise
-        metrics_path = Path(context["metrics_json"])
-        if metrics_path.exists():
-            return json.loads(metrics_path.read_text(encoding="utf-8"))
-        return {"trainer": "external", "note": "metrics file not produced"}
+        try:
+            metrics = load_external_metrics(Path(context["metrics_json"]))
+        except WorkerError as exc:
+            raise ExternalTrainerError(
+                command=cmd,
+                exit_code=0,
+                category="metrics_contract_error",
+                retryable=False,
+                message=str(exc),
+                stdout_tail=_tail_lines(stdout),
+                stderr_tail=_tail_lines(stderr),
+            ) from exc
+        metrics["trainer_exit_code"] = 0
+        metrics["trainer_command_type"] = "external"
+        metrics["trainer_stdout_tail"] = _tail_lines(stdout)
+        metrics["trainer_stderr_tail"] = _tail_lines(stderr)
+        return metrics
 
     def process_job(self, job: dict[str, Any]) -> None:
         job_id = job["id"]
@@ -616,6 +942,36 @@ class TrainingWorkerRunner:
             self.push_update(job_id, "RUNNING", {"stage": "base_model_sync"})
             base_model_path, base_manifest = self.pull_base_model(job_id, job_dir)
 
+        progress_state: dict[str, Any] = {"history": [], "best_checkpoint": None}
+
+        def emit_training_progress(meta: dict[str, Any]) -> None:
+            self.ensure_job_active(job_id, str(meta.get("stage") or "training"))
+            partial: dict[str, Any] = {"stage": "training"}
+            if meta.get("epochs") is not None:
+                partial["epochs"] = meta.get("epochs")
+            history = meta.get("history")
+            if isinstance(history, list):
+                progress_state["history"] = history
+                partial["history"] = history
+                partial["history_count"] = len(history)
+            history_entry = meta.get("history_entry")
+            if isinstance(history_entry, dict):
+                partial.update(
+                    {
+                        "epoch": history_entry.get("epoch"),
+                        "train_loss": history_entry.get("train_loss"),
+                        "val_loss": history_entry.get("val_loss"),
+                        "train_accuracy": history_entry.get("train_accuracy"),
+                        "val_accuracy": history_entry.get("val_accuracy"),
+                        "learning_rate": history_entry.get("learning_rate"),
+                    }
+                )
+            best_checkpoint = meta.get("best_checkpoint")
+            if isinstance(best_checkpoint, dict):
+                progress_state["best_checkpoint"] = best_checkpoint
+                partial["best_checkpoint"] = best_checkpoint
+            self.push_update(job_id, "RUNNING", partial)
+
         self.ensure_job_active(job_id, "training_prepare")
         self.push_update(job_id, "RUNNING", {"stage": "training"})
         started = _now_ts()
@@ -639,7 +995,7 @@ class TrainingWorkerRunner:
                     val_manifest,
                     base_model_path,
                     job.get("spec") or {},
-                    progress_callback=lambda _meta: self.ensure_job_active(job_id, "mock_training"),
+                    progress_callback=emit_training_progress,
                 )
             else:
                 metrics = _builtin_train(
@@ -648,7 +1004,7 @@ class TrainingWorkerRunner:
                     val_manifest,
                     base_model_path,
                     job.get("spec") or {},
-                    progress_callback=lambda _meta: self.ensure_job_active(job_id, "builtin_training"),
+                    progress_callback=emit_training_progress,
                 )
             _safe_json_write(metrics_json, metrics)
 
@@ -672,6 +1028,7 @@ class TrainingWorkerRunner:
                 "base_model_id": (job.get("base_model") or {}).get("id"),
                 "base_model_hash": base_manifest.get("model_hash"),
                 "candidate_model_id": ((candidate.get("candidate_model") or {}).get("id")),
+                "trainer_contract_version": metrics.get("trainer_contract_version"),
                 **metrics,
             },
         )
@@ -688,9 +1045,30 @@ class TrainingWorkerRunner:
                 except JobInterrupted:
                     if self.args.once:
                         return
+                except ExternalTrainerError as exc:
+                    failure_summary = {
+                        "stage": "failed",
+                        "failure_category": exc.category,
+                        "retryable": exc.retryable,
+                        "trainer_contract_version": TRAINER_CONTRACT_VERSION,
+                        "trainer_exit_code": exc.exit_code,
+                        "trainer_stdout_tail": exc.stdout_tail,
+                        "trainer_stderr_tail": exc.stderr_tail,
+                    }
+                    try:
+                        self.push_update(job.get("id", ""), "FAILED", failure_summary, error_message=str(exc)[:2000])
+                    except Exception:  # noqa: BLE001
+                        pass
+                    if self.args.fail_fast:
+                        raise
                 except Exception as exc:  # noqa: BLE001
                     try:
-                        self.push_update(job.get("id", ""), "FAILED", {"stage": "failed"}, error_message=str(exc)[:2000])
+                        self.push_update(
+                            job.get("id", ""),
+                            "FAILED",
+                            {"stage": "failed", "failure_category": "worker_error", "retryable": False},
+                            error_message=str(exc)[:2000],
+                        )
                     except Exception:  # noqa: BLE001
                         pass
                     if self.args.fail_fast:
@@ -706,11 +1084,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--worker-code", default=os.getenv("TRAINING_WORKER_CODE", ""))
     parser.add_argument("--worker-token", default=os.getenv("TRAINING_WORKER_TOKEN", ""))
     parser.add_argument("--worker-host", default=os.getenv("TRAINING_WORKER_HOST", "training-worker-local"))
-    parser.add_argument("--backend-root", default=os.getenv("TRAINING_BACKEND_ROOT", "./backend"))
+    parser.add_argument(
+        "--backend-root",
+        default=os.getenv("TRAINING_BACKEND_ROOT", _default_existing_path("./backend", "./backend_stub")),
+    )
     parser.add_argument("--work-dir", default=os.getenv("TRAINING_WORK_DIR", "/tmp/vistral_training_worker"))
-    parser.add_argument("--model-decrypt-key", default=os.getenv("MODEL_DECRYPT_KEY", "./edge/keys/model_decrypt.key"))
-    parser.add_argument("--model-encrypt-key", default=os.getenv("MODEL_ENCRYPT_KEY", "./docker/keys/model_encrypt.key"))
-    parser.add_argument("--model-sign-private-key", default=os.getenv("MODEL_SIGN_PRIVATE_KEY", "./docker/keys/model_sign_private.pem"))
+    parser.add_argument(
+        "--model-decrypt-key",
+        default=os.getenv("MODEL_DECRYPT_KEY", _default_existing_path("./keys/model_decrypt.key", "./edge/keys/model_decrypt.key")),
+    )
+    parser.add_argument(
+        "--model-encrypt-key",
+        default=os.getenv("MODEL_ENCRYPT_KEY", _default_existing_path("./keys/model_encrypt.key", "./docker/keys/model_encrypt.key")),
+    )
+    parser.add_argument(
+        "--model-sign-private-key",
+        default=os.getenv(
+            "MODEL_SIGN_PRIVATE_KEY",
+            _default_existing_path("./keys/model_sign_private.pem", "./docker/keys/model_sign_private.pem"),
+        ),
+    )
     parser.add_argument("--output-model-name", default=os.getenv("TRAINING_OUTPUT_MODEL", "candidate_model.bin"))
     parser.add_argument("--runtime", default=os.getenv("TRAINING_RUNTIME", "python"))
     parser.add_argument("--model-type", default=os.getenv("TRAINING_MODEL_TYPE", "expert"))

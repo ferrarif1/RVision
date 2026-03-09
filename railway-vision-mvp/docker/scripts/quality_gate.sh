@@ -7,6 +7,9 @@ echo "[info] quality gate: compile checks"
 python -m compileall "${ROOT_DIR}/backend/app" "${ROOT_DIR}/edge/agent" "${ROOT_DIR}/edge/inference" >/tmp/vistral_quality_compile.log
 tail -n 8 /tmp/vistral_quality_compile.log
 
+echo "[info] quality gate: training worker contract selftest"
+python3 "${ROOT_DIR}/docker/scripts/training_worker_contract_selftest.py"
+
 echo "[info] quality gate: schema snapshot guard"
 python3 "${ROOT_DIR}/docker/scripts/schema_snapshot_guard.py"
 
@@ -28,6 +31,9 @@ fi
 
 echo "[info] quality gate: runtime hardening smoke"
 python3 "${ROOT_DIR}/docker/scripts/runtime_hardening_smoke.py"
+
+echo "[info] quality gate: backend api regression"
+bash "${ROOT_DIR}/docker/scripts/api_regression.sh"
 
 echo "[info] quality gate: quick detect smoke"
 python3 "${ROOT_DIR}/docker/scripts/quick_detect_smoke.py"

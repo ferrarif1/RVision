@@ -28,13 +28,14 @@ def create_dataset_version_record(
     *,
     asset: DataAsset,
     dataset_label: str,
+    dataset_key: str | None = None,
     asset_purpose: str,
     source_type: str,
     summary: dict[str, Any],
     created_by: str,
 ) -> DatasetVersion:
-    dataset_key = normalize_dataset_key(dataset_label)
-    query = db.query(DatasetVersion).filter(DatasetVersion.dataset_key == dataset_key)
+    normalized_dataset_key = normalize_dataset_key(dataset_key or dataset_label)
+    query = db.query(DatasetVersion).filter(DatasetVersion.dataset_key == normalized_dataset_key)
     if asset.buyer_tenant_id:
         query = query.filter(DatasetVersion.buyer_tenant_id == asset.buyer_tenant_id)
     else:
@@ -43,7 +44,7 @@ def create_dataset_version_record(
     version = _next_dataset_version([row.version for row in query.all()])
     dataset_version = DatasetVersion(
         id=str(uuid.uuid4()),
-        dataset_key=dataset_key,
+        dataset_key=normalized_dataset_key,
         dataset_label=dataset_label,
         version=version,
         asset_id=asset.id,
@@ -59,7 +60,8 @@ def create_dataset_version_record(
     meta = dict(asset.meta or {})
     meta.update(
         {
-            "dataset_key": dataset_key,
+            "dataset_key": normalized_dataset_key,
+            "dataset_label": dataset_label,
             "dataset_version": version,
             "dataset_version_id": dataset_version.id,
             "dataset_source_type": source_type,
@@ -69,4 +71,3 @@ def create_dataset_version_record(
     db.add(asset)
     db.flush()
     return dataset_version
-

@@ -32,10 +32,10 @@ Vistral 把资产准备、供应商协作、模型治理、任务执行、结果
 - 中心端一键部署：`FastAPI + PostgreSQL + Redis + Nginx(frontend)`（Docker Compose）
 - 身份与权限：JWT + RBAC（`platform_* / supplier_* / buyer_*`），前后端权限口径一致
 - 资产中心：支持图片、视频、ZIP 数据集包上传，支持训练/微调/验证/推理用途标记
-- 快速识别：上传单张或多张图片/短视频后直接输入目标对象，平台自动选模、创建任务并返回标注结果；结果支持删误检、手工补框、拖动缩放修订框、保存修订，并把结果导出成可预览、可版本对比的数据集版本
-- 模型中心：支持模型包提交、审批、发布、时间线查看和交付元数据管理
+- 快速识别：上传单张或多张图片/短视频后可先做一轮预检扫描，自动给出候选目标标签 / 任务类型 / OCR 文本建议；确认方向后平台自动选模、创建任务并返回标注结果。结果支持删误检、手工补框、拖动缩放修订框、修订 OCR 文本、保存修订，并把结果导出成可预览、可版本对比的数据集版本
+- 模型中心：支持模型包提交、自动验证门禁、发布前风险摘要、审批、发布、时间线查看和交付元数据管理
 - 流水线中心：支持 `Router + Experts + Thresholds + Fusion + Human Review` 的 pipeline 编排与发布
-- 训练控制面：支持训练作业、worker 注册/心跳、受控拉取训练资产和基线模型、候选模型自动回收，以及作业取消 / 重试 / 改派；训练中心会把基础模型、数据规模、关键指标和后续动作集中展示
+- 训练控制面：支持训练作业、worker 注册/心跳、受控拉取训练资产和基线模型、候选模型自动回收，以及作业取消 / 重试 / 改派 / 超时回收；训练中心会把基础模型、数据规模、关键指标、epoch 曲线、best checkpoint、运行告警和后续动作集中展示
 - 边缘执行链路：支持拉任务、拉模型、验签、解密、推理、回传、断网补传
 - 审计闭环：登录、上传、建任务、训练拉取、模型提交/审批/发布/下载、结果导出、边缘回传均有留痕
 - 运行时硬化：真实登录校验、流式上传、重复资产复用、空文件/非法类型拦截、Agent 版本上报
@@ -46,7 +46,8 @@ Vistral 把资产准备、供应商协作、模型治理、任务执行、结果
 - 供应商提交模型 -> 平台审批发布 -> 买家上传资产 -> 边缘执行推理 -> 结果回传 -> 前端查询 -> 审计可查
 - 训练作业创建 -> worker 拉取训练资产/基线模型 -> 生成候选模型 -> 平台自动回收入库 -> 前端集中展示关键指标、数据规模与候选模型入口
 - ZIP 数据集包上传 -> 资源计数与层级分析 -> worker 解包 -> 多资源训练输入
-- 快速识别 -> 自动选模 -> 边缘检测 -> 标注图回传 -> 轻量修订（删误检/补框/拖拽缩放） -> 数据集版本生成 -> 样本级差异对比与缩略图预览 -> 训练中心直接选用
+- 快速识别 -> 预检扫描（候选标签 / 任务类型 / OCR 文本） -> 自动选模 -> 边缘检测 / OCR -> 标注图回传 -> 轻量修订（删误检/补框/拖拽缩放/修订文本） -> 数据集版本生成 -> 样本级差异对比、筛选、回滚与缩略图预览 -> 训练中心直接选用
+- 候选模型回收 -> 自动验证门禁（验证资产 / 指标 / best checkpoint / runtime 契约） -> 发布前风险摘要（审批状态 / 授权范围 / 交付模式 / 容量预算） -> 平台审批与授权发布
 
 ## 当前项目状态
 
@@ -61,6 +62,11 @@ Vistral 把资产准备、供应商协作、模型治理、任务执行、结果
 - 真实训练执行引擎与运行中中止协议
 - 自动验证晋级与审批编排
 - 完整分布式调度、容量治理与训练日志流
+
+训练能力边界需要明确：
+
+- 已完成：训练控制面 MVP、worker 执行闭环、候选模型回收、验证门禁、发布 readiness
+- 未完成：生产级分布式训练平台、长日志流、容量治理和多机协同调度
 
 ## 系统概览
 
@@ -151,24 +157,66 @@ bash docker/scripts/quality_gate.sh
 - 边缘推理 golden fixture 回归检查
 - 运行时健康检查（若容器已启动）
 - 运行时硬化 smoke（认证拒绝、空文件拒绝、非法类型拒绝、重复上传复用）
+- 后端 API 自动化回归（`auth / assets / tasks / results / edge / training`）
 - 快速识别 smoke（上传样例图、提示 `bus`、自动选模、边缘检测、标注结果校验、结果打包为数据集资产）
 - 训练/验证数据集包支持：ZIP 嵌套目录、多资源计数、0-n 训练资产列表
 - 训练控制面 smoke 检查，并归档 `docs/qa/reports/training_control_plane_latest.json`
+
+如需单独运行后端 API 自动化回归：
+
+```bash
+cd <repo-root>
+bash docker/scripts/api_regression.sh
+```
 
 ### 方式C2：运行训练 Worker MVP 执行器
 
 ```bash
 cd <repo-root>
-python docker/scripts/training_worker_runner.py \
-  --backend-base-url http://localhost:8000 \
-  --worker-token trainwk_xxx \
-  --backend-root ./backend \
-  --model-encrypt-key ./docker/keys/model_encrypt.key \
-  --model-sign-private-key ./docker/keys/model_sign_private.pem \
-  --once
+cp deploy/training-worker/worker.env.example deploy/training-worker/worker.env
+bash deploy/training-worker/run_worker.sh --once
 ```
 
-该脚本用于把训练控制面 API 串成可执行链路；真实训练可通过 `--trainer-cmd` 接入。
+worker 独立部署物料已统一放到 `deploy/training-worker/`：
+
+- `run_worker.sh`：worker 启动入口
+- `worker.env.example`：环境变量模板
+- `requirements.txt`：最小依赖
+- `build_bundle.py`：生成独立可下发 bundle
+
+如果需要把 worker 下发到远端训练机：
+
+```bash
+cd <repo-root>
+python3 deploy/training-worker/build_bundle.py
+```
+
+输出目录：
+
+- `deploy/training-worker/dist/vistral-training-worker/`
+
+该目录可直接复制到远端机器；真实训练仍可通过 `--trainer-cmd` 接入。
+
+外部训练命令契约已固化为 `Vistral external trainer v1`：
+
+- 命令占位变量：`{job_dir} {train_manifest} {val_manifest} {base_model_path} {output_model_path} {job_json} {metrics_json}`
+- 退出码分类：
+  - `10`：配置错误，不可重试
+  - `11`：输入契约错误，不可重试
+  - `12`：数据错误，不可重试
+  - `20`：训练运行时错误，可重试
+  - `21`：依赖不可用，可重试
+  - `22`：中断退出，可重试
+- `metrics_json` 现在要求稳定 JSON object schema，支持：
+  - 顶层指标：`epochs / learning_rate / train_loss / val_loss / train_accuracy / val_accuracy / final_loss / val_score`
+  - 历史曲线：`history: [{epoch, train_loss, val_loss, train_accuracy, val_accuracy, learning_rate, duration_sec}]`
+  - 最优 checkpoint：`best_checkpoint: {epoch, metric, value, path}`
+
+训练中心现在会直接消费这些字段：
+
+- 在作业执行中展示 epoch 级 loss / accuracy 曲线
+- 在完成后展示 best checkpoint、收敛趋势和当前最优轮次
+- 不再只停留在终态摘要卡
 
 ### 方式C3：使用本地车号素材生成训练包
 
@@ -256,7 +304,9 @@ python3 docker/scripts/db_migrate.py --apply
 - `GET /users/me`
 - `GET /models`
 - `POST /models/register`
+- `GET /models/{id}/readiness`
 - `POST /models/approve`
+- `POST /models/release-readiness`
 - `POST /models/release`
 - `GET /pipelines`
 - `GET /pipelines/{id}`

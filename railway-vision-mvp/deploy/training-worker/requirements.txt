@@ -1,0 +1,4 @@
+# Minimal runtime dependencies for the standalone Vistral training worker
+# Vistral 独立训练 worker 的最小运行依赖
+httpx==0.28.1
+cryptography==44.0.1

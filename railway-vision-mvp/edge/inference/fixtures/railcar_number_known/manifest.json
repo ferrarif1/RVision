@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "samples": [
+    {"file_name": "thumb.jpg", "label": "52898378", "bbox": [36, 57, 92, 79]},
+    {"file_name": "thumb(1).jpg", "label": "61147955", "bbox": [83, 60, 150, 79]},
+    {"file_name": "thumb(2).jpg", "label": "64514849", "bbox": [64, 63, 135, 82]},
+    {"file_name": "thumb(3).jpg", "label": "64511173", "bbox": [48, 51, 104, 72]},
+    {"file_name": "thumb(4).jpg", "label": "78260407", "bbox": [26, 60, 71, 82]},
+    {"file_name": "thumb(5).jpg", "label": "83479003", "bbox": [20, 63, 61, 82]},
+    {"file_name": "thumb(6).jpg", "label": "60081221", "bbox": [81, 58, 146, 77]},
+    {"file_name": "thumb(7).jpg", "label": "63284707", "bbox": [28, 53, 77, 73]},
+    {"file_name": "thumb(8).jpg", "label": "62951306", "bbox": [46, 53, 104, 72]},
+    {"file_name": "thumb(9).jpg", "label": "52296903", "bbox": [80, 58, 151, 79]},
+    {"file_name": "thumb(10).jpg", "label": "62818802", "bbox": [34, 50, 88, 70]},
+    {"file_name": "thumb(11).jpg", "label": "52264655", "bbox": [32, 58, 95, 79]},
+    {"file_name": "CAR123456_demo.png", "label": "CAR123456"},
+    {"file_name": "00_thumb.png", "label": "52898378"},
+    {"file_name": "07_thumb(7).png", "label": "63284707"},
+    {"file_name": "11_thumb(11).png", "label": "52264655"}
+  ]
+}

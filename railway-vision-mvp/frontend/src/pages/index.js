@@ -55,11 +55,31 @@ function makeReviewPrediction(prediction, fallbackLabel = 'object') {
   return {
     _id: String(prediction?._id || makeLocalId('pred')),
     label: String(prediction?.label || fallbackLabel || 'object').trim() || 'object',
+    text: String(prediction?.text || prediction?.attributes?.text || '').trim(),
     score: Number(prediction?.score ?? 1),
     bbox,
     attributes: cloneJson(prediction?.attributes || {}) || {},
     source: String(prediction?.source || prediction?.attributes?.review_source || 'auto'),
   };
+}
+
+function extractPredictionText(prediction) {
+  return String(prediction?.text || prediction?.attributes?.text || '').trim();
+}
+
+function predictionBadgeText(prediction) {
+  const score = Number.isFinite(Number(prediction?.score)) ? Number(prediction.score).toFixed(2) : '1.00';
+  const text = extractPredictionText(prediction);
+  if (text) return `${prediction?.label || 'object'}:${text} ${score}`;
+  return `${prediction?.label || 'object'}:${score}`;
+}
+
+function collectRecognizedTexts(predictions, summary = {}) {
+  const values = [
+    ...((Array.isArray(predictions) ? predictions : []).map((prediction) => extractPredictionText(prediction))),
+    String(summary?.car_number || '').trim(),
+  ];
+  return [...new Set(values.filter(Boolean))];
 }
 
 function splitCsv(value) {
@@ -119,6 +139,327 @@ function formatDurationWindow(startedAt, finishedAt, durationSec) {
   if (hours > 0) return `${hours} 小时 ${minutes} 分`;
   if (minutes > 0) return `${minutes} 分 ${remainder} 秒`;
   return `${remainder} 秒`;
+}
+
+function normalizeTrainingHistory(rawHistory) {
+  if (!Array.isArray(rawHistory)) return [];
+  return rawHistory
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return null;
+      const epoch = Number(entry.epoch);
+      if (!Number.isInteger(epoch) || epoch <= 0) return null;
+      const normalized = { epoch };
+      ['train_loss', 'val_loss', 'train_accuracy', 'val_accuracy', 'learning_rate', 'duration_sec'].forEach((key) => {
+        const numeric = Number(entry[key]);
+        normalized[key] = Number.isFinite(numeric) ? numeric : null;
+      });
+      return normalized;
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.epoch - right.epoch);
+}
+
+function normalizeTrainingCheckpoint(value) {
+  if (!value || typeof value !== 'object') return null;
+  const epoch = Number(value.epoch);
+  if (!Number.isInteger(epoch) || epoch <= 0) return null;
+  const numericValue = Number(value.value);
+  return {
+    epoch,
+    metric: String(value.metric || 'val_score').trim() || 'val_score',
+    value: Number.isFinite(numericValue) ? numericValue : null,
+    path: String(value.path || '').trim() || '',
+  };
+}
+
+function renderTrainingHistoryChart({ title, description, history, lines, percent = false, lowerIsBetter = false }) {
+  const width = 360;
+  const height = 182;
+  const padding = { top: 18, right: 12, bottom: 24, left: 36 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const availableLines = lines
+    .map((line) => ({
+      ...line,
+      points: history
+        .map((entry) => {
+          const value = entry[line.key];
+          return Number.isFinite(value) ? { epoch: entry.epoch, value } : null;
+        })
+        .filter(Boolean),
+    }))
+    .filter((line) => line.points.length);
+
+  if (!availableLines.length) {
+    return `
+      <article class="training-history-card">
+        <div class="training-history-head">
+          <div>
+            <strong>${esc(title)}</strong>
+            <p>${esc(description)}</p>
+          </div>
+          <span class="badge">暂无历史</span>
+        </div>
+        <div class="training-history-empty">当前作业还没有回写 epoch 级历史指标。</div>
+      </article>
+    `;
+  }
+
+  const values = availableLines.flatMap((line) => line.points.map((point) => point.value));
+  let minValue = Math.min(...values);
+  let maxValue = Math.max(...values);
+  if (percent) {
+    minValue = Math.max(0, minValue);
+    maxValue = Math.min(1, maxValue);
+  }
+  if (!Number.isFinite(minValue) || !Number.isFinite(maxValue)) {
+    minValue = 0;
+    maxValue = 1;
+  }
+  if (Math.abs(maxValue - minValue) < 1e-9) {
+    const offset = Math.abs(maxValue || 1) * 0.08 || 0.08;
+    minValue -= offset;
+    maxValue += offset;
+  }
+  const epochMin = Math.min(...history.map((entry) => entry.epoch));
+  const epochMax = Math.max(...history.map((entry) => entry.epoch));
+  const epochSpan = Math.max(epochMax - epochMin, 1);
+  const valueSpan = Math.max(maxValue - minValue, 1e-9);
+
+  const mapX = (epoch) => padding.left + (((epoch - epochMin) / epochSpan) * plotWidth);
+  const mapY = (value) => padding.top + plotHeight - (((value - minValue) / valueSpan) * plotHeight);
+  const gridValues = Array.from({ length: 4 }, (_, index) => minValue + ((valueSpan * index) / 3));
+
+  const pathFor = (points) =>
+    points
+      .map((point, index) => `${index === 0 ? 'M' : 'L'} ${mapX(point.epoch).toFixed(2)} ${mapY(point.value).toFixed(2)}`)
+      .join(' ');
+
+  const primaryLine = availableLines[0];
+  const firstValue = primaryLine.points[0]?.value;
+  const lastValue = primaryLine.points[primaryLine.points.length - 1]?.value;
+  const trendDelta = Number.isFinite(firstValue) && Number.isFinite(lastValue) ? lastValue - firstValue : null;
+  const trendPrefix = trendDelta == null ? '-' : trendDelta > 0 ? '+' : '';
+  const trendLabel = trendDelta == null
+    ? '趋势待观察'
+    : `${lowerIsBetter ? '收敛变化' : '阶段变化'} ${trendPrefix}${formatMetricValue(trendDelta, { percent, digits: percent ? 2 : 4 })}`;
+
+  return `
+    <article class="training-history-card">
+      <div class="training-history-head">
+        <div>
+          <strong>${esc(title)}</strong>
+          <p>${esc(description)}</p>
+        </div>
+        <span class="badge">${esc(`epoch ${history.length}`)}</span>
+      </div>
+      <svg class="training-history-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(title)}">
+        ${gridValues
+          .map((value) => {
+            const y = mapY(value).toFixed(2);
+            return `
+              <line x1="${padding.left}" y1="${y}" x2="${width - padding.right}" y2="${y}" class="training-history-grid" />
+              <text x="8" y="${(Number(y) + 4).toFixed(2)}" class="training-history-axis">${esc(formatMetricValue(value, { percent, digits: percent ? 2 : 4 }))}</text>
+            `;
+          })
+          .join('')}
+        <text x="${padding.left}" y="${height - 6}" class="training-history-axis">${esc(`E${epochMin}`)}</text>
+        <text x="${width - padding.right - 8}" y="${height - 6}" text-anchor="end" class="training-history-axis">${esc(`E${epochMax}`)}</text>
+        ${availableLines
+          .map((line) => `<path d="${pathFor(line.points)}" class="training-history-path ${esc(line.className || '')}" />`)
+          .join('')}
+        ${availableLines
+          .flatMap((line) =>
+            line.points.map(
+              (point) => `<circle cx="${mapX(point.epoch).toFixed(2)}" cy="${mapY(point.value).toFixed(2)}" r="3" class="training-history-point ${esc(line.className || '')}" />`
+            )
+          )
+          .join('')}
+      </svg>
+      <div class="training-history-legend">
+        ${availableLines
+          .map((line) => {
+            const lastPoint = line.points[line.points.length - 1];
+            return `
+              <span>
+                <i class="${esc(line.className || '')}"></i>
+                ${esc(line.label)} · ${esc(formatMetricValue(lastPoint?.value, { percent, digits: percent ? 2 : 4 }))}
+              </span>
+            `;
+          })
+          .join('')}
+      </div>
+      <div class="training-history-foot">
+        <span>${esc(trendLabel)}</span>
+        <span>${esc(`区间 ${formatMetricValue(minValue, { percent, digits: percent ? 2 : 4 })} ~ ${formatMetricValue(maxValue, { percent, digits: percent ? 2 : 4 })}`)}</span>
+      </div>
+    </article>
+  `;
+}
+
+function renderBestCheckpointCard(bestCheckpoint, history, trainer) {
+  if (!bestCheckpoint) {
+    return `
+      <article class="training-checkpoint-card">
+        <div class="training-history-head">
+          <div>
+            <strong>Best Checkpoint</strong>
+            <p>${esc(String(trainer || '受控训练 Worker'))}</p>
+          </div>
+          <span class="badge">待生成</span>
+        </div>
+        <div class="training-history-empty">当前训练结果还没有回写 best checkpoint 信息。</div>
+      </article>
+    `;
+  }
+  const historyEntry = history.find((item) => item.epoch === bestCheckpoint.epoch) || null;
+  const metricLabel = bestCheckpoint.metric || 'val_score';
+  return `
+    <article class="training-checkpoint-card">
+      <div class="training-history-head">
+        <div>
+          <strong>Best Checkpoint</strong>
+          <p>${esc('训练过程中当前最优的一次 checkpoint，适合做回归和精调参考。')}</p>
+        </div>
+        <span class="badge">${esc(`epoch ${bestCheckpoint.epoch}`)}</span>
+      </div>
+      <div class="keyvals compact">
+        <div><span>metric</span><strong>${esc(metricLabel)}</strong></div>
+        <div><span>value</span><strong>${esc(formatMetricValue(bestCheckpoint.value, { percent: metricLabel.includes('accuracy') || metricLabel.includes('score') }))}</strong></div>
+        <div><span>path</span><strong class="mono">${esc(bestCheckpoint.path || '-')}</strong></div>
+        <div><span>对应轮次</span><strong>${esc(String(bestCheckpoint.epoch))}</strong></div>
+      </div>
+      ${
+        historyEntry
+          ? `<div class="training-checkpoint-summary">
+              <span>train_loss：${esc(formatMetricValue(historyEntry.train_loss))}</span>
+              <span>val_loss：${esc(formatMetricValue(historyEntry.val_loss))}</span>
+              <span>train_accuracy：${esc(formatMetricValue(historyEntry.train_accuracy, { percent: true }))}</span>
+              <span>val_accuracy：${esc(formatMetricValue(historyEntry.val_accuracy, { percent: true }))}</span>
+            </div>`
+          : '<div class="training-history-empty">未找到该 checkpoint 对应的 epoch 历史记录。</div>'
+      }
+    </article>
+  `;
+}
+
+function summarizeResultRow(row) {
+  const resultJson = row?.result_json && typeof row.result_json === 'object' ? row.result_json : {};
+  const summary = resultJson?.summary && typeof resultJson.summary === 'object' ? resultJson.summary : {};
+  const predictions = Array.isArray(resultJson.predictions)
+    ? resultJson.predictions
+    : Array.isArray(summary.predictions)
+      ? summary.predictions
+      : [];
+  const recognizedTexts = collectRecognizedTexts(predictions, {
+    car_number: resultJson.car_number || summary.car_number || row?.label_result || '',
+  });
+  const labelCounts = predictions.reduce((acc, item) => {
+    const label = String(item?.label || '').trim();
+    if (!label) return acc;
+    acc[label] = (acc[label] || 0) + 1;
+    return acc;
+  }, {});
+  const scores = predictions.map((item) => Number(item?.score)).filter((value) => Number.isFinite(value));
+  const avgScore = scores.length ? scores.reduce((sum, value) => sum + value, 0) / scores.length : null;
+  const durationMs = Number(row?.duration_ms ?? resultJson?.metrics?.duration_ms ?? summary?.metrics?.duration_ms);
+  return {
+    row,
+    resultJson,
+    summary,
+    predictions,
+    recognizedTexts,
+    labelCounts,
+    stage: String(resultJson.stage || summary.stage || '-'),
+    taskType: String(resultJson.task_type || summary.task_type || '-'),
+    objectCount: Number(resultJson.object_count ?? summary.object_count ?? predictions.length ?? 0) || 0,
+    avgScore,
+    durationMs: Number.isFinite(durationMs) ? durationMs : null,
+  };
+}
+
+function renderResultConfidenceBars(predictions) {
+  const items = (Array.isArray(predictions) ? predictions : [])
+    .map((item) => ({
+      label: String(item?.label || 'object').trim() || 'object',
+      text: extractPredictionText(item),
+      score: Number(item?.score),
+    }))
+    .filter((item) => Number.isFinite(item.score))
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 5);
+  if (!items.length) return '<div class="training-history-empty">当前结果没有可展示的置信度分布。</div>';
+  return `
+    <div class="result-confidence-list">
+      ${items.map((item) => `
+        <div class="result-confidence-row">
+          <div class="result-confidence-meta">
+            <strong>${esc(item.text ? `${item.label}:${item.text}` : item.label)}</strong>
+            <span>${esc(formatMetricValue(item.score, { percent: true }))}</span>
+          </div>
+          <div class="result-confidence-track"><i style="width:${clampNumber(item.score * 100, 4, 100).toFixed(1)}%"></i></div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderModelInsightBlock(modelId, readiness) {
+  if (!readiness || typeof readiness !== 'object') return '';
+  const validationReport = readiness.validation_report || {};
+  const metrics = validationReport.metrics || {};
+  const history = normalizeTrainingHistory(metrics.history);
+  const trainingJob = validationReport.training_job || {};
+  return `
+    <section class="result-model-insight">
+      <div class="result-model-insight-head">
+        <div>
+          <strong>${esc(`关联模型 · ${modelId}`)}</strong>
+          <p>${esc(validationReport.summary || '当前结果使用的模型验证信息')}</p>
+        </div>
+        <div class="quick-review-statuses">
+          <span class="badge">${esc(validationReport.decision || '-')}</span>
+          ${trainingJob?.job_code ? `<span class="badge">${esc(trainingJob.job_code)}</span>` : ''}
+        </div>
+      </div>
+      <div class="keyvals compact">
+        <div><span>val_score</span><strong>${esc(formatMetricValue(metrics.val_score, { percent: true }))}</strong></div>
+        <div><span>val_accuracy</span><strong>${esc(formatMetricValue(metrics.val_accuracy, { percent: true }))}</strong></div>
+        <div><span>val_loss</span><strong>${esc(formatMetricValue(metrics.val_loss))}</strong></div>
+        <div><span>history</span><strong>${esc(formatMetricValue(metrics.history_count ?? history.length))}</strong></div>
+        <div><span>latency_ms</span><strong>${esc(formatMetricValue(metrics.latency_ms))}</strong></div>
+        <div><span>gpu_mem_mb</span><strong>${esc(formatMetricValue(metrics.gpu_mem_mb))}</strong></div>
+      </div>
+      ${
+        history.length
+          ? `
+              <div class="grid-two training-history-grid-wrap result-model-history-grid">
+                ${renderTrainingHistoryChart({
+                  title: 'Accuracy Curve',
+                  description: '复用训练作业回写的 epoch 历史，快速判断该识别结果背后的模型泛化水平。',
+                  history,
+                  percent: true,
+                  lines: [
+                    { key: 'train_accuracy', label: 'train_accuracy', className: 'train-line' },
+                    { key: 'val_accuracy', label: 'val_accuracy', className: 'validation-line' },
+                  ],
+                })}
+                ${renderTrainingHistoryChart({
+                  title: 'Loss Curve',
+                  description: '对比 train / val loss，观察训练是否收敛以及是否存在过拟合迹象。',
+                  history,
+                  lowerIsBetter: true,
+                  lines: [
+                    { key: 'train_loss', label: 'train_loss', className: 'train-line' },
+                    { key: 'val_loss', label: 'val_loss', className: 'validation-line' },
+                  ],
+                })}
+              </div>
+            `
+          : '<div class="training-history-empty">当前模型已记录验证指标，但还没有可展示的 epoch 历史曲线。</div>'
+      }
+    </section>
+  `;
 }
 
 const ENUM_ZH = {
@@ -214,7 +555,68 @@ const ROLE_LABELS = {
   auditor: '平台审计',
 };
 
-const QUICK_DETECT_PROMPTS = ['car', 'person', 'train', 'bus'];
+const QUICK_DETECT_PROMPTS = ['car', 'person', 'train', 'bus', '车号'];
+const QUICK_DETECT_INTENT_OPTIONS = [
+  {
+    prompt: 'car',
+    taskType: 'object_detect',
+    title: '车辆目标',
+    description: '通用框选 car / vehicle / bus / truck',
+    aliases: ['car', 'vehicle', '车辆', '汽车', '货车', '卡车', '巴士'],
+  },
+  {
+    prompt: 'person',
+    taskType: 'object_detect',
+    title: '人员目标',
+    description: '通用框选 person / people / pedestrian',
+    aliases: ['person', 'people', 'human', 'pedestrian', '人', '人员', '行人'],
+  },
+  {
+    prompt: 'train',
+    taskType: 'object_detect',
+    title: '列车目标',
+    description: '通用框选 train / wagon / locomotive',
+    aliases: ['train', 'wagon', 'locomotive', '列车', '火车', '车厢'],
+  },
+  {
+    prompt: '车号',
+    taskType: 'car_number_ocr',
+    title: '车号内容',
+    description: '走 OCR，输出车号文本，不只是画框',
+    aliases: ['车号', '车厢号', '车皮号', '编号', '号码', '货车号', '货车编号', '车体编号', 'railcar number', 'wagon number', 'car number'],
+  },
+  {
+    prompt: '螺栓缺失',
+    taskType: 'bolt_missing_detect',
+    title: '螺栓缺失',
+    description: '检测紧固件缺失或松动',
+    aliases: ['螺栓', '螺母', '紧固件', '缺失', 'bolt', 'fastener', 'screw'],
+  },
+];
+
+function normalizeQuickPrompt(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function quickIntentOptions(prompt) {
+  const normalized = normalizeQuickPrompt(prompt);
+  const ranked = QUICK_DETECT_INTENT_OPTIONS
+    .map((option) => {
+      const aliasMatches = option.aliases.filter((alias) => normalized && normalized.includes(String(alias).toLowerCase()));
+      const titleMatch = normalized && normalized.includes(String(option.title).toLowerCase()) ? 1 : 0;
+      return {
+        ...option,
+        matchScore: aliasMatches.length * 2 + titleMatch + (normalized === normalizeQuickPrompt(option.prompt) ? 3 : 0),
+      };
+    })
+    .sort((left, right) => right.matchScore - left.matchScore);
+  if (!normalized) return ranked.slice(0, 4);
+  return [...ranked.filter((item) => item.matchScore > 0), ...ranked.filter((item) => item.matchScore === 0)].slice(0, 4);
+}
+
+function inferQuickDetectTaskType(prompt) {
+  return quickIntentOptions(prompt)[0]?.taskType || 'object_detect';
+}
 
 const DASHBOARD_ROLE_PRESETS = {
   platform_admin: {
@@ -864,10 +1266,31 @@ function pageModels(route, rawCtx) {
         <section class="card">
           <h3>模型时间线</h3>
           <div id="modelTimelineWrap">${renderEmpty('在模型列表点击“时间线”，查看提交、审批、发布和回收轨迹')}</div>
+          <div class="readiness-block">
+            <h3>评估与风险</h3>
+            <div id="modelReadinessWrap">${renderEmpty('在模型列表点击“评估”，查看自动验证结论和发布前风险摘要')}</div>
+          </div>
         </section>
       </section>
       <section class="card">
         <h3>模型列表</h3>
+        <div class="section-toolbar">
+          <input id="modelListSearch" placeholder="搜索 model_code / version / 插件 / 租户" />
+          <select id="modelStatusFilter">
+            <option value="">全部状态</option>
+            <option value="SUBMITTED">${enumText('model_status', 'SUBMITTED')}</option>
+            <option value="APPROVED">${enumText('model_status', 'APPROVED')}</option>
+            <option value="RELEASED">${enumText('model_status', 'RELEASED')}</option>
+          </select>
+          <select id="modelSourceFilter">
+            <option value="">全部来源</option>
+            <option value="delivery_candidate">${enumText('model_source_type', 'delivery_candidate')}</option>
+            <option value="finetuned_candidate">${enumText('model_source_type', 'finetuned_candidate')}</option>
+            <option value="initial_algorithm">${enumText('model_source_type', 'initial_algorithm')}</option>
+            <option value="pretrained_seed">${enumText('model_source_type', 'pretrained_seed')}</option>
+          </select>
+          <div id="modelListMeta" class="hint"></div>
+        </div>
         <div id="modelsTableWrap">${renderLoading('加载模型列表...')}</div>
       </section>
       <section class="grid-two">
@@ -912,14 +1335,87 @@ function pageModels(route, rawCtx) {
       const registerForm = root.querySelector('#modelRegisterForm');
       const registerMsg = root.querySelector('#modelRegisterMsg');
       const timelineWrap = root.querySelector('#modelTimelineWrap');
+      const readinessWrap = root.querySelector('#modelReadinessWrap');
       const trainingJobsWrap = root.querySelector('#trainingJobsWrap');
       const trainingJobForm = root.querySelector('#trainingJobForm');
       const trainingJobMsg = root.querySelector('#trainingJobMsg');
+      const modelListSearch = root.querySelector('#modelListSearch');
+      const modelStatusFilter = root.querySelector('#modelStatusFilter');
+      const modelSourceFilter = root.querySelector('#modelSourceFilter');
+      const modelListMeta = root.querySelector('#modelListMeta');
       let cachedModels = [];
       const requestedFocusModelId = localStorage.getItem(STORAGE_KEYS.focusModelId);
       const requestedOpenModelTimeline = localStorage.getItem(STORAGE_KEYS.focusModelTimeline) === '1';
+      let activeModelId = requestedFocusModelId || '';
+      const modelListFilters = { q: '', status: '', source: '' };
+
+      function renderReadinessChecks(title, report) {
+        const checks = Array.isArray(report?.checks) ? report.checks : [];
+        return `
+          <section class="readiness-section">
+            <div class="readiness-head">
+              <strong>${esc(title)}</strong>
+              <span class="badge">${esc(report?.decision || '-')}</span>
+            </div>
+            <p>${esc(report?.summary || '-')}</p>
+            <div class="readiness-counts">
+              <span>阻断 ${esc(report?.counts?.blocker_count ?? 0)}</span>
+              <span>提醒 ${esc(report?.counts?.warning_count ?? 0)}</span>
+              <span>通过 ${esc(report?.counts?.ok_count ?? 0)}</span>
+            </div>
+            ${checks.length ? `
+              <ul class="readiness-checklist">
+                ${checks.map((item) => `
+                  <li class="readiness-check ${esc(item.status || 'warning')}">
+                    <strong>${esc(item.label || item.code || '-')}</strong>
+                    <span>${esc(item.reason || '-')}</span>
+                  </li>
+                `).join('')}
+              </ul>
+            ` : '<div class="hint">暂无检查项</div>'}
+          </section>
+        `;
+      }
+
+      function renderModelReadinessPanel(data, releaseTitle = '默认发布评估') {
+        const validationReport = data?.validation_report || {};
+        const releaseRiskSummary = data?.release_risk_summary || data?.default_release_risk_summary || {};
+        const metrics = validationReport.metrics || {};
+        const trainingJob = validationReport.training_job || null;
+        return `
+          <div class="readiness-summary-grid">
+            <article class="metric-card">
+              <h4>自动验证</h4>
+              <p class="metric">${esc(validationReport.decision || '-')}</p>
+              <span>${esc(validationReport.summary || '暂无自动验证结果')}</span>
+            </article>
+            <article class="metric-card">
+              <h4>${esc(releaseTitle)}</h4>
+              <p class="metric">${esc(releaseRiskSummary.decision || '-')}</p>
+              <span>${esc(releaseRiskSummary.summary || '暂无发布评估')}</span>
+            </article>
+            <article class="metric-card">
+              <h4>验证资产</h4>
+              <p class="metric">${esc((validationReport.validation_asset_ids || []).length)}</p>
+              <span>${esc(trainingJob ? `训练作业 ${trainingJob.job_code}` : '未绑定训练作业')}</span>
+            </article>
+          </div>
+          <div class="keyvals compact">
+            <div><span>val_score</span><strong>${esc(formatMetricValue(metrics.val_score, { digits: 4 }))}</strong></div>
+            <div><span>val_accuracy</span><strong>${esc(formatMetricValue(metrics.val_accuracy, { percent: true, digits: 4 }))}</strong></div>
+            <div><span>val_loss</span><strong>${esc(formatMetricValue(metrics.val_loss, { digits: 4 }))}</strong></div>
+            <div><span>history</span><strong>${esc(metrics.history_count ?? 0)}</strong></div>
+            <div><span>best_checkpoint</span><strong>${esc(metrics.best_checkpoint?.path || metrics.best_checkpoint?.metric || '-')}</strong></div>
+            <div><span>latency_ms / gpu_mem_mb</span><strong>${esc(`${metrics.latency_ms ?? '-'} / ${metrics.gpu_mem_mb ?? '-'}`)}</strong></div>
+          </div>
+          ${renderReadinessChecks('审批门禁', validationReport)}
+          ${renderReadinessChecks(releaseTitle, releaseRiskSummary)}
+          <details><summary>Advanced</summary><pre>${esc(safeJson(data))}</pre></details>
+        `;
+      }
 
       async function openModelTimeline(modelId) {
+        activeModelId = modelId;
         timelineWrap.innerHTML = renderLoading('加载模型时间线...');
         try {
           const data = await ctx.get(`/models/${modelId}/timeline`);
@@ -940,6 +1436,30 @@ function pageModels(route, rawCtx) {
             : renderEmpty('该模型暂无时间线数据');
         } catch (error) {
           timelineWrap.innerHTML = renderError(error.message);
+        }
+      }
+
+      async function openModelReadiness(modelId, releasePayload = null) {
+        activeModelId = modelId;
+        readinessWrap.innerHTML = renderLoading('加载模型评估...');
+        try {
+          const baseReadiness = await ctx.get(`/models/${modelId}/readiness`);
+          let rendered = baseReadiness;
+          let releaseTitle = '默认发布评估';
+          if (releasePayload) {
+            const releaseReadiness = await ctx.post('/models/release-readiness', releasePayload);
+            rendered = {
+              ...baseReadiness,
+              validation_report: releaseReadiness.validation_report,
+              release_risk_summary: releaseReadiness.release_risk_summary,
+            };
+            releaseTitle = '本次发布评估';
+          }
+          readinessWrap.innerHTML = renderModelReadinessPanel(rendered, releaseTitle);
+          return rendered;
+        } catch (error) {
+          readinessWrap.innerHTML = renderError(error.message || '模型评估加载失败');
+          throw error;
         }
       }
 
@@ -967,6 +1487,158 @@ function pageModels(route, rawCtx) {
         }
       }
 
+      function filteredModels(rows) {
+        const q = String(modelListFilters.q || '').trim().toLowerCase();
+        return (rows || []).filter((row) => {
+          if (modelListFilters.status && row.status !== modelListFilters.status) return false;
+          const sourceType = String((row.platform_meta || {}).model_source_type || '').trim();
+          if (modelListFilters.source && sourceType !== modelListFilters.source) return false;
+          if (!q) return true;
+          const haystack = [
+            row.model_code,
+            row.version,
+            row.plugin_name,
+            row.task_type,
+            row.owner_tenant_name,
+            row.owner_tenant_code,
+            sourceType,
+          ]
+            .map((item) => String(item || '').toLowerCase())
+            .join(' ');
+          return haystack.includes(q);
+        });
+      }
+
+      function renderModelsTable(rows) {
+        const filtered = filteredModels(rows);
+        if (modelListMeta) modelListMeta.textContent = `显示 ${filtered.length} / ${rows.length} 个模型`;
+        if (!filtered.length) {
+          modelsWrap.innerHTML = renderEmpty('当前筛选条件下没有模型');
+          return;
+        }
+        modelsWrap.innerHTML = `
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>model_code(模型编码)</th><th>version(版本)</th><th>status(状态)</th><th>validation(验证)</th><th>risk(最近风险)</th><th>source(来源)</th><th>hash(摘要)</th><th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${filtered.map((row) => `
+                  <tr data-model-row="${esc(row.id)}" class="${requestedFocusModelId === row.id ? 'active-row' : ''}">
+                    <td>${esc(row.model_code)}</td>
+                    <td>${esc(row.version)}</td>
+                    <td>${esc(enumText('model_status', row.status))}</td>
+                    <td>${row.validation_report?.decision ? `<span class="badge">${esc(row.validation_report.decision)}</span>` : '-'}</td>
+                    <td>${row.latest_release_risk_summary?.decision ? `<span class="badge">${esc(row.latest_release_risk_summary.decision)}</span>` : '-'}</td>
+                    <td>${esc(enumText('model_source_type', (row.platform_meta || {}).model_source_type || '-'))}</td>
+                    <td class="mono">${esc((row.model_hash || '').slice(0, 16))}...</td>
+                    <td>
+                      <div class="row-actions">
+                        <button class="ghost" data-model-timeline="${esc(row.id)}">时间线</button>
+                        <button class="ghost" data-model-readiness="${esc(row.id)}">评估</button>
+                        ${(canApprove && row.status === 'SUBMITTED') || (canRelease && ['APPROVED', 'RELEASED'].includes(row.status))
+                          ? `
+                              <details class="inline-details">
+                                <summary>更多操作</summary>
+                                <div class="details-panel action-panel">
+                                  ${canApprove && row.status === 'SUBMITTED' ? `<button class="ghost" data-model-approve="${esc(row.id)}">审批通过</button>` : ''}
+                                  ${canRelease && ['APPROVED', 'RELEASED'].includes(row.status) ? `<button class="ghost" data-model-release="${esc(row.id)}">发布</button>` : ''}
+                                </div>
+                              </details>
+                            `
+                          : ''}
+                      </div>
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        `;
+
+        modelsWrap.querySelectorAll('[data-model-timeline]').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const modelId = btn.getAttribute('data-model-timeline');
+            await openModelTimeline(modelId);
+          });
+        });
+
+        modelsWrap.querySelectorAll('[data-model-readiness]').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const modelId = btn.getAttribute('data-model-readiness');
+            try {
+              await openModelReadiness(modelId);
+            } catch (error) {
+              ctx.toast(error.message || '模型评估失败', 'error');
+            }
+          });
+        });
+
+        modelsWrap.querySelectorAll('[data-model-approve]').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const modelId = btn.getAttribute('data-model-approve');
+            try {
+              const readiness = await openModelReadiness(modelId);
+              if (!readiness?.validation_report?.can_approve) {
+                ctx.toast(readiness?.validation_report?.summary || '自动验证未通过，不能审批', 'error');
+                return;
+              }
+              const suggestedSummary = readiness?.validation_report?.summary || '自动验证通过';
+              const validationSummary = window.prompt('审批说明（可空）', suggestedSummary);
+              await ctx.post('/models/approve', {
+                model_id: modelId,
+                validation_asset_ids: readiness?.validation_report?.validation_asset_ids || [],
+                validation_result: 'passed',
+                validation_summary: validationSummary || suggestedSummary,
+              });
+              ctx.toast('模型已审批通过');
+              await loadModels();
+              await openModelTimeline(modelId);
+              await openModelReadiness(modelId);
+            } catch (error) {
+              ctx.toast(error.message, 'error');
+            }
+          });
+        });
+
+        modelsWrap.querySelectorAll('[data-model-release]').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const modelId = btn.getAttribute('data-model-release');
+            const targetDevices = splitCsv(window.prompt('目标设备（逗号分隔，可空）', 'edge-01'));
+            const targetBuyers = splitCsv(window.prompt('目标买家 tenant_code（逗号分隔，可空）', 'buyer-demo-001'));
+            try {
+              const releasePayload = {
+                model_id: modelId,
+                target_devices: targetDevices,
+                target_buyers: targetBuyers,
+                delivery_mode: 'local_key',
+                authorization_mode: 'device_key',
+                runtime_encryption: true,
+              };
+              const readiness = await openModelReadiness(modelId, releasePayload);
+              const releaseRisk = readiness?.release_risk_summary || {};
+              if (!releaseRisk.can_release) {
+                ctx.toast(releaseRisk.summary || '发布前评估未通过', 'error');
+                return;
+              }
+              const confirmRelease = window.confirm(
+                `${releaseRisk.summary || '发布前评估通过'}${Number(releaseRisk?.counts?.warning_count || 0) > 0 ? `\n仍有 ${releaseRisk.counts.warning_count} 个提醒项，确认继续发布？` : '\n确认立即发布？'}`
+              );
+              if (!confirmRelease) return;
+              await ctx.post('/models/release', releasePayload);
+              ctx.toast('模型已发布');
+              await loadModels();
+              await openModelTimeline(modelId);
+              await openModelReadiness(modelId, releasePayload);
+            } catch (error) {
+              ctx.toast(error.message, 'error');
+            }
+          });
+        });
+      }
+
       async function loadModels() {
         modelsWrap.innerHTML = renderLoading('加载模型列表...');
         try {
@@ -976,81 +1648,7 @@ function pageModels(route, rawCtx) {
             modelsWrap.innerHTML = renderEmpty('暂无模型，可先提交一个模型包，或等待供应商交付候选模型');
             return;
           }
-          modelsWrap.innerHTML = `
-            <div class="table-wrap">
-              <table class="table">
-                <thead>
-                  <tr>
-                    <th>model_code(模型编码)</th><th>version(版本)</th><th>status(状态)</th><th>source(来源)</th><th>hash(摘要)</th><th>操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${rows.map((row) => `
-                    <tr data-model-row="${esc(row.id)}" class="${requestedFocusModelId === row.id ? 'active-row' : ''}">
-                      <td>${esc(row.model_code)}</td>
-                      <td>${esc(row.version)}</td>
-                      <td>${esc(enumText('model_status', row.status))}</td>
-                      <td>${esc(enumText('model_source_type', (row.platform_meta || {}).model_source_type || '-'))}</td>
-                      <td class="mono">${esc((row.model_hash || '').slice(0, 16))}...</td>
-                      <td class="row-actions">
-                        <button class="ghost" data-model-timeline="${esc(row.id)}">时间线</button>
-                        ${canApprove && row.status === 'SUBMITTED' ? `<button class="ghost" data-model-approve="${esc(row.id)}">审批通过</button>` : ''}
-                        ${canRelease && ['APPROVED', 'RELEASED'].includes(row.status) ? `<button class="ghost" data-model-release="${esc(row.id)}">发布</button>` : ''}
-                      </td>
-                    </tr>
-                  `).join('')}
-                </tbody>
-              </table>
-            </div>
-          `;
-
-          modelsWrap.querySelectorAll('[data-model-timeline]').forEach((btn) => {
-            btn.addEventListener('click', async () => {
-              const modelId = btn.getAttribute('data-model-timeline');
-              await openModelTimeline(modelId);
-            });
-          });
-
-          modelsWrap.querySelectorAll('[data-model-approve]').forEach((btn) => {
-            btn.addEventListener('click', async () => {
-              const modelId = btn.getAttribute('data-model-approve');
-              const validationSummary = window.prompt('审批说明（可空）', '自动验收通过');
-              try {
-                await ctx.post('/models/approve', {
-                  model_id: modelId,
-                  validation_asset_ids: [],
-                  validation_result: 'passed',
-                  validation_summary: validationSummary || null,
-                });
-                ctx.toast('模型已审批通过');
-                await loadModels();
-              } catch (error) {
-                ctx.toast(error.message, 'error');
-              }
-            });
-          });
-
-          modelsWrap.querySelectorAll('[data-model-release]').forEach((btn) => {
-            btn.addEventListener('click', async () => {
-              const modelId = btn.getAttribute('data-model-release');
-              const targetDevices = splitCsv(window.prompt('目标设备（逗号分隔，可空）', 'edge-01'));
-              const targetBuyers = splitCsv(window.prompt('目标买家 tenant_code（逗号分隔，可空）', 'buyer-demo-001'));
-              try {
-                await ctx.post('/models/release', {
-                  model_id: modelId,
-                  target_devices: targetDevices,
-                  target_buyers: targetBuyers,
-                  delivery_mode: 'local_key',
-                  authorization_mode: 'device_key',
-                  runtime_encryption: true,
-                });
-                ctx.toast('模型已发布');
-                await loadModels();
-              } catch (error) {
-                ctx.toast(error.message, 'error');
-              }
-            });
-          });
+          renderModelsTable(rows);
 
           if (requestedFocusModelId && rows.some((row) => row.id === requestedFocusModelId)) {
             const focusRow = modelsWrap.querySelector(`[data-model-row="${requestedFocusModelId}"]`);
@@ -1058,6 +1656,9 @@ function pageModels(route, rawCtx) {
             if (requestedOpenModelTimeline) {
               await openModelTimeline(requestedFocusModelId);
             }
+            await openModelReadiness(requestedFocusModelId);
+          } else if (activeModelId && rows.some((row) => row.id === activeModelId)) {
+            await openModelReadiness(activeModelId);
           }
           localStorage.removeItem(STORAGE_KEYS.focusModelId);
           localStorage.removeItem(STORAGE_KEYS.focusModelTimeline);
@@ -1109,6 +1710,19 @@ function pageModels(route, rawCtx) {
         }
       });
 
+      modelListSearch?.addEventListener('input', () => {
+        modelListFilters.q = modelListSearch.value || '';
+        renderModelsTable(cachedModels);
+      });
+      modelStatusFilter?.addEventListener('change', () => {
+        modelListFilters.status = modelStatusFilter.value || '';
+        renderModelsTable(cachedModels);
+      });
+      modelSourceFilter?.addEventListener('change', () => {
+        modelListFilters.source = modelSourceFilter.value || '';
+        renderModelsTable(cachedModels);
+      });
+
       await Promise.all([loadModels(), loadTrainingJobs()]);
       if (cachedModels.length && trainingJobForm && !trainingJobForm.querySelector('[data-helper]')) {
         const hint = document.createElement('div');
@@ -1134,6 +1748,10 @@ function pageTraining(route, rawCtx) {
       <section class="card">
         <h2>训练中心</h2>
         <p>${esc(introText)}</p>
+      </section>
+      <section class="card">
+        <h3>运行告警</h3>
+        <div id="trainingRuntimeAlertWrap">${renderLoading('加载训练运行健康状态...')}</div>
       </section>
       <section class="grid-two">
         <section class="card">
@@ -1199,17 +1817,36 @@ function pageTraining(route, rawCtx) {
                 <section class="lane-card">
                   <h4>供应商算法库</h4>
                   <p class="hint">从已发布给当前租户的算法里直接选一个基础模型，系统会自动带入供应商归属信息。</p>
+                  <div class="section-toolbar compact">
+                    <input id="trainingModelSearch" placeholder="搜索算法 / 供应商 / 任务类型" />
+                    <div id="trainingModelMeta" class="hint"></div>
+                  </div>
                   <div id="trainingModelLibrary">${renderLoading('加载供应商算法...')}</div>
                 </section>
                 <section class="lane-card">
                   <h4>训练机池</h4>
                   <p class="hint">选择要执行训练的机器。可按 worker_code、host 或 IP 精确派发到指定节点。</p>
+                  <div class="section-toolbar compact">
+                    <input id="trainingWorkerSearch" placeholder="搜索 worker_code / host / 状态" />
+                    <div id="trainingWorkerMeta" class="hint"></div>
+                  </div>
                   <div id="trainingWorkerPool">${renderLoading('加载训练机...')}</div>
                 </section>
               </div>
               <section class="lane-card">
                 <h4>训练数据集版本</h4>
                 <p class="hint">快速识别导出的数据集会自动形成版本记录。可直接把某个版本放入训练集或验证集，不必手工回填资产 ID。</p>
+                <div class="section-toolbar compact">
+                  <input id="trainingDatasetSearch" placeholder="搜索 dataset_label / 标签 / source" />
+                  <select id="trainingDatasetPurposeFilter">
+                    <option value="">全部用途</option>
+                    <option value="training">${enumText('asset_purpose', 'training')}</option>
+                    <option value="validation">${enumText('asset_purpose', 'validation')}</option>
+                    <option value="finetune">${enumText('asset_purpose', 'finetune')}</option>
+                  </select>
+                  <label class="checkbox-row"><input id="trainingDatasetRecommendedOnly" type="checkbox" /> 仅看推荐</label>
+                  <div id="trainingDatasetMeta" class="hint"></div>
+                </div>
                 <div id="trainingDatasetVersionLibrary">${renderLoading('加载数据集版本...')}</div>
                 <div id="trainingDatasetCompareWrap" class="selection-summary">${renderEmpty('选择某个数据集版本后，可在这里查看与上一版的差异，或设为推荐训练集。')}</div>
                 <div id="trainingDatasetPreviewWrap" class="selection-summary">${renderEmpty('选择某个数据集版本后，可在这里查看样本摘要、标签和复核状态。')}</div>
@@ -1269,6 +1906,7 @@ function pageTraining(route, rawCtx) {
       const registerWorkerMsg = root.querySelector('#registerWorkerMsg');
       const createForm = root.querySelector('#trainingCreateForm');
       const createMsg = root.querySelector('#trainingCreateMsg');
+      const trainingRuntimeAlertWrap = root.querySelector('#trainingRuntimeAlertWrap');
       const trainingRunSummaryWrap = root.querySelector('#trainingRunSummaryWrap');
       const assetsDatalist = root.querySelector('#trainingAssetsDatalist');
       const modelsDatalist = root.querySelector('#trainingModelsDatalist');
@@ -1277,12 +1915,20 @@ function pageTraining(route, rawCtx) {
       const modelLibrary = root.querySelector('#trainingModelLibrary');
       const workerPool = root.querySelector('#trainingWorkerPool');
       const datasetVersionLibrary = root.querySelector('#trainingDatasetVersionLibrary');
+      const trainingModelSearch = root.querySelector('#trainingModelSearch');
+      const trainingModelMeta = root.querySelector('#trainingModelMeta');
+      const trainingWorkerSearch = root.querySelector('#trainingWorkerSearch');
+      const trainingWorkerMeta = root.querySelector('#trainingWorkerMeta');
+      const trainingDatasetSearch = root.querySelector('#trainingDatasetSearch');
+      const trainingDatasetPurposeFilter = root.querySelector('#trainingDatasetPurposeFilter');
+      const trainingDatasetRecommendedOnly = root.querySelector('#trainingDatasetRecommendedOnly');
+      const trainingDatasetMeta = root.querySelector('#trainingDatasetMeta');
       const datasetCompareWrap = root.querySelector('#trainingDatasetCompareWrap');
       const datasetPreviewWrap = root.querySelector('#trainingDatasetPreviewWrap');
       const selectionSummary = root.querySelector('#trainingSelectionSummary');
       const prefillTrainingAssetIds = localStorage.getItem(STORAGE_KEYS.prefillTrainingAssetIds);
       const prefillTrainingDatasetLabel = localStorage.getItem(STORAGE_KEYS.prefillTrainingDatasetLabel);
-      const prefillTrainingDatasetVersionId = localStorage.getItem(STORAGE_KEYS.prefillTrainingDatasetVersionId);
+      let prefillTrainingDatasetVersionId = localStorage.getItem(STORAGE_KEYS.prefillTrainingDatasetVersionId);
       const prefillTrainingTargetModelCode = localStorage.getItem(STORAGE_KEYS.prefillTrainingTargetModelCode);
       const assetIdsInput = createForm?.querySelector('input[name="asset_ids"]');
       const validationAssetIdsInput = createForm?.querySelector('input[name="validation_asset_ids"]');
@@ -1297,11 +1943,20 @@ function pageTraining(route, rawCtx) {
       let assistWorkers = [];
       let assistDatasetVersions = [];
       let activeDatasetCompare = null;
+      let activeDatasetCompareVersionId = '';
+      let datasetCompareFilters = defaultDatasetCompareFilters();
       let activeDatasetPreview = null;
       let datasetCompareBlobUrls = [];
       let datasetPreviewBlobUrls = [];
       let cachedTrainingJobs = [];
       let activeTrainingJobId = '';
+      const trainingLibraryFilters = {
+        modelQuery: '',
+        workerQuery: '',
+        datasetQuery: '',
+        datasetPurpose: '',
+        datasetRecommendedOnly: false,
+      };
 
       if (createForm && (prefillTrainingAssetIds || prefillTrainingDatasetVersionId)) {
         if (assetIdsInput && prefillTrainingAssetIds) assetIdsInput.value = prefillTrainingAssetIds;
@@ -1347,6 +2002,65 @@ function pageTraining(route, rawCtx) {
         });
       }
 
+      function renderTrainingRuntimeAlerts() {
+        if (!trainingRuntimeAlertWrap) return;
+        const criticalJobs = cachedTrainingJobs.filter((row) => row.alert_level === 'CRITICAL');
+        const warningJobs = cachedTrainingJobs.filter((row) => row.alert_level === 'WARNING');
+        const unhealthyWorkers = assistWorkers.filter((row) => row.status === 'UNHEALTHY');
+        if (!criticalJobs.length && !warningJobs.length && !unhealthyWorkers.length) {
+          trainingRuntimeAlertWrap.innerHTML = renderEmpty('当前没有训练超时或 Worker 心跳异常告警。');
+          return;
+        }
+        trainingRuntimeAlertWrap.innerHTML = `
+          <div class="alert-grid">
+            <article class="alert-card critical">
+              <span>CRITICAL 作业</span>
+              <strong>${esc(String(criticalJobs.length))}</strong>
+              <small>${esc(criticalJobs[0]?.alert_reason || '运行中超时或 Worker 已失联')}</small>
+            </article>
+            <article class="alert-card warning">
+              <span>WARNING 作业</span>
+              <strong>${esc(String(warningJobs.length))}</strong>
+              <small>${esc(warningJobs[0]?.alert_reason || '派发后长时间未开始')}</small>
+            </article>
+            <article class="alert-card">
+              <span>异常 Worker</span>
+              <strong>${esc(String(unhealthyWorkers.length))}</strong>
+              <small>${esc(unhealthyWorkers[0] ? `${unhealthyWorkers[0].worker_code} · ${unhealthyWorkers[0].alert_reason || '心跳超时'}` : '心跳正常')}</small>
+            </article>
+          </div>
+          ${
+            criticalJobs.length || warningJobs.length || unhealthyWorkers.length
+              ? `
+                  <div class="selection-summary">
+                    ${criticalJobs.slice(0, 2).map((row) => `<span>作业 ${esc(row.job_code)} · ${esc(row.alert_reason || row.error_message || '-')}</span>`).join('')}
+                    ${warningJobs.slice(0, 2).map((row) => `<span>作业 ${esc(row.job_code)} · ${esc(row.alert_reason || row.error_message || '-')}</span>`).join('')}
+                    ${unhealthyWorkers.slice(0, 2).map((row) => `<span>Worker ${esc(row.worker_code)} · ${esc(row.alert_reason || '心跳异常')}</span>`).join('')}
+                    ${canManageWorkers ? '<div class="row-actions"><button class="ghost" type="button" data-training-runtime-reconcile>立即刷新健康状态</button></div>' : ''}
+                  </div>
+                `
+              : ''
+          }
+        `;
+        trainingRuntimeAlertWrap.querySelector('[data-training-runtime-reconcile]')?.addEventListener('click', async (event) => {
+          const button = event.currentTarget;
+          button.disabled = true;
+          try {
+            const result = await ctx.post('/training/runtime/reconcile', { note: 'training_page_manual_reconcile' });
+            ctx.toast(`已刷新训练运行健康状态：异常Worker ${result.counts?.unhealthy_worker_count || 0}，超时作业 ${result.counts?.timed_out_job_count || 0}`);
+            await Promise.all([loadWorkers(), loadJobTable()]);
+          } catch (error) {
+            ctx.toast(error.message || '刷新健康状态失败', 'error');
+          } finally {
+            button.disabled = false;
+          }
+        });
+      }
+
+      function defaultDatasetCompareFilters() {
+        return { change_scope: 'all', label: '', review_status: '', changed_field: '', q: '' };
+      }
+
       function renderTrainingAssetRefList(title, refs) {
         return `
           <div class="training-run-ref-block">
@@ -1378,6 +2092,15 @@ function pageTraining(route, rawCtx) {
           return;
         }
         const output = job.output_summary || {};
+        const history = normalizeTrainingHistory(output.history);
+        const bestCheckpoint = normalizeTrainingCheckpoint(output.best_checkpoint);
+        const runtimeAlert = job.alert_level
+          ? {
+              level: job.alert_level,
+              reason: job.alert_reason || job.error_message || '训练运行存在异常',
+              action: job.recommended_action || 'retry_or_reassign',
+            }
+          : null;
         const trainRefs = buildTrainingAssetRefs(job.asset_ids || []);
         const validationRefs = buildTrainingAssetRefs(job.validation_asset_ids || []);
         const trainResources = Number(output.train_resource_count ?? output.train_samples ?? job.asset_count ?? 0);
@@ -1389,14 +2112,18 @@ function pageTraining(route, rawCtx) {
         const currentStage = output.stage || (job.status === 'SUCCEEDED' ? 'completed' : job.status === 'RUNNING' ? 'training' : '-');
         const candidateModel = job.candidate_model;
         const canCreateTask = hasPermission(ctx.state, 'task.create');
+        const historyEpochCount = Number(output.epochs ?? 0) || history.length || Number(job.spec?.epochs ?? 0) || 0;
         const metrics = [
           { label: '验证得分', value: formatMetricValue(output.val_score, { percent: true }), note: 'val_score' },
           { label: '验证准确率', value: formatMetricValue(output.val_accuracy, { percent: true }), note: 'val_accuracy' },
           { label: '训练准确率', value: formatMetricValue(output.train_accuracy, { percent: true }), note: 'train_accuracy' },
           { label: '最终损失', value: formatMetricValue(output.final_loss), note: 'final_loss' },
-          { label: '轮次', value: formatMetricValue(output.epochs ?? job.spec?.epochs), note: 'epochs' },
+          { label: '轮次', value: formatMetricValue(historyEpochCount), note: 'epochs' },
           { label: '学习率', value: formatMetricValue(output.learning_rate ?? job.spec?.learning_rate, { digits: 6 }), note: 'learning_rate' },
         ];
+        const historySummary = history.length
+          ? `已记录 ${history.length} 个 epoch，可直接判断收敛趋势和当前最佳 checkpoint。`
+          : '当前作业还没有回写 epoch 级历史指标；若使用外部 trainer，请确认 metrics_json 已输出 history。';
         trainingRunSummaryWrap.innerHTML = `
           <div class="training-run-summary">
             <section class="training-run-hero">
@@ -1444,6 +2171,17 @@ function pageTraining(route, rawCtx) {
               <div><span>artifact_sha256</span><strong class="mono">${esc(truncateMiddle(output.artifact_sha256, 10, 8))}</strong></div>
               <div><span>base_model_hash</span><strong class="mono">${esc(truncateMiddle(output.base_model_hash, 10, 8))}</strong></div>
             </div>
+            ${
+              runtimeAlert
+                ? `
+                    <section class="training-runtime-alert ${esc(String(runtimeAlert.level || '').toLowerCase())}">
+                      <strong>${esc(`运行告警 · ${runtimeAlert.level}`)}</strong>
+                      <span>${esc(runtimeAlert.reason)}</span>
+                      <span>${esc(`建议动作：${runtimeAlert.action}`)}</span>
+                    </section>
+                  `
+                : ''
+            }
             <section class="training-run-metrics">
               ${metrics.map((metric) => `
                 <article class="training-run-metric-card">
@@ -1452,6 +2190,46 @@ function pageTraining(route, rawCtx) {
                   <small>${esc(metric.note)}</small>
                 </article>
               `).join('')}
+            </section>
+            <section class="grid-two training-history-grid-wrap">
+              ${renderTrainingHistoryChart({
+                title: 'Loss Curve',
+                description: '按 epoch 查看 train / val loss，判断是否出现发散或过拟合。',
+                history,
+                lowerIsBetter: true,
+                lines: [
+                  { key: 'train_loss', label: 'train_loss', className: 'train-line' },
+                  { key: 'val_loss', label: 'val_loss', className: 'validation-line' },
+                ],
+              })}
+              ${renderTrainingHistoryChart({
+                title: 'Accuracy Curve',
+                description: '按 epoch 查看 train / val accuracy，适合快速判断收敛与泛化。',
+                history,
+                percent: true,
+                lines: [
+                  { key: 'train_accuracy', label: 'train_accuracy', className: 'train-line' },
+                  { key: 'val_accuracy', label: 'val_accuracy', className: 'validation-line' },
+                ],
+              })}
+            </section>
+            <section class="grid-two training-history-grid-wrap">
+              ${renderBestCheckpointCard(bestCheckpoint, history, trainer)}
+              <article class="training-checkpoint-card">
+                <div class="training-history-head">
+                  <div>
+                    <strong>训练历史摘要</strong>
+                    <p>${esc('把 epoch 级回写指标和下一步动作放在同一屏内，避免只看终态数字。')}</p>
+                  </div>
+                  <span class="badge">${esc(history.length ? '已回写' : '待回写')}</span>
+                </div>
+                <div class="training-checkpoint-summary">
+                  <span>${esc(historySummary)}</span>
+                  <span>${esc(`history_count=${output.history_count ?? history.length}`)}</span>
+                  <span>${esc(`当前阶段=${currentStage}`)}</span>
+                  <span>${esc(`训练器=${String(trainer)}`)}</span>
+                </div>
+              </article>
             </section>
             <section class="training-run-splits">
               <article class="training-run-split-card train">
@@ -1532,13 +2310,14 @@ function pageTraining(route, rawCtx) {
             <table class="table">
               <thead>
                 <tr>
-                  <th>job_code(作业编码)</th><th>status(状态)</th><th>kind(类型)</th><th>train/val(资产数)</th><th>base_model(基础模型)</th><th>candidate_model(候选模型)</th><th>worker(执行节点)</th><th>创建时间</th><th>操作</th>
+                  <th>job_code(作业编码)</th><th>alert(告警)</th><th>status(状态)</th><th>kind(类型)</th><th>train/val(资产数)</th><th>base_model(基础模型)</th><th>candidate_model(候选模型)</th><th>worker(执行节点)</th><th>创建时间</th><th>操作</th>
                 </tr>
               </thead>
               <tbody>
                 ${rows.map((row) => `
                   <tr class="${activeTrainingJobId === row.id ? 'active-row' : ''}">
                     <td class="mono">${esc(row.job_code)}</td>
+                    <td>${row.alert_level ? `<span class="badge">${esc(row.alert_level)}</span>` : '-'}</td>
                     <td>${esc(enumText('training_status', row.status))}</td>
                     <td>${esc(enumText('training_kind', row.training_kind))}</td>
                     <td>${esc(`${row.asset_count ?? 0}/${row.validation_asset_count ?? 0}`)}</td>
@@ -1626,9 +2405,11 @@ function pageTraining(route, rawCtx) {
           }
           renderTrainingJobTable(cachedTrainingJobs);
           renderTrainingRunSummary();
+          renderTrainingRuntimeAlerts();
         } catch (error) {
           jobsWrap.innerHTML = renderError(error.message);
           if (trainingRunSummaryWrap) trainingRunSummaryWrap.innerHTML = renderError(error.message);
+          renderTrainingRuntimeAlerts();
         }
       }
 
@@ -1642,16 +2423,18 @@ function pageTraining(route, rawCtx) {
             if (workerPool) workerPool.innerHTML = renderEmpty('当前没有可用于训练分配的机器');
             if (workerCodesDatalist) workerCodesDatalist.innerHTML = '';
             if (workerHostsDatalist) workerHostsDatalist.innerHTML = '';
+            renderTrainingRuntimeAlerts();
             return;
           }
           workersWrap.innerHTML = `
             <div class="table-wrap">
               <table class="table">
-                <thead><tr><th>worker_code(Worker 编码)</th><th>status(状态)</th><th>host(主机)</th><th>outstanding(待处理)</th><th>last_seen(最近心跳)</th><th>resources(资源)</th><th>操作</th></tr></thead>
+                <thead><tr><th>worker_code(Worker 编码)</th><th>alert(告警)</th><th>status(状态)</th><th>host(主机)</th><th>outstanding(待处理)</th><th>last_seen(最近心跳)</th><th>resources(资源)</th><th>操作</th></tr></thead>
                 <tbody>
                   ${rows.map((row) => `
                     <tr>
                       <td class="mono">${esc(row.worker_code)}</td>
+                      <td>${row.alert_level ? `<span class="badge">${esc(row.alert_level)}</span>` : '-'}</td>
                       <td>${esc(enumText('worker_status', row.status))}</td>
                       <td>${esc(row.host || '-')}</td>
                       <td>${esc(row.outstanding_jobs ?? 0)}</td>
@@ -1674,6 +2457,7 @@ function pageTraining(route, rawCtx) {
               .join('');
           }
           renderWorkerPool();
+          renderTrainingRuntimeAlerts();
           workersWrap.querySelectorAll('[data-pick-worker]').forEach((button) => {
             button.addEventListener('click', () => fillWorkerSelection(button.getAttribute('data-pick-worker') || ''));
           });
@@ -1681,10 +2465,12 @@ function pageTraining(route, rawCtx) {
           if (String(error.message || '').includes('403')) {
             workersWrap.innerHTML = renderEmpty('当前角色无 Worker 查看权限');
             if (workerPool) workerPool.innerHTML = renderEmpty('当前角色无训练机查看权限');
+            renderTrainingRuntimeAlerts();
             return;
           }
           workersWrap.innerHTML = renderError(error.message);
           if (workerPool) workerPool.innerHTML = renderError(error.message);
+          renderTrainingRuntimeAlerts();
         }
       }
 
@@ -1767,8 +2553,25 @@ function pageTraining(route, rawCtx) {
 
       function renderModelLibrary() {
         if (!modelLibrary) return;
-        const rows = assistModels.filter((row) => row.model_type === 'expert');
+        const q = String(trainingLibraryFilters.modelQuery || '').trim().toLowerCase();
+        const rows = assistModels
+          .filter((row) => row.model_type === 'expert')
+          .filter((row) => {
+            if (!q) return true;
+            const haystack = [
+              row.model_code,
+              row.version,
+              row.owner_tenant_name,
+              row.owner_tenant_code,
+              row.task_type,
+              row.plugin_name,
+            ]
+              .map((item) => String(item || '').toLowerCase())
+              .join(' ');
+            return haystack.includes(q);
+          });
         const currentModelId = String(baseModelInput?.value || '').trim();
+        if (trainingModelMeta) trainingModelMeta.textContent = `显示 ${rows.length} / ${assistModels.filter((row) => row.model_type === 'expert').length} 个算法`;
         if (!rows.length) {
           modelLibrary.innerHTML = renderEmpty('当前角色暂无可用供应商算法，请先由平台发布模型到当前租户');
           return;
@@ -1807,7 +2610,26 @@ function pageTraining(route, rawCtx) {
           workerPool.innerHTML = renderEmpty('当前没有训练机可供分配');
           return;
         }
-        const sorted = [...assistWorkers].sort((left, right) => {
+        const q = String(trainingLibraryFilters.workerQuery || '').trim().toLowerCase();
+        const filteredWorkers = [...assistWorkers].filter((row) => {
+          if (!q) return true;
+          const haystack = [
+            row.worker_code,
+            row.name,
+            row.host,
+            row.status,
+            row.alert_level,
+          ]
+            .map((item) => String(item || '').toLowerCase())
+            .join(' ');
+          return haystack.includes(q);
+        });
+        if (trainingWorkerMeta) trainingWorkerMeta.textContent = `显示 ${filteredWorkers.length} / ${assistWorkers.length} 台训练机`;
+        if (!filteredWorkers.length) {
+          workerPool.innerHTML = renderEmpty('当前筛选条件下没有训练机');
+          return;
+        }
+        const sorted = [...filteredWorkers].sort((left, right) => {
           if (left.status === right.status) return String(left.worker_code).localeCompare(String(right.worker_code));
           if (left.status === 'ACTIVE') return -1;
           if (right.status === 'ACTIVE') return 1;
@@ -1828,6 +2650,7 @@ function pageTraining(route, rawCtx) {
                     <span>host / IP</span><strong class="mono">${esc(row.host || '-')}</strong>
                     <span>待处理</span><strong>${esc(row.outstanding_jobs ?? 0)}</strong>
                     <span>GPU</span><strong>${esc(`${(row.resources || {}).gpu_count || 0} / ${(row.resources || {}).gpu_mem_mb || 0} MB`)}</strong>
+                    <span>告警</span><strong>${esc(row.alert_level || '-')}</strong>
                   </div>
                   <div class="row-actions">
                     <button class="primary" type="button" data-pick-worker-card="${esc(row.worker_code)}">选这台机器</button>
@@ -1852,9 +2675,32 @@ function pageTraining(route, rawCtx) {
         }
         const trainAssetIds = splitCsv(assetIdsInput?.value || '');
         const validationAssetIds = splitCsv(validationAssetIdsInput?.value || '');
+        const q = String(trainingLibraryFilters.datasetQuery || '').trim().toLowerCase();
+        const filteredVersions = assistDatasetVersions.filter((row) => {
+          if (trainingLibraryFilters.datasetPurpose && row.asset_purpose !== trainingLibraryFilters.datasetPurpose) return false;
+          if (trainingLibraryFilters.datasetRecommendedOnly && !row.recommended) return false;
+          if (!q) return true;
+          const summary = row.summary || {};
+          const meta = row.asset?.meta || {};
+          const haystack = [
+            row.dataset_label,
+            row.version,
+            row.source_type,
+            row.asset_purpose,
+            ...(summary.label_vocab || meta.label_vocab || []),
+          ]
+            .map((item) => String(item || '').toLowerCase())
+            .join(' ');
+          return haystack.includes(q);
+        });
+        if (trainingDatasetMeta) trainingDatasetMeta.textContent = `显示 ${filteredVersions.length} / ${assistDatasetVersions.length} 个版本`;
+        if (!filteredVersions.length) {
+          datasetVersionLibrary.innerHTML = renderEmpty('当前筛选条件下没有数据集版本');
+          return;
+        }
         datasetVersionLibrary.innerHTML = `
           <div class="selection-grid">
-            ${assistDatasetVersions.map((row) => {
+            ${filteredVersions.map((row) => {
               const summary = row.summary || {};
               const meta = row.asset?.meta || {};
               const selected = trainAssetIds.includes(row.asset_id) || validationAssetIds.includes(row.asset_id) || row.id === prefillTrainingDatasetVersionId;
@@ -1876,9 +2722,16 @@ function pageTraining(route, rawCtx) {
                   <div class="row-actions">
                     <button class="primary" type="button" data-pick-dataset-training="${esc(row.asset_id)}" data-dataset-version-id="${esc(row.id)}">加入训练集</button>
                     <button class="ghost" type="button" data-pick-dataset-validation="${esc(row.asset_id)}" data-dataset-version-id="${esc(row.id)}">加入验证集</button>
-                    <button class="ghost" type="button" data-recommend-dataset-version="${esc(row.id)}">设为推荐</button>
-                    <button class="ghost" type="button" data-compare-dataset-version="${esc(row.id)}">对比上一版</button>
                     <button class="ghost" type="button" data-preview-dataset-version="${esc(row.id)}">查看内容</button>
+                    <details class="inline-details">
+                      <summary>更多操作</summary>
+                      <div class="details-panel action-panel">
+                        <button class="ghost" type="button" data-recommend-dataset-version="${esc(row.id)}" data-recommend-purpose="training">推荐训练集</button>
+                        <button class="ghost" type="button" data-recommend-dataset-version="${esc(row.id)}" data-recommend-purpose="validation">推荐验证集</button>
+                        <button class="ghost" type="button" data-compare-dataset-version="${esc(row.id)}">对比上一版</button>
+                        <button class="ghost" type="button" data-rollback-dataset-version="${esc(row.id)}">回滚为新版本</button>
+                      </div>
+                    </details>
                   </div>
                 </article>
               `;
@@ -1894,10 +2747,11 @@ function pageTraining(route, rawCtx) {
         datasetVersionLibrary.querySelectorAll('[data-recommend-dataset-version]').forEach((button) => {
           button.addEventListener('click', async () => {
             const versionId = button.getAttribute('data-recommend-dataset-version') || '';
+            const purpose = button.getAttribute('data-recommend-purpose') || 'training';
             button.disabled = true;
             try {
-              await ctx.post(`/assets/dataset-versions/${versionId}/recommend`, { asset_purpose: 'training', note: 'training_page_recommended' });
-              ctx.toast('已标记为推荐训练集');
+              await ctx.post(`/assets/dataset-versions/${versionId}/recommend`, { asset_purpose: purpose, note: `training_page_recommended_${purpose}` });
+              ctx.toast(`已标记为推荐${purpose === 'validation' ? '验证集' : '训练集'}`);
               await loadFormAssistData();
             } catch (error) {
               ctx.toast(error.message || '推荐失败', 'error');
@@ -1909,6 +2763,7 @@ function pageTraining(route, rawCtx) {
         datasetVersionLibrary.querySelectorAll('[data-compare-dataset-version]').forEach((button) => {
           button.addEventListener('click', async () => {
             const versionId = button.getAttribute('data-compare-dataset-version') || '';
+            datasetCompareFilters = defaultDatasetCompareFilters();
             await compareWithPreviousDatasetVersion(versionId);
           });
         });
@@ -1918,6 +2773,30 @@ function pageTraining(route, rawCtx) {
             await previewDatasetVersion(versionId);
           });
         });
+        datasetVersionLibrary.querySelectorAll('[data-rollback-dataset-version]').forEach((button) => {
+          button.addEventListener('click', async () => {
+            const versionId = button.getAttribute('data-rollback-dataset-version') || '';
+            const note = window.prompt('回滚说明（可空）', 'training_page_rollback');
+            button.disabled = true;
+            try {
+              const result = await ctx.post(`/assets/dataset-versions/${versionId}/rollback`, { asset_purpose: 'training', note: note || null });
+              const newVersionId = result.dataset_version?.id || '';
+              if (newVersionId) {
+                prefillTrainingDatasetVersionId = newVersionId;
+              }
+              ctx.toast(`已生成回滚版本：${result.dataset_version?.version || '-'}`);
+              await loadFormAssistData();
+              if (newVersionId) {
+                await compareWithPreviousDatasetVersion(newVersionId);
+                await previewDatasetVersion(newVersionId);
+              }
+            } catch (error) {
+              ctx.toast(error.message || '回滚失败', 'error');
+            } finally {
+              button.disabled = false;
+            }
+          });
+        });
         renderDatasetCompare();
         renderDatasetPreview();
       }
@@ -1925,7 +2804,7 @@ function pageTraining(route, rawCtx) {
       function renderDatasetCompare() {
         if (!datasetCompareWrap) return;
         if (!activeDatasetCompare) {
-          datasetCompareWrap.innerHTML = renderEmpty('选择某个数据集版本后，可在这里查看与上一版的差异，或设为推荐训练集。');
+          datasetCompareWrap.innerHTML = renderEmpty('选择某个数据集版本后，可在这里查看与上一版的差异、筛选变更样本，或回滚为新版本。');
           return;
         }
         const diff = activeDatasetCompare.diff || {};
@@ -1976,6 +2855,20 @@ function pageTraining(route, rawCtx) {
         datasetCompareWrap.innerHTML = `
           <strong>版本对比</strong>
           <span>${esc(`${activeDatasetCompare.left?.dataset_label || '-'}:${activeDatasetCompare.left?.version || '-'} -> ${activeDatasetCompare.right?.dataset_label || '-'}:${activeDatasetCompare.right?.version || '-'}`)}</span>
+          <form id="datasetCompareFilterForm" class="inline-form dataset-compare-toolbar">
+            <select name="change_scope">
+              <option value="all" ${datasetCompareFilters.change_scope === 'all' ? 'selected' : ''}>全部变化</option>
+              <option value="added" ${datasetCompareFilters.change_scope === 'added' ? 'selected' : ''}>仅新增</option>
+              <option value="removed" ${datasetCompareFilters.change_scope === 'removed' ? 'selected' : ''}>仅移除</option>
+              <option value="changed" ${datasetCompareFilters.change_scope === 'changed' ? 'selected' : ''}>仅变更</option>
+            </select>
+            <input name="label" placeholder="label 筛选" value="${esc(datasetCompareFilters.label || '')}" />
+            <input name="review_status" placeholder="review 状态" value="${esc(datasetCompareFilters.review_status || '')}" />
+            <input name="changed_field" placeholder="changed_field" value="${esc(datasetCompareFilters.changed_field || '')}" />
+            <input name="q" placeholder="sample / file / prompt" value="${esc(datasetCompareFilters.q || '')}" />
+            <button class="ghost" type="submit">筛选差异</button>
+            <button class="ghost" type="button" data-dataset-compare-reset>重置</button>
+          </form>
           <div class="keyvals">
             <div><span>样本变化</span><strong>${esc(String(diff.task_count_delta ?? 0))}</strong></div>
             <div><span>资源变化</span><strong>${esc(String(diff.resource_count_delta ?? 0))}</strong></div>
@@ -1985,6 +2878,7 @@ function pageTraining(route, rawCtx) {
             <div><span>移除样本</span><strong>${esc(String(diff.sample_removed_count ?? 0))}</strong></div>
             <div><span>变更样本</span><strong>${esc(String(diff.sample_changed_count ?? 0))}</strong></div>
             <div><span>样本净变化</span><strong>${esc(String(diff.sample_task_count_delta ?? 0))}</strong></div>
+            <div><span>筛选后样本</span><strong>${esc(String(diff.filtered_sample_count ?? 0))}</strong></div>
           </div>
           <span>新增标签：${esc((diff.labels_added || []).join(', ') || '-')}</span>
           <span>移除标签：${esc((diff.labels_removed || []).join(', ') || '-')}</span>
@@ -1992,6 +2886,22 @@ function pageTraining(route, rawCtx) {
           ${renderSampleRows('移除样本', diff.removed_samples || [], 'removed')}
           ${renderSampleRows('变更样本', diff.changed_samples || [], 'changed')}
         `;
+        datasetCompareWrap.querySelector('#datasetCompareFilterForm')?.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          const fd = new FormData(event.currentTarget);
+          datasetCompareFilters = {
+            change_scope: String(fd.get('change_scope') || 'all').trim() || 'all',
+            label: String(fd.get('label') || '').trim(),
+            review_status: String(fd.get('review_status') || '').trim(),
+            changed_field: String(fd.get('changed_field') || '').trim(),
+            q: String(fd.get('q') || '').trim(),
+          };
+          await compareWithPreviousDatasetVersion(activeDatasetCompareVersionId);
+        });
+        datasetCompareWrap.querySelector('[data-dataset-compare-reset]')?.addEventListener('click', async () => {
+          datasetCompareFilters = defaultDatasetCompareFilters();
+          await compareWithPreviousDatasetVersion(activeDatasetCompareVersionId);
+        });
       }
 
       function renderDatasetPreview() {
@@ -2106,6 +3016,7 @@ function pageTraining(route, rawCtx) {
       }
 
       async function compareWithPreviousDatasetVersion(versionId) {
+        activeDatasetCompareVersionId = versionId;
         const current = assistDatasetVersions.find((row) => row.id === versionId);
         if (!current) {
           revokeDatasetCompareBlobUrls();
@@ -2129,6 +3040,14 @@ function pageTraining(route, rawCtx) {
               reviewed_task_count_delta: 0,
               labels_added: [],
               labels_removed: [],
+              sample_added_count: 0,
+              sample_removed_count: 0,
+              sample_changed_count: 0,
+              sample_task_count_delta: 0,
+              filtered_sample_count: 0,
+              added_samples: [],
+              removed_samples: [],
+              changed_samples: [],
             },
           };
           renderDatasetCompare();
@@ -2136,7 +3055,7 @@ function pageTraining(route, rawCtx) {
         }
         datasetCompareWrap.innerHTML = renderLoading('加载版本对比...');
         try {
-          const payload = await ctx.get(`/assets/dataset-versions/compare${toQuery({ left_id: previous.id, right_id: current.id, sample_limit: 6 })}`);
+          const payload = await ctx.get(`/assets/dataset-versions/compare${toQuery({ left_id: previous.id, right_id: current.id, sample_limit: 6, ...datasetCompareFilters })}`);
           activeDatasetCompare = await enrichDatasetComparePayload(payload);
           renderDatasetCompare();
         } catch (error) {
@@ -2302,6 +3221,26 @@ function pageTraining(route, rawCtx) {
       });
       specInput?.addEventListener('blur', () => {
         if (!String(specInput.value || '').trim()) specInput.value = '{}';
+      });
+      trainingModelSearch?.addEventListener('input', () => {
+        trainingLibraryFilters.modelQuery = trainingModelSearch.value || '';
+        renderModelLibrary();
+      });
+      trainingWorkerSearch?.addEventListener('input', () => {
+        trainingLibraryFilters.workerQuery = trainingWorkerSearch.value || '';
+        renderWorkerPool();
+      });
+      trainingDatasetSearch?.addEventListener('input', () => {
+        trainingLibraryFilters.datasetQuery = trainingDatasetSearch.value || '';
+        renderDatasetVersionLibrary();
+      });
+      trainingDatasetPurposeFilter?.addEventListener('change', () => {
+        trainingLibraryFilters.datasetPurpose = trainingDatasetPurposeFilter.value || '';
+        renderDatasetVersionLibrary();
+      });
+      trainingDatasetRecommendedOnly?.addEventListener('change', () => {
+        trainingLibraryFilters.datasetRecommendedOnly = trainingDatasetRecommendedOnly.checked;
+        renderDatasetVersionLibrary();
       });
 
       await Promise.all([loadJobTable(), loadWorkers(), loadFormAssistData()]);
@@ -2472,14 +3411,19 @@ function pageTasks(route, rawCtx) {
           <div class="hint">支持单图/短视频，也支持一次上传多张图片或多个短视频；如果资产已经在平台内，也可以直接填写 1-n 个 asset_id。</div>
           <label>asset_id(已有资产ID，可选，支持 1-n)</label>
           <input name="asset_id" id="quickDetectAssetInput" list="taskAssetsDatalist" placeholder="asset-id-1, asset-id-2" />
-          <label>object_prompt(要识别什么)</label>
-          <input name="object_prompt" id="quickDetectPrompt" placeholder="例如 car / person / train / bus" required />
+          <label>object_prompt / intent_text(要识别什么)</label>
+          <input name="object_prompt" id="quickDetectPrompt" placeholder="例如 车号 / car / person / train / bus" required />
           <div class="chip-row" id="quickDetectPromptChips">
             ${QUICK_DETECT_PROMPTS.map((item) => `<button type="button" class="ghost chip-btn" data-quick-prompt="${esc(item)}">${esc(item)}</button>`).join('')}
           </div>
+          <div id="quickDetectIntentOptions" class="quick-intent-grid"></div>
+          <div class="hint">系统会先按你的描述归一化意图并选模。输入“车号 / 车厢号 / 车皮号 / 编号”都会优先走车号 OCR，并直接输出文本。</div>
           <label>device_code(设备编码)</label>
           <input name="device_code" id="quickDetectDeviceCode" value="edge-01" />
-          <button class="primary" type="submit">开始快速识别</button>
+          <div class="row-actions">
+            <button class="ghost" type="button" id="quickDetectPreflightBtn">先扫一遍给建议</button>
+            <button class="primary" type="submit">开始快速识别</button>
+          </div>
           <div id="quickDetectMsg" class="hint"></div>
           <div id="quickDetectPreview" class="quick-detect-preview state empty">选择图片后会在这里显示预览；如果选择视频或已有资产，会显示摘要信息。</div>
         </form>
@@ -2531,7 +3475,9 @@ function pageTasks(route, rawCtx) {
       const quickDetectFile = root.querySelector('#quickDetectFile');
       const quickDetectAssetInput = root.querySelector('#quickDetectAssetInput');
       const quickDetectPrompt = root.querySelector('#quickDetectPrompt');
+      const quickDetectIntentOptions = root.querySelector('#quickDetectIntentOptions');
       const quickDetectDeviceCode = root.querySelector('#quickDetectDeviceCode');
+      const quickDetectPreflightBtn = root.querySelector('#quickDetectPreflightBtn');
       const quickDetectMsg = root.querySelector('#quickDetectMsg');
       const quickDetectPreview = root.querySelector('#quickDetectPreview');
       const quickDetectResult = root.querySelector('#quickDetectResult');
@@ -2545,8 +3491,10 @@ function pageTasks(route, rawCtx) {
       let quickPreviewUrl = '';
       let quickResultScreenshotUrls = [];
       let quickAssetPreviewUrls = [];
+      let quickPreflightPreviewUrls = [];
       let quickBatchTaskIds = [];
       let quickDatasetExport = null;
+      let quickPreflightOutcomes = [];
       let assistAssets = [];
 
       function revokeQuickUrls() {
@@ -2561,6 +3509,10 @@ function pageTasks(route, rawCtx) {
         if (quickAssetPreviewUrls.length) {
           quickAssetPreviewUrls.forEach((item) => URL.revokeObjectURL(item));
           quickAssetPreviewUrls = [];
+        }
+        if (quickPreflightPreviewUrls.length) {
+          quickPreflightPreviewUrls.forEach((item) => URL.revokeObjectURL(item));
+          quickPreflightPreviewUrls = [];
         }
       }
 
@@ -2608,6 +3560,251 @@ function pageTasks(route, rawCtx) {
         `;
       }
 
+      function renderQuickIntentOptions() {
+        if (!quickDetectIntentOptions) return;
+        const prompt = String(quickDetectPrompt?.value || '').trim();
+        const activeTaskType = inferQuickDetectTaskType(prompt);
+        const options = quickIntentOptions(prompt);
+        quickDetectIntentOptions.innerHTML = options.map((option) => `
+          <button
+            type="button"
+            class="quick-intent-card ${activeTaskType === option.taskType ? 'active' : ''}"
+            data-quick-intent-prompt="${esc(option.prompt)}"
+            data-quick-intent-task="${esc(option.taskType)}"
+            title="${esc(option.description)}"
+          >
+            <strong>${esc(option.title)}</strong>
+            <span>${esc(option.description)}</span>
+          </button>
+        `).join('');
+        quickDetectIntentOptions.querySelectorAll('[data-quick-intent-prompt]').forEach((button) => {
+          button.addEventListener('click', () => {
+            if (quickDetectPrompt) quickDetectPrompt.value = button.getAttribute('data-quick-intent-prompt') || '';
+            renderQuickIntentOptions();
+          });
+        });
+      }
+
+      function currentQuickWorkItems() {
+        const prompt = String(quickDetectPrompt?.value || '').trim();
+        const deviceCode = String(quickDetectDeviceCode?.value || 'edge-01').trim() || 'edge-01';
+        const existingAssetIds = splitCsv(quickDetectAssetInput?.value || '');
+        const files = Array.from(quickDetectFile?.files || []);
+        return {
+          prompt,
+          deviceCode,
+          existingAssetIds,
+          files,
+          items: [
+            ...files.map((file) => ({ file, existingAssetId: '', prompt, deviceCode })),
+            ...existingAssetIds.map((assetId) => ({ file: null, existingAssetId: assetId, prompt, deviceCode })),
+          ],
+        };
+      }
+
+      function selectedQuickPreflightCandidate(item) {
+        if (!item) return null;
+        const selectedTaskId = String(item.selectedCandidate?.task_id || '').trim();
+        if (selectedTaskId) {
+          const matched = (item.candidates || []).find((candidate) => String(candidate?.task_id || '').trim() === selectedTaskId);
+          if (matched) return matched;
+        }
+        return item.selectedCandidate || item.candidates?.[0] || null;
+      }
+
+      async function hydrateQuickPreflightOutcome(outcome) {
+        if (!outcome?.candidates?.length) return outcome;
+        const candidates = await Promise.all((outcome.candidates || []).map(async (candidate) => {
+          const previewResultId = String(candidate?.preview_result_id || '').trim();
+          if (!previewResultId) return candidate;
+          try {
+            const previewUrl = await fetchAuthorizedBlobUrl(`/results/${previewResultId}/screenshot`, ctx.token);
+            if (previewUrl) quickPreflightPreviewUrls.push(previewUrl);
+            return { ...candidate, previewUrl };
+          } catch {
+            return { ...candidate, previewUrl: '' };
+          }
+        }));
+        const selectedCandidate = selectedQuickPreflightCandidate({ ...outcome, candidates });
+        return {
+          ...outcome,
+          candidates,
+          selectedCandidate,
+        };
+      }
+
+      function renderQuickPreflightOutcomes(outcomes) {
+        quickPreflightOutcomes = outcomes;
+        quickDetectResult.innerHTML = `
+          <div class="quick-detect-result">
+            <div class="quick-detect-recommend">预检已经先扫过图片/视频，并生成了候选任务类型与目标标签。先选一个建议，再继续正式识别。</div>
+            <div class="row-actions">
+              <button class="primary" type="button" id="quickPreflightRunAll">全部按首选建议继续</button>
+            </div>
+            <div class="quick-detect-batch-list">
+              ${outcomes.map((item, outcomeIndex) => `
+                <article class="quick-detect-batch-card">
+                  ${(() => {
+                    const selectedCandidate = selectedQuickPreflightCandidate(item);
+                    const selectedCandidateTaskId = String(selectedCandidate?.task_id || '').trim();
+                    return `
+                  <div class="quick-detect-batch-head">
+                    <strong>${esc(item.uploadedAsset?.file_name || item.assetId || `item-${outcomeIndex + 1}`)}</strong>
+                    <span class="badge">${esc(String(item.completedOutcome ? '已完成识别' : item.preflight?.timed_out ? '预检超时' : '预检完成'))}</span>
+                  </div>
+                  <div class="keyvals">
+                    <div><span>asset_id</span><strong class="mono">${esc(item.assetId || '-')}</strong></div>
+                    <div><span>候选数</span><strong>${esc(String(item.candidates.length))}</strong></div>
+                    <div><span>当前建议</span><strong>${esc(enumText('task_type', selectedCandidate?.task_type || '-'))}</strong></div>
+                    <div><span>提示词</span><strong>${esc(selectedCandidate?.recommended_prompt || item.prompt || '-')}</strong></div>
+                  </div>
+                  ${selectedCandidate?.recognized_texts?.length ? `<div class="quick-detect-text-panel"><strong>预检文本</strong><div class="quick-detect-texts">${selectedCandidate.recognized_texts.map((text) => `<span class="badge">${esc(text)}</span>`).join('')}</div></div>` : ''}
+                  <div class="quick-preflight-grid">
+                    ${item.candidates.map((candidate, candidateIndex) => `
+                      <article
+                        class="quick-preflight-card ${selectedCandidateTaskId === String(candidate.task_id || '') ? 'active' : ''} ${item.completedOutcome ? 'disabled' : ''}"
+                        data-preflight-select="${outcomeIndex}"
+                        data-preflight-candidate="${candidateIndex}"
+                      >
+                        ${candidate.previewUrl ? `<div class="quick-preflight-card-preview"><img src="${candidate.previewUrl}" alt="${esc(candidate.title || enumText('task_type', candidate.task_type))} 预检截图" /></div>` : ''}
+                        <strong>${esc(candidate.title || enumText('task_type', candidate.task_type))}</strong>
+                        <span>${esc(candidate.summary || '-')}</span>
+                        <span>${esc(enumText('task_type', candidate.task_type))}</span>
+                        <span>${esc(candidate.matched_labels?.join(', ') || candidate.recognized_texts?.join(', ') || candidate.recommended_prompt || '-')}</span>
+                        <div class="quick-preflight-card-actions">
+                          <button
+                            class="ghost"
+                            type="button"
+                            data-preflight-pick="${outcomeIndex}"
+                            data-preflight-candidate="${candidateIndex}"
+                            ${item.completedOutcome ? 'disabled' : ''}
+                          >
+                            ${selectedCandidateTaskId === String(candidate.task_id || '') ? '当前首选' : '设为首选'}
+                          </button>
+                          <button
+                            class="primary"
+                            type="button"
+                            data-preflight-run="${outcomeIndex}"
+                            data-preflight-candidate="${candidateIndex}"
+                            ${item.completedOutcome ? 'disabled' : ''}
+                          >
+                            按此建议继续
+                          </button>
+                        </div>
+                      </article>
+                    `).join('')}
+                  </div>
+                  `;
+                  })()}
+                </article>
+              `).join('')}
+            </div>
+          </div>
+        `;
+        root.querySelectorAll('[data-preflight-select]').forEach((card) => {
+          card.addEventListener('click', (event) => {
+            if (event.target?.closest?.('button')) return;
+            const outcomeIndex = Number(card.getAttribute('data-preflight-select'));
+            const candidateIndex = Number(card.getAttribute('data-preflight-candidate'));
+            const outcome = quickPreflightOutcomes[outcomeIndex];
+            const candidate = outcome?.candidates?.[candidateIndex];
+            if (!outcome || !candidate || outcome.completedOutcome) return;
+            const merged = [...quickPreflightOutcomes];
+            merged[outcomeIndex] = { ...outcome, selectedCandidate: candidate };
+            renderQuickPreflightOutcomes(merged);
+          });
+        });
+        root.querySelectorAll('[data-preflight-pick]').forEach((button) => {
+          button.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const outcomeIndex = Number(button.getAttribute('data-preflight-pick'));
+            const candidateIndex = Number(button.getAttribute('data-preflight-candidate'));
+            const outcome = quickPreflightOutcomes[outcomeIndex];
+            const candidate = outcome?.candidates?.[candidateIndex];
+            if (!outcome || !candidate) return;
+            const merged = [...quickPreflightOutcomes];
+            merged[outcomeIndex] = { ...outcome, selectedCandidate: candidate };
+            renderQuickPreflightOutcomes(merged);
+          });
+        });
+        root.querySelectorAll('[data-preflight-run]').forEach((button) => {
+          button.addEventListener('click', async () => {
+            const outcomeIndex = Number(button.getAttribute('data-preflight-run'));
+            const candidateIndex = Number(button.getAttribute('data-preflight-candidate'));
+            const outcome = quickPreflightOutcomes[outcomeIndex];
+            const candidate = outcome?.candidates?.[candidateIndex];
+            if (!outcome || !candidate) return;
+            button.disabled = true;
+            quickDetectMsg.textContent = '';
+            try {
+              const runOutcome = await runQuickDetectItem({
+                file: null,
+                existingAssetId: outcome.assetId,
+                prompt: candidate.recommended_prompt || outcome.prompt,
+                deviceCode: outcome.deviceCode,
+                index: outcomeIndex,
+                total: quickPreflightOutcomes.length,
+                uploadedAsset: outcome.uploadedAsset,
+                forcedTaskType: candidate.task_type,
+              });
+              const merged = [...quickPreflightOutcomes];
+              merged[outcomeIndex] = { ...outcome, completedOutcome: runOutcome };
+              const finished = merged.filter((item) => item?.completedOutcome?.task?.id);
+              if (finished.length === merged.length) {
+                renderQuickDetectBatchOutcome(merged.map((item) => item.completedOutcome));
+                quickDetectMsg.textContent = `快速识别完成：${finished.length} 条`;
+              } else {
+                quickPreflightOutcomes = merged;
+                quickDetectMsg.textContent = `已完成 ${finished.length}/${merged.length} 条，可继续选择剩余建议`;
+                renderQuickPreflightOutcomes(merged);
+              }
+            } catch (error) {
+              quickDetectMsg.textContent = error.message || '快速识别失败';
+              ctx.toast(error.message || '快速识别失败', 'error');
+            } finally {
+              button.disabled = false;
+            }
+          });
+        });
+        root.querySelector('#quickPreflightRunAll')?.addEventListener('click', async () => {
+          const button = root.querySelector('#quickPreflightRunAll');
+          button.disabled = true;
+          quickDetectMsg.textContent = '';
+          try {
+            const finished = [];
+            for (let index = 0; index < quickPreflightOutcomes.length; index += 1) {
+              const outcome = quickPreflightOutcomes[index];
+              if (outcome?.completedOutcome?.task?.id) {
+                finished.push(outcome.completedOutcome);
+                continue;
+              }
+              const candidate = selectedQuickPreflightCandidate(outcome);
+              if (!candidate) continue;
+              finished.push(await runQuickDetectItem({
+                file: null,
+                existingAssetId: outcome.assetId,
+                prompt: candidate.recommended_prompt || outcome.prompt,
+                deviceCode: outcome.deviceCode,
+                index,
+                total: quickPreflightOutcomes.length,
+                uploadedAsset: outcome.uploadedAsset,
+                forcedTaskType: candidate.task_type,
+              }));
+            }
+            renderQuickDetectBatchOutcome(finished);
+            quickDetectMsg.textContent = `快速识别完成：${finished.length} 条`;
+            ctx.toast('快速识别完成');
+            await Promise.all([loadTasks(), loadAssistData()]);
+          } catch (error) {
+            quickDetectMsg.textContent = error.message || '快速识别失败';
+            quickDetectResult.innerHTML = renderError(error.message || '快速识别失败');
+          } finally {
+            button.disabled = false;
+          }
+        });
+      }
+
       const prefillAsset = localStorage.getItem(STORAGE_KEYS.prefillAssetId);
       if (prefillAsset) {
         const assetInput = root.querySelector('#taskAssetInput');
@@ -2620,6 +3817,7 @@ function pageTasks(route, rawCtx) {
         localStorage.removeItem(STORAGE_KEYS.quickDetectAssetId);
       }
       renderQuickPreview();
+      renderQuickIntentOptions();
 
       async function loadAssistData() {
         try {
@@ -2666,9 +3864,19 @@ function pageTasks(route, rawCtx) {
         }));
         const matchedLabels = [...new Set(editablePredictions.map((item) => String(item.label || '').trim()).filter(Boolean))].sort();
         const resultJson = cloneJson(outcome.focus?.result_json || {}) || {};
+        const recognizedTexts = collectRecognizedTexts(serializedPredictions, resultJson.summary || {});
         resultJson.predictions = serializedPredictions;
         resultJson.object_count = editablePredictions.length;
         resultJson.matched_labels = matchedLabels;
+        if ((resultJson.summary?.task_type || resultJson.task_type || outcome.taskType) === 'car_number_ocr') {
+          resultJson.summary = {
+            ...(cloneJson(resultJson.summary || {}) || {}),
+            task_type: 'car_number_ocr',
+            car_number: recognizedTexts[0] || null,
+            confidence: serializedPredictions[0]?.score ?? resultJson.summary?.confidence ?? null,
+            bbox: serializedPredictions[0]?.bbox ?? resultJson.summary?.bbox ?? null,
+          };
+        }
         if (dirty) {
           resultJson.review_status = 'pending_review';
           resultJson.manual_review = {
@@ -2692,10 +3900,12 @@ function pageTasks(route, rawCtx) {
         }
         return {
           label: String(next.label || '').trim() || 'object',
+          text: String(next.text || '').trim() || null,
           score: Number.isFinite(Number(next.score)) ? Number(Number(next.score).toFixed(4)) : 1,
           bbox,
           attributes: {
             ...(cloneJson(next.attributes || {}) || {}),
+            ...(String(next.text || '').trim() ? { text: String(next.text || '').trim() } : {}),
             review_source: next.source || 'manual',
           },
         };
@@ -2727,6 +3937,7 @@ function pageTasks(route, rawCtx) {
             const width = ((x2 - x1) / outcome.previewWidth) * 100;
             const height = ((y2 - y1) / outcome.previewHeight) * 100;
             const score = Number.isFinite(Number(prediction.score)) ? Number(prediction.score).toFixed(2) : '1.00';
+            const text = extractPredictionText(prediction);
             return `
               <div
                 class="quick-review-box ${prediction.source === 'manual' ? 'manual' : ''} ${prediction.source === 'draft' ? 'draft' : ''} ${prediction._id === outcome.activePredictionId ? 'selected' : ''}"
@@ -2735,7 +3946,7 @@ function pageTasks(route, rawCtx) {
                 data-review-index="${esc(String(outcome._index ?? 0))}"
                 data-review-pred="${esc(prediction._id)}"
               >
-                <span>${esc(`${prediction.label} ${score}`)}</span>
+                <span>${esc(text ? `${prediction.label}:${text} ${score}` : `${prediction.label} ${score}`)}</span>
                 ${
                   prediction.source !== 'draft'
                     ? `<button class="quick-review-handle" type="button" data-review-handle="${esc(prediction._id)}" data-review-index="${esc(String(outcome._index ?? 0))}" data-review-pred="${esc(prediction._id)}" aria-label="resize box"></button>`
@@ -2803,7 +4014,7 @@ function pageTasks(route, rawCtx) {
               draftBox.style.height = `${(height / rect.height) * 100}%`;
             };
             renderDraftBox(start);
-            outcome.draftPrediction = makeReviewPrediction({ label: outcome.prompt || 'object', score: 1, bbox: [0, 0, 1, 1], source: 'draft' }, outcome.prompt);
+            outcome.draftPrediction = makeReviewPrediction({ label: outcome.prompt || 'object', text: '', score: 1, bbox: [0, 0, 1, 1], source: 'draft' }, outcome.prompt);
             const onMove = (moveEvent) => {
               const point = clampPoint(moveEvent.clientX, moveEvent.clientY);
               renderDraftBox(point);
@@ -2832,6 +4043,7 @@ function pageTasks(route, rawCtx) {
                   makeReviewPrediction(
                     {
                       label: outcome.prompt || 'object',
+                      text: '',
                       score: 1,
                       bbox,
                       attributes: { review_source: 'manual' },
@@ -2947,6 +4159,9 @@ function pageTasks(route, rawCtx) {
         outcome.rows = (outcome.rows || []).map((row) => (row.id === updatedResult.id ? updatedResult : row));
         outcome.predictions = currentPredictions.map((prediction) => makeReviewPrediction(prediction, outcome.prompt));
         outcome.autoPredictions = autoPredictions.map((prediction) => makeReviewPrediction(prediction, outcome.prompt));
+        outcome.summary = cloneJson(resultJson.summary || {}) || outcome.summary || {};
+        outcome.taskType = String(resultJson.task_type || outcome.summary?.task_type || outcome.taskType || outcome.task?.task_type || 'object_detect');
+        outcome.recognizedTexts = collectRecognizedTexts(currentPredictions, outcome.summary);
         outcome.activePredictionId = outcome.predictions[0]?._id || null;
         outcome.reviewDirty = false;
         outcome.reviewStatus = resultJson.review_status || 'revised';
@@ -2962,6 +4177,9 @@ function pageTasks(route, rawCtx) {
           ? resultJson.auto_predictions
           : predictions;
         const promptSupported = resultJson.prompt_supported;
+        const summary = cloneJson(resultJson.summary || {}) || {};
+        const taskType = String(resultJson.task_type || summary.task_type || task.task_type || recommendation?.inferred_task_type || recommendation?.selected_model?.task_type || 'object_detect');
+        const recognizedTexts = collectRecognizedTexts(predictions, summary);
         const assetInfo = uploadedAsset || assistAssets.find((row) => row.id === task.asset_id) || {
           id: task.asset_id,
           file_name: resultJson.source_file_name || task.asset_id,
@@ -2989,6 +4207,9 @@ function pageTasks(route, rawCtx) {
           uploadedAsset: assetInfo,
           recommendation,
           task,
+          taskType,
+          summary,
+          recognizedTexts,
           rows,
           focus,
           predictions: predictions.map((prediction) => makeReviewPrediction(prediction, prompt)),
@@ -3014,6 +4235,7 @@ function pageTasks(route, rawCtx) {
       function renderQuickDetectBatchOutcome(outcomes) {
         outcomes.forEach((item, outcomeIndex) => {
           item._index = outcomeIndex;
+          item.recognizedTexts = collectRecognizedTexts(item.predictions, item.summary || item.focus?.result_json?.summary || {});
         });
         quickBatchTaskIds = outcomes.map((item) => item.task.id);
         const totalObjects = outcomes.reduce(
@@ -3021,6 +4243,7 @@ function pageTasks(route, rawCtx) {
           0,
         );
         const uniqueLabels = [...new Set(outcomes.flatMap((item) => item.predictions.map((pred) => String(pred.label || '').trim()).filter(Boolean)))];
+        const uniqueTexts = [...new Set(outcomes.flatMap((item) => item.recognizedTexts || []))];
         const defaultLabel = quickDatasetExport?.asset?.meta?.dataset_label || `quick-detect-${(outcomes[0]?.prompt || 'dataset').replace(/\s+/g, '-')}`;
         const dirtyCount = outcomes.filter((item) => item.reviewDirty).length;
 
@@ -3032,7 +4255,13 @@ function pageTasks(route, rawCtx) {
               <div><span>task_ids</span><strong>${esc(String(outcomes.length))} 条</strong></div>
               <div><span>object_count</span><strong>${esc(String(totalObjects))}</strong></div>
             </div>
-            <div class="quick-detect-recommend">本次快速识别已完成。你可以删掉误检、补手工框并保存修订，然后把整批结果打包为训练 / 验证数据集版本。</div>
+            <div class="quick-detect-recommend">
+              ${
+                uniqueTexts.length
+                  ? `本次快速识别已输出文本结果：${esc(uniqueTexts.slice(0, 8).join(' / '))}。你可以继续修订框与文本，再把整批结果打包为训练 / 验证数据集版本。`
+                  : '本次快速识别已完成。你可以删掉误检、补手工框并保存修订，然后把整批结果打包为训练 / 验证数据集版本。'
+              }
+            </div>
             <div class="quick-detect-export-bar">
               <input id="quickDetectDatasetLabel" value="${esc(defaultLabel)}" placeholder="quick-detect-dataset" />
               <select id="quickDetectDatasetPurpose">
@@ -3070,6 +4299,11 @@ function pageTasks(route, rawCtx) {
                   : `<span class="hint">当前批次暂无命中的目标标签。</span>`
               }
             </div>
+            ${
+              uniqueTexts.length
+                ? `<div class="quick-detect-texts">${uniqueTexts.slice(0, 12).map((text) => `<span class="badge">${esc(text)}</span>`).join('')}</div>`
+                : ''
+            }
             <div class="quick-detect-batch-list">
               ${outcomes
                 .map((item, outcomeIndex) => `
@@ -3084,10 +4318,19 @@ function pageTasks(route, rawCtx) {
                     <div class="keyvals">
                       <div><span>asset_id</span><strong class="mono">${esc(item.uploadedAsset?.id || item.task.asset_id || '-')}</strong></div>
                       <div><span>task_id</span><strong class="mono">${esc(item.task.id)}</strong></div>
+                      <div><span>task_type</span><strong>${esc(enumText('task_type', item.taskType || item.task.task_type || '-'))}</strong></div>
                       <div><span>selected_model</span><strong>${esc(`${item.recommendation?.selected_model?.model_code || '-'}:${item.recommendation?.selected_model?.version || '-'}`)}</strong></div>
                       <div><span>object_count</span><strong>${esc(String(item.predictions.length))}</strong></div>
                     </div>
                     <div class="quick-detect-recommend">${esc(item.recommendation?.summary || '已完成自动选模并执行快速识别')}</div>
+                    ${
+                      item.recognizedTexts?.length
+                        ? `<div class="quick-detect-text-panel">
+                            <strong>识别文本</strong>
+                            <div class="quick-detect-texts">${item.recognizedTexts.map((text) => `<span class="badge">${esc(text)}</span>`).join('')}</div>
+                          </div>`
+                        : ''
+                    }
                     <div class="quick-review-stage">
                       ${
                         item.previewUrl
@@ -3110,7 +4353,7 @@ function pageTasks(route, rawCtx) {
                             item.predictions.length
                               ? item.predictions
                                   .slice(0, 12)
-                                  .map((pred) => `<span class="badge">${esc(`${pred.label}:${Number(pred.score || 0).toFixed(2)}`)}</span>`)
+                                  .map((pred) => `<span class="badge">${esc(predictionBadgeText(pred))}</span>`)
                                   .join('')
                               : `<span class="hint">${esc(item.promptSupported === false ? '当前提示词不在模型可识别标签内，建议尝试 car / person / train / bus。' : '当前没有框，可手工新增。')}</span>`
                           }
@@ -3122,6 +4365,7 @@ function pageTasks(route, rawCtx) {
                                   <div class="quick-review-row ${item.activePredictionId === pred._id ? 'selected' : ''}">
                                     <div class="quick-review-fields">
                                       <input data-review-index="${outcomeIndex}" data-review-pred="${esc(pred._id)}" data-review-field="label" value="${esc(pred.label)}" placeholder="label" />
+                                      <input data-review-index="${outcomeIndex}" data-review-pred="${esc(pred._id)}" data-review-field="text" value="${esc(pred.text || '')}" placeholder="text / OCR 输出" />
                                       <input data-review-index="${outcomeIndex}" data-review-pred="${esc(pred._id)}" data-review-field="score" type="number" min="0" max="1" step="0.01" value="${esc(Number(pred.score ?? 1).toFixed(2))}" />
                                       <input data-review-index="${outcomeIndex}" data-review-pred="${esc(pred._id)}" data-review-field="x1" type="number" step="1" value="${esc(String(pred.bbox?.[0] ?? 0))}" />
                                       <input data-review-index="${outcomeIndex}" data-review-pred="${esc(pred._id)}" data-review-field="y1" type="number" step="1" value="${esc(String(pred.bbox?.[1] ?? 0))}" />
@@ -3174,6 +4418,7 @@ function pageTasks(route, rawCtx) {
             outcome.activePredictionId = predictionId;
             const rawValue = input.value;
             if (field === 'label') prediction.label = rawValue;
+            if (field === 'text') prediction.text = rawValue;
             if (field === 'score') prediction.score = rawValue === '' ? 1 : Number(rawValue);
             if (field === 'x1') prediction.bbox[0] = rawValue === '' ? 0 : Number.parseInt(rawValue, 10);
             if (field === 'y1') prediction.bbox[1] = rawValue === '' ? 0 : Number.parseInt(rawValue, 10);
@@ -3215,6 +4460,7 @@ function pageTasks(route, rawCtx) {
             const nextPrediction = makeReviewPrediction(
               {
                 label: outcome.prompt || 'object',
+                text: '',
                 score: 1,
                 bbox: [24, 24, 160, 160],
                 attributes: { review_source: 'manual' },
@@ -3295,7 +4541,7 @@ function pageTasks(route, rawCtx) {
             localStorage.setItem(STORAGE_KEYS.prefillTrainingAssetIds, quickDatasetExport.asset.id);
             localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetLabel, datasetLabel);
             if (quickDatasetExport.dataset_version?.id) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetVersionId, quickDatasetExport.dataset_version.id);
-            localStorage.setItem(STORAGE_KEYS.prefillTrainingTargetModelCode, 'object_detect');
+            localStorage.setItem(STORAGE_KEYS.prefillTrainingTargetModelCode, outcomes[0]?.taskType || 'object_detect');
             quickDetectMsg.textContent = `已生成数据集资产：${quickDatasetExport.asset.id}${quickDatasetExport.dataset_version?.version ? ` · ${quickDatasetExport.dataset_version.version}` : ''}`;
             ctx.toast('结果已打包为数据集版本');
             renderQuickDetectBatchOutcome(outcomes);
@@ -3310,7 +4556,7 @@ function pageTasks(route, rawCtx) {
         root.querySelector('#openQuickDatasetAssets')?.addEventListener('click', () => ctx.navigate('assets'));
       }
 
-      async function runQuickDetectItem({ file, existingAssetId, prompt, deviceCode, index, total }) {
+      async function runQuickPreflightItem({ file, existingAssetId, prompt, deviceCode, index, total }) {
         let uploadedAsset = null;
         let assetId = existingAssetId;
         if (file) {
@@ -3318,9 +4564,41 @@ function pageTasks(route, rawCtx) {
           uploadForm.set('file', file);
           uploadForm.set('asset_purpose', 'inference');
           uploadForm.set('sensitivity_level', 'L2');
+          uploadForm.set('dataset_label', `quick-detect-${prompt || 'preflight'}`);
+          uploadForm.set('use_case', 'quick-detect-preflight');
+          uploadForm.set('intended_model_code', inferQuickDetectTaskType(prompt));
+          quickDetectResult.innerHTML = renderLoading(`正在上传资产 ${index + 1}/${total} ...`);
+          uploadedAsset = await ctx.postForm('/assets/upload', uploadForm);
+          assetId = uploadedAsset.id;
+        }
+        quickDetectResult.innerHTML = renderLoading(`正在预检扫描 ${index + 1}/${total} ...`);
+        const preflight = await ctx.post('/tasks/preflight-inspect', {
+          asset_id: assetId,
+          device_code: deviceCode,
+          prompt_hint: prompt || null,
+        });
+        return hydrateQuickPreflightOutcome({
+          uploadedAsset: uploadedAsset || assistAssets.find((row) => row.id === assetId) || { id: assetId, file_name: assetId, asset_type: '' },
+          assetId,
+          prompt,
+          deviceCode,
+          preflight,
+          candidates: preflight?.candidates || [],
+          selectedCandidate: preflight?.selected_candidate || preflight?.candidates?.[0] || null,
+        });
+      }
+
+      async function runQuickDetectItem({ file, existingAssetId, prompt, deviceCode, index, total, uploadedAsset = null, forcedTaskType = null }) {
+        let assetId = existingAssetId;
+        const requestedTaskType = forcedTaskType || inferQuickDetectTaskType(prompt);
+        if (file) {
+          const uploadForm = new FormData();
+          uploadForm.set('file', file);
+          uploadForm.set('asset_purpose', 'inference');
+          uploadForm.set('sensitivity_level', 'L2');
           uploadForm.set('dataset_label', `quick-detect-${prompt}`);
           uploadForm.set('use_case', 'quick-detect');
-          uploadForm.set('intended_model_code', 'object_detect');
+          uploadForm.set('intended_model_code', requestedTaskType);
           quickDetectResult.innerHTML = renderLoading(`正在上传资产 ${index + 1}/${total} ...`);
           uploadedAsset = await ctx.postForm('/assets/upload', uploadForm);
           assetId = uploadedAsset.id;
@@ -3329,7 +4607,7 @@ function pageTasks(route, rawCtx) {
         quickDetectResult.innerHTML = renderLoading(`正在自动选模 ${index + 1}/${total} ...`);
         const recommendation = await ctx.post('/tasks/recommend-model', {
           asset_id: assetId,
-          task_type: 'object_detect',
+          task_type: requestedTaskType,
           device_code: deviceCode,
           intent_text: prompt,
           limit: 3,
@@ -3337,22 +4615,25 @@ function pageTasks(route, rawCtx) {
         if (!recommendation?.selected_model?.model_id) {
           throw new Error('当前没有可用于快速识别的已发布模型');
         }
+        const resolvedTaskType = recommendation?.inferred_task_type || recommendation?.selected_model?.task_type || requestedTaskType || 'object_detect';
+        const quickContext = resolvedTaskType === 'object_detect' ? { object_prompt: prompt } : {};
+        const quickOptions = resolvedTaskType === 'object_detect' ? { object_prompt: prompt } : {};
 
         quickDetectResult.innerHTML = renderLoading(`正在执行快速识别 ${index + 1}/${total} ...`);
         const task = await ctx.post('/tasks/create', {
           asset_id: assetId,
-          task_type: 'object_detect',
+          task_type: resolvedTaskType,
           device_code: deviceCode,
           use_master_scheduler: true,
           intent_text: prompt,
-          context: { object_prompt: prompt },
-          options: { object_prompt: prompt },
+          context: quickContext,
+          options: quickOptions,
           policy: {
             upload_raw_video: false,
             upload_frames: true,
             desensitize_frames: false,
             retention_days: 30,
-            quick_detect: { object_prompt: prompt },
+            quick_detect: { object_prompt: prompt, requested_task_type: requestedTaskType, resolved_task_type: resolvedTaskType },
           },
         });
         localStorage.setItem(STORAGE_KEYS.lastTaskId, task.id);
@@ -3409,44 +4690,103 @@ function pageTasks(route, rawCtx) {
       }
 
       quickDetectFile?.addEventListener('change', renderQuickPreview);
+      quickDetectFile?.addEventListener('change', () => {
+        quickPreflightOutcomes = [];
+        revokeQuickUrls();
+      });
       quickDetectAssetInput?.addEventListener('input', () => {
+        quickPreflightOutcomes = [];
+        revokeQuickUrls();
         if (!quickDetectFile?.files?.length) renderQuickPreview();
+      });
+      quickDetectDeviceCode?.addEventListener('input', () => {
+        quickPreflightOutcomes = [];
+        revokeQuickUrls();
+      });
+      quickDetectPrompt?.addEventListener('input', () => {
+        quickPreflightOutcomes = [];
+        revokeQuickUrls();
+        renderQuickIntentOptions();
       });
       root.querySelectorAll('[data-quick-prompt]').forEach((btn) => {
         btn.addEventListener('click', () => {
           if (quickDetectPrompt) quickDetectPrompt.value = btn.getAttribute('data-quick-prompt') || '';
+          renderQuickIntentOptions();
         });
+      });
+
+      async function performQuickPreflight() {
+        const { prompt, items } = currentQuickWorkItems();
+        if (!items.length) {
+          throw new Error('请上传图片/视频，或填写已有 asset_id');
+        }
+        revokeQuickUrls();
+        quickBatchTaskIds = [];
+        quickDatasetExport = null;
+        quickPreflightOutcomes = [];
+        const outcomes = [];
+        for (let index = 0; index < items.length; index += 1) {
+          outcomes.push(await runQuickPreflightItem({ ...items[index], prompt, index, total: items.length }));
+        }
+        renderQuickPreflightOutcomes(outcomes);
+        quickDetectMsg.textContent = `预检完成：${outcomes.length} 条`;
+        ctx.toast('预检完成');
+      }
+
+      quickDetectPreflightBtn?.addEventListener('click', async () => {
+        quickDetectMsg.textContent = '';
+        quickDetectPreflightBtn.disabled = true;
+        const submitBtn = quickDetectForm?.querySelector('button[type="submit"]');
+        if (submitBtn) submitBtn.disabled = true;
+        quickDetectResult.innerHTML = renderLoading('正在预检扫描...');
+        try {
+          await performQuickPreflight();
+        } catch (error) {
+          quickDetectMsg.textContent = error.message || '预检失败';
+          quickDetectResult.innerHTML = renderError(error.message || '预检失败');
+        } finally {
+          quickDetectPreflightBtn.disabled = false;
+          if (submitBtn) submitBtn.disabled = false;
+        }
       });
 
       quickDetectForm?.addEventListener('submit', async (event) => {
         event.preventDefault();
         quickDetectMsg.textContent = '';
         const submitBtn = quickDetectForm.querySelector('button[type="submit"]');
+        const preflightBtn = quickDetectPreflightBtn;
         submitBtn.disabled = true;
+        if (preflightBtn) preflightBtn.disabled = true;
         quickDetectResult.innerHTML = renderLoading('正在准备快速识别...');
         try {
-          const prompt = String(quickDetectPrompt?.value || '').trim();
-          const deviceCode = String(quickDetectDeviceCode?.value || 'edge-01').trim() || 'edge-01';
-          const existingAssetIds = splitCsv(quickDetectAssetInput?.value || '');
-          const files = Array.from(quickDetectFile?.files || []);
-          if (!prompt) {
-            throw new Error('请输入要识别的对象');
-          }
-          if (!files.length && !existingAssetIds.length) {
-            throw new Error('请上传图片/视频，或填写已有 asset_id');
+          const { prompt, items, files, existingAssetIds } = currentQuickWorkItems();
+          if (!prompt) throw new Error('请输入要识别的对象');
+          if (!items.length) throw new Error('请上传图片/视频，或填写已有 asset_id');
+
+          if (!quickPreflightOutcomes.length) {
+            await performQuickPreflight();
+            quickDetectMsg.textContent = '预检已完成，请先从候选建议里选择一个方向继续';
+            return;
           }
 
-          revokeQuickUrls();
-          quickBatchTaskIds = [];
-          quickDatasetExport = null;
-          const workItems = [
-            ...files.map((file) => ({ file, existingAssetId: '', prompt, deviceCode })),
-            ...existingAssetIds.map((assetId) => ({ file: null, existingAssetId: assetId, prompt, deviceCode })),
-          ];
           const outcomes = [];
-          for (let index = 0; index < workItems.length; index += 1) {
-            const outcome = await runQuickDetectItem({ ...workItems[index], index, total: workItems.length });
-            outcomes.push(outcome);
+          for (let index = 0; index < quickPreflightOutcomes.length; index += 1) {
+            const preflightOutcome = quickPreflightOutcomes[index];
+            if (preflightOutcome?.completedOutcome?.task?.id) {
+              outcomes.push(preflightOutcome.completedOutcome);
+              continue;
+            }
+            const candidate = selectedQuickPreflightCandidate(preflightOutcome);
+            outcomes.push(await runQuickDetectItem({
+              file: null,
+              existingAssetId: preflightOutcome.assetId,
+              prompt: candidate?.recommended_prompt || prompt,
+              deviceCode: preflightOutcome.deviceCode,
+              index,
+              total: quickPreflightOutcomes.length,
+              uploadedAsset: preflightOutcome.uploadedAsset,
+              forcedTaskType: candidate?.task_type || null,
+            }));
           }
 
           if (quickDetectAssetInput && files.length && !existingAssetIds.length && outcomes.length === 1) {
@@ -3462,6 +4802,7 @@ function pageTasks(route, rawCtx) {
           quickDetectResult.innerHTML = renderError(error.message || '快速识别失败');
         } finally {
           submitBtn.disabled = false;
+          if (preflightBtn) preflightBtn.disabled = false;
         }
       });
 
@@ -3552,24 +4893,127 @@ function pageTaskDetail(route, rawCtx) {
   };
 }
 
-function buildResultListHtml(rows) {
+function buildResultListHtml(rows, modelInsights = {}) {
   if (!rows.length) return renderEmpty('暂无结果，请确认任务已执行完成，或返回任务中心重新创建任务');
+  const summaries = rows.map((row) => summarizeResultRow(row));
+  const totalObjects = summaries.reduce((sum, item) => sum + item.objectCount, 0);
+  const durations = summaries.map((item) => item.durationMs).filter((value) => Number.isFinite(value));
+  const avgDuration = durations.length ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : null;
+  const allTexts = [...new Set(summaries.flatMap((item) => item.recognizedTexts))];
+  const uniqueModelIds = [...new Set(rows.map((row) => String(row.model_id || '').trim()).filter(Boolean))];
+
   return `
+    <div class="result-overview-grid">
+      <article class="metric-card">
+        <h4>结果条数</h4>
+        <p class="metric">${esc(rows.length)}</p>
+        <span>当前 task_id 下已回查到的结果记录</span>
+      </article>
+      <article class="metric-card">
+        <h4>识别对象</h4>
+        <p class="metric">${esc(totalObjects)}</p>
+        <span>累计命中的框 / 文本结果数量</span>
+      </article>
+      <article class="metric-card">
+        <h4>平均耗时</h4>
+        <p class="metric">${esc(avgDuration ?? '-')}</p>
+        <span>${esc(avgDuration != null ? 'ms' : '当前结果未回写 duration_ms')}</span>
+      </article>
+      <article class="metric-card">
+        <h4>识别文本</h4>
+        <p class="metric">${esc(allTexts.length)}</p>
+        <span>${esc(allTexts.slice(0, 3).join(' / ') || '暂无 OCR 文本')}</span>
+      </article>
+    </div>
+    ${
+      allTexts.length
+        ? `<section class="result-text-ribbon">${allTexts.slice(0, 12).map((text) => `<span class="badge">${esc(text)}</span>`).join('')}</section>`
+        : ''
+    }
+    ${
+      uniqueModelIds.length
+        ? `
+            <section class="result-model-insights">
+              ${uniqueModelIds
+                .map((modelId) => renderModelInsightBlock(modelId, modelInsights[modelId]))
+                .filter(Boolean)
+                .join('')}
+            </section>
+          `
+        : ''
+    }
     <div class="result-list">
-      ${rows.map((row) => `
-        <article class="result-card">
-          <div class="result-head">
-            <strong>${esc(row.id)}</strong>
-            <span class="badge">${esc(row.alert_level)}</span>
-          </div>
-          <p class="muted">model_id: ${esc(row.model_id || '-')} · duration: ${esc(row.duration_ms ?? '-')}ms · created: ${formatDateTime(row.created_at)}</p>
-          <details>
-            <summary>结果 JSON</summary>
-            <pre>${esc(safeJson(row.result_json))}</pre>
-          </details>
-          ${row.screenshot_uri ? `<button class="ghost" data-open-shot="${esc(row.id)}">查看截图</button>` : '<p class="muted">无截图</p>'}
-        </article>
-      `).join('')}
+      ${summaries.map((item) => {
+        const row = item.row;
+        const labels = Object.entries(item.labelCounts)
+          .sort((left, right) => right[1] - left[1])
+          .slice(0, 6);
+        const readiness = modelInsights[row.model_id] || null;
+        const validationMetrics = readiness?.validation_report?.metrics || {};
+        return `
+          <article class="result-card">
+            <div class="result-head">
+              <div>
+                <strong>${esc(row.id)}</strong>
+                <p class="muted">${esc(`${item.taskType} · ${item.stage} · ${formatDateTime(row.created_at)}`)}</p>
+              </div>
+              <div class="quick-review-statuses">
+                <span class="badge">${esc(row.alert_level || 'INFO')}</span>
+                ${row.model_id ? `<span class="badge mono">${esc(truncateMiddle(row.model_id, 8, 6))}</span>` : ''}
+              </div>
+            </div>
+            <div class="keyvals compact">
+              <div><span>duration_ms</span><strong>${esc(formatMetricValue(item.durationMs))}</strong></div>
+              <div><span>object_count</span><strong>${esc(formatMetricValue(item.objectCount))}</strong></div>
+              <div><span>avg_score</span><strong>${esc(formatMetricValue(item.avgScore, { percent: true }))}</strong></div>
+              <div><span>model_val_accuracy</span><strong>${esc(formatMetricValue(validationMetrics.val_accuracy, { percent: true }))}</strong></div>
+            </div>
+            ${
+              item.recognizedTexts.length
+                ? `
+                    <div class="quick-detect-text-panel">
+                      <strong>识别文本</strong>
+                      <div class="quick-detect-texts">${item.recognizedTexts.map((text) => `<span class="badge">${esc(text)}</span>`).join('')}</div>
+                    </div>
+                  `
+                : ''
+            }
+            <div class="result-card-grid">
+              <section class="result-card-panel">
+                <div class="result-panel-head">
+                  <strong>命中标签</strong>
+                  <span>${esc(labels.length ? `${labels.length} 类` : '暂无')}</span>
+                </div>
+                ${
+                  labels.length
+                    ? `<div class="result-label-cloud">${labels.map(([label, count]) => `<span class="badge">${esc(`${label} · ${count}`)}</span>`).join('')}</div>`
+                    : '<div class="training-history-empty">当前结果没有结构化标签命中。</div>'
+                }
+              </section>
+              <section class="result-card-panel">
+                <div class="result-panel-head">
+                  <strong>置信度分布</strong>
+                  <span>${esc(item.predictions.length ? `${item.predictions.length} 条预测` : '暂无')}</span>
+                </div>
+                ${renderResultConfidenceBars(item.predictions)}
+              </section>
+            </div>
+            <div class="row-actions">
+              ${row.screenshot_uri ? `<button class="ghost" data-open-shot="${esc(row.id)}">查看截图</button>` : '<span class="hint">无截图</span>'}
+              <details class="inline-details">
+                <summary>更多详情</summary>
+                <div class="details-panel">
+                  <details open>
+                    <summary>结果 JSON</summary>
+                    <pre>${esc(safeJson(row.result_json))}</pre>
+                  </details>
+                  ${readiness ? `<details><summary>模型验证摘要</summary><pre>${esc(safeJson(readiness.validation_report || {}))}</pre></details>` : ''}
+                </div>
+              </details>
+            </div>
+          </article>
+        `;
+      }).join('')}
     </div>
   `;
 }
@@ -3631,6 +5075,19 @@ function pageResults(route, rawCtx) {
         });
       }
 
+      async function loadModelInsights(rows) {
+        const modelIds = [...new Set((rows || []).map((row) => String(row.model_id || '').trim()).filter(Boolean))];
+        const entries = await Promise.all(modelIds.map(async (modelId) => {
+          try {
+            const data = await ctx.get(`/models/${modelId}/readiness`);
+            return [modelId, data];
+          } catch {
+            return [modelId, null];
+          }
+        }));
+        return Object.fromEntries(entries.filter(([, value]) => value));
+      }
+
       async function loadByTaskId(taskId) {
         const clean = String(taskId || '').trim();
         if (!clean) {
@@ -3642,8 +5099,10 @@ function pageResults(route, rawCtx) {
         resultMeta.textContent = '';
         try {
           const rows = await ctx.get(`/results${toQuery({ task_id: clean })}`);
-          listWrap.innerHTML = buildResultListHtml(rows || []);
-          resultMeta.textContent = `task_id=${clean} · 结果条数=${rows.length}`;
+          const modelInsights = await loadModelInsights(rows || []);
+          listWrap.innerHTML = buildResultListHtml(rows || [], modelInsights);
+          const modelCount = [...new Set((rows || []).map((row) => String(row.model_id || '').trim()).filter(Boolean))].length;
+          resultMeta.textContent = `task_id=${clean} · 结果条数=${rows.length} · 关联模型=${modelCount}`;
           localStorage.setItem(STORAGE_KEYS.lastTaskId, clean);
           await bindScreenshotButtons();
         } catch (error) {

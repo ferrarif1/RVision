@@ -21,6 +21,11 @@ bash docker/scripts/bootstrap_demo.sh
 - 启动 edge-agent 并等待任务完成
 - 如果检测到 `demo_data/train/` 本地车号数据集，则额外自动切分 `train/validation`、上传 ZIP 训练资产、创建一条 `car_number_ocr` 微调作业，并用 `training_worker_runner.py --once` 跑完整一轮候选模型回收
 
+快速识别现在支持两段式演示：
+
+- 第一步先点“先扫一遍给建议”，系统会对当前资产发起轻量预检，返回候选任务类型、目标标签和 OCR 文本建议
+- 第二步再按建议继续正式识别；如果是车号场景，会优先走 `car_number_ocr`，并直接展示车号文本，而不只是框出一个区域
+
 本 demo 的文档口径也按同一 4 条业务线组织：
 
 - 客户用户上传图片或视频资产，资产可用于训练、微调、测试验收或推理。
@@ -238,6 +243,23 @@ docker compose -f docker/docker-compose.yml exec backend sh -lc '
    - `bogie-close-up / cam-bogie-02 / edge-gpu-box`
 4. 任务类型可保持“自动识别”，点击“创建任务”。
 5. 创建后在任务详情里确认已经写入 `pipeline_id / pipeline_version / run summary`。
+
+## 1.6.1 快速识别（预检 -> 正式识别）
+
+1. 进入“任务中心”里的“快速识别”卡片。
+2. 上传图片 / 视频，或直接填写已有 `asset_id`。
+3. 如果目标表述可能有歧义，先点击“先扫一遍给建议”。
+4. 页面会返回若干候选方向，例如：
+   - `车号内容`
+   - `目标框选`
+   - `螺栓缺失`
+5. 若是车号图片，系统会优先展示 `car_number_ocr` 候选，并直接给出候选车号文本。
+6. 选择一个候选方向后继续正式识别；结果页支持：
+   - 修订框坐标
+   - 删除误检
+   - 手工补框
+   - 修订 OCR 文本
+7. 修订保存后，可直接导出为训练 / 验证数据集版本。
 
 兼容旧路径：
 

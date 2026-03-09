@@ -39,6 +39,7 @@ from app.security.roles import (
 from app.services.audit_service import record_audit
 from app.services.model_package_service import ModelPackageError, load_model_blobs, parse_and_validate_model_package, persist_model_package
 from app.services.pipeline_service import normalize_model_inputs, normalize_model_outputs
+from app.services.training_runtime_service import reconcile_training_runtime_health
 
 router = APIRouter(prefix="/training", tags=["training"])
 
@@ -99,6 +100,13 @@ class TrainingJobReassignRequest(BaseModel):
     worker_code: str | None = Field(default=None, description="目标 Worker 编码 / Target worker code")
     worker_host: str | None = Field(default=None, description="目标 Worker 主机 / Target worker host or IP")
     note: str | None = Field(default=None, description="改派说明 / Optional reassign note")
+
+
+class TrainingRuntimeReconcileRequest(BaseModel):
+    note: str | None = Field(default=None, description="触发说明 / Optional reconcile note")
+    worker_stale_seconds: int | None = Field(default=None, ge=1, description="本次 reconcile 的 worker stale 秒数覆盖 / Optional worker stale seconds override")
+    dispatch_timeout_seconds: int | None = Field(default=None, ge=1, description="本次 reconcile 的 dispatch timeout 秒数覆盖 / Optional dispatch timeout override")
+    running_timeout_seconds: int | None = Field(default=None, ge=1, description="本次 reconcile 的 running timeout 秒数覆盖 / Optional running timeout override")
 
 
 def _job_visible_to_user(job: TrainingJob, current_user: AuthUser) -> bool:
@@ -180,6 +188,14 @@ def _model_summary(model: ModelRecord | None) -> dict[str, Any] | None:
     }
 
 
+def _job_alert_summary(job: TrainingJob) -> tuple[str | None, str | None, str | None]:
+    summary = job.output_summary if isinstance(job.output_summary, dict) else {}
+    alert_level = str(summary.get("alert_level") or "").strip() or None
+    alert_reason = str(summary.get("alert_reason") or summary.get("failure_category") or job.error_message or "").strip() or None
+    recommended_action = str(summary.get("recommended_action") or "").strip() or None
+    return alert_level, alert_reason, recommended_action
+
+
 def _asset_summary(asset: DataAsset) -> dict[str, Any]:
     return {
         "id": asset.id,
@@ -196,6 +212,7 @@ def _serialize_job(db: Session, job: TrainingJob) -> dict[str, Any]:
     candidate_model = db.query(ModelRecord).filter(ModelRecord.id == job.candidate_model_id).first() if job.candidate_model_id else None
     owner_tenant = db.query(Tenant).filter(Tenant.id == job.owner_tenant_id).first() if job.owner_tenant_id else None
     buyer_tenant = db.query(Tenant).filter(Tenant.id == job.buyer_tenant_id).first() if job.buyer_tenant_id else None
+    alert_level, alert_reason, recommended_action = _job_alert_summary(job)
     return {
         "id": job.id,
         "job_code": job.job_code,
@@ -218,6 +235,9 @@ def _serialize_job(db: Session, job: TrainingJob) -> dict[str, Any]:
         "spec": job.spec or {},
         "output_summary": job.output_summary or {},
         "error_message": job.error_message,
+        "alert_level": alert_level,
+        "alert_reason": alert_reason,
+        "recommended_action": recommended_action,
         "dispatch_count": job.dispatch_count,
         "can_cancel": job.status not in TRAINING_JOB_TERMINAL_STATUSES,
         "can_retry": job.status in {TRAINING_JOB_STATUS_FAILED, TRAINING_JOB_STATUS_CANCELLED} and not bool(job.candidate_model_id),
@@ -246,6 +266,9 @@ def _serialize_worker(db: Session, worker: TrainingWorker) -> dict[str, Any]:
         "labels": worker.labels or {},
         "resources": worker.resources or {},
         "last_seen_at": worker.last_seen_at,
+        "heartbeat_age_sec": int((datetime.utcnow() - worker.last_seen_at).total_seconds()) if worker.last_seen_at else None,
+        "alert_level": "CRITICAL" if worker.status == "UNHEALTHY" else None,
+        "alert_reason": "Worker heartbeat stale or manually marked unhealthy" if worker.status == "UNHEALTHY" else None,
         "last_job_at": worker.last_job_at,
         "outstanding_jobs": pending_count,
         "created_at": worker.created_at,
@@ -458,6 +481,7 @@ def list_training_jobs(
     db: Session = Depends(get_db),
     current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_READ_ROLES)),
 ):
+    reconcile_training_runtime_health(db)
     query = db.query(TrainingJob).order_by(TrainingJob.created_at.desc())
     if status_filter:
         query = query.filter(TrainingJob.status == status_filter)
@@ -475,6 +499,7 @@ def get_training_job(
     db: Session = Depends(get_db),
     current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_READ_ROLES)),
 ):
+    reconcile_training_runtime_health(db)
     job = _get_training_job_or_404(db, job_id, current_user)
     return _serialize_job(db, job)
 
@@ -551,6 +576,9 @@ def retry_training_job(
         "last_retry_note": note,
         "last_terminal_status": previous_status,
         "last_terminal_error": previous_error,
+        "alert_level": None,
+        "alert_reason": None,
+        "recommended_action": None,
     }
     db.add(job)
     db.commit()
@@ -612,6 +640,9 @@ def reassign_training_job(
         "last_reassign_worker_code": target_worker_code or (target_worker.worker_code if target_worker else None),
         "last_reassign_worker_host": target_worker_host,
         "previous_status": previous_status,
+        "alert_level": None,
+        "alert_reason": None,
+        "recommended_action": None,
     }
     db.add(job)
     db.commit()
@@ -690,8 +721,28 @@ def list_training_workers(
     db: Session = Depends(get_db),
     current_user: AuthUser = Depends(require_roles(*TRAINING_WORKER_READ_ROLES, *TRAINING_WORKER_ADMIN_ROLES)),
 ):
+    reconcile_training_runtime_health(db)
     rows = db.query(TrainingWorker).order_by(TrainingWorker.created_at.desc()).all()
     return [_serialize_worker(db, row) for row in rows]
+
+
+@router.post("/runtime/reconcile")
+def reconcile_training_runtime(
+    payload: TrainingRuntimeReconcileRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*TRAINING_WORKER_ADMIN_ROLES)),
+):
+    summary = reconcile_training_runtime_health(
+        db,
+        request=request,
+        worker_stale_seconds=payload.worker_stale_seconds,
+        dispatch_timeout_seconds=payload.dispatch_timeout_seconds,
+        running_timeout_seconds=payload.running_timeout_seconds,
+    )
+    summary["requested_by"] = current_user.username
+    summary["note"] = _control_note(payload.note)
+    return summary
 
 
 @router.post("/workers/heartbeat")
@@ -734,9 +785,12 @@ def training_worker_pull_jobs(
     db: Session = Depends(get_db),
     worker_ctx: TrainingWorkerContext = Depends(get_training_worker),
 ):
+    reconcile_training_runtime_health(db, request=request)
     worker = db.query(TrainingWorker).filter(TrainingWorker.id == worker_ctx.id).first()
     if not worker:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Training worker not found")
+    if worker.status != "ACTIVE":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Training worker is not ACTIVE")
 
     worker.last_seen_at = datetime.utcnow()
     db.add(worker)
@@ -758,6 +812,15 @@ def training_worker_pull_jobs(
         row.status = TRAINING_JOB_STATUS_DISPATCHED
         row.assigned_worker_code = worker.worker_code
         row.dispatch_count += 1
+        existing_summary = row.output_summary if isinstance(row.output_summary, dict) else {}
+        row.output_summary = {
+            **existing_summary,
+            "last_dispatched_at": datetime.utcnow().isoformat(),
+            "last_dispatched_worker_code": worker.worker_code,
+            "alert_level": None,
+            "alert_reason": None,
+            "recommended_action": None,
+        }
         worker.last_job_at = datetime.utcnow()
         db.add(row)
         db.add(worker)
@@ -795,6 +858,7 @@ def training_worker_job_control(
     db: Session = Depends(get_db),
     worker_ctx: TrainingWorkerContext = Depends(get_training_worker),
 ):
+    reconcile_training_runtime_health(db)
     job = db.query(TrainingJob).filter(TrainingJob.id == job_id).first()
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Training job not found")
@@ -1069,7 +1133,12 @@ def training_worker_push_update(
 
     existing_output_summary = job.output_summary if isinstance(job.output_summary, dict) else {}
     job.status = payload.status
-    job.output_summary = {**existing_output_summary, **payload.output_summary}
+    next_summary = {**existing_output_summary, **payload.output_summary}
+    if payload.status in {TRAINING_JOB_STATUS_RUNNING, TRAINING_JOB_STATUS_SUCCEEDED}:
+        next_summary["alert_level"] = payload.output_summary.get("alert_level")
+        next_summary["alert_reason"] = payload.output_summary.get("alert_reason")
+        next_summary["recommended_action"] = payload.output_summary.get("recommended_action")
+    job.output_summary = next_summary
     job.error_message = payload.error_message
     job.assigned_worker_code = worker_ctx.code
     if payload.status == TRAINING_JOB_STATUS_RUNNING and not job.started_at:

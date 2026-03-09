@@ -23,6 +23,7 @@ router = APIRouter(prefix="/results", tags=["results"])
 
 class ReviewPredictionInput(BaseModel):
     label: str = Field(description="标签 / Label")
+    text: str | None = Field(default=None, description="识别文本 / Optional OCR text")
     score: float | None = Field(default=1.0, description="置信度 / Optional score")
     bbox: list[int] | None = Field(default=None, description="框坐标 / [x1, y1, x2, y2]")
     attributes: dict = Field(default_factory=dict, description="附加属性 / Optional attributes")
@@ -87,6 +88,7 @@ def _normalize_review_predictions(predictions: list[ReviewPredictionInput]) -> l
         label = str(item.label or "").strip()
         if not label:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Prediction #{index + 1} is missing label")
+        text = str(item.text or "").strip() or None
         bbox = item.bbox
         if bbox is not None:
             if len(bbox) != 4:
@@ -101,6 +103,7 @@ def _normalize_review_predictions(predictions: list[ReviewPredictionInput]) -> l
         normalized.append(
             {
                 "label": label,
+                "text": text,
                 "score": round(float(item.score if item.score is not None else 1.0), 4),
                 "bbox": bbox,
                 "attributes": dict(item.attributes or {}),
@@ -209,6 +212,21 @@ def save_result_review(
         "reviewed_at": datetime.utcnow().isoformat(),
         "note": str(payload.note or "").strip() or None,
     }
+    summary = result_json.get("summary") if isinstance(result_json.get("summary"), dict) else {}
+    task_type = str(result_json.get("task_type") or summary.get("task_type") or "").strip()
+    if task_type == "car_number_ocr":
+        best_prediction = max(
+            normalized_predictions,
+            key=lambda item: float(item.get("score") if item.get("score") is not None else 0),
+            default=None,
+        )
+        result_json["summary"] = {
+            **summary,
+            "task_type": "car_number_ocr",
+            "car_number": str((best_prediction or {}).get("text") or "").strip() or None,
+            "confidence": (best_prediction or {}).get("score"),
+            "bbox": (best_prediction or {}).get("bbox"),
+        }
     result.result_json = result_json
     db.add(result)
 

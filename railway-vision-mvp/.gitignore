@@ -25,4 +25,7 @@ backend/app/uploads/screenshots/*
 docs/qa/reports/*.json
 !docs/qa/reports/.gitkeep
 demo_data/generated_datasets/
+deploy/training-worker/worker.env
+deploy/training-worker/.venv/
+deploy/training-worker/dist/
 tmp/

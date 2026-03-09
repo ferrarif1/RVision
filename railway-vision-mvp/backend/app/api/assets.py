@@ -2,6 +2,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import shutil
 import uuid
 import zipfile
 from datetime import datetime
@@ -21,6 +22,7 @@ from app.db.models import DataAsset, DatasetVersion, Tenant
 from app.security.dependencies import AuthUser, require_roles
 from app.security.roles import ASSET_UPLOAD_ROLES, MODEL_READ_ROLES, is_buyer_user, is_platform_user, is_supplier_user
 from app.services.audit_service import record_audit
+from app.services.dataset_version_service import create_dataset_version_record
 
 router = APIRouter(prefix="/assets", tags=["assets"])
 
@@ -35,11 +37,17 @@ UPLOAD_CHUNK_BYTES = 1024 * 1024
 MAX_FILE_NAME_LENGTH = 255
 ARCHIVE_PREVIEW_LIMIT = 20
 DATASET_COMPARE_SAMPLE_LIMIT = 8
+DATASET_COMPARE_SCOPES = {"all", "added", "removed", "changed"}
 
 
 class DatasetVersionRecommendRequest(BaseModel):
     asset_purpose: str | None = Field(default=None, description="推荐用途 / Optional recommendation target purpose")
     note: str | None = Field(default=None, description="推荐说明 / Optional recommendation note")
+
+
+class DatasetVersionRollbackRequest(BaseModel):
+    asset_purpose: str | None = Field(default=None, description="回滚后的用途 / Optional asset purpose for the rolled-back version")
+    note: str | None = Field(default=None, description="回滚说明 / Optional rollback note")
 
 
 def _safe_original_file_name(file_name: str | None) -> tuple[str, str]:
@@ -331,6 +339,42 @@ def _dataset_sample_signature(summary: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def _matches_dataset_sample_filters(
+    summary: dict[str, Any],
+    *,
+    label: str | None,
+    review_status: str | None,
+    sample_query: str | None,
+) -> bool:
+    if label and label not in (summary.get("matched_labels") or []):
+        return False
+    if review_status and str(summary.get("review_status") or "").strip() != review_status:
+        return False
+    if sample_query:
+        haystacks = [
+            str(summary.get("sample_id") or "").lower(),
+            str(summary.get("source_file_name") or "").lower(),
+            str(summary.get("object_prompt") or "").lower(),
+        ]
+        if not any(sample_query in item for item in haystacks):
+            return False
+    return True
+
+
+def _copy_file_with_checksum(source_path: str, target_path: str) -> tuple[str, int]:
+    checksum = hashlib.sha256()
+    size = 0
+    with open(source_path, "rb") as src, open(target_path, "wb") as dst:
+        while True:
+            chunk = src.read(1024 * 1024)
+            if not chunk:
+                break
+            checksum.update(chunk)
+            size += len(chunk)
+            dst.write(chunk)
+    return checksum.hexdigest(), size
+
+
 def _load_dataset_archive_payload(asset: DataAsset, *, preview_limit: int | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, dict[str, Any]]]:
     if asset.asset_type != "archive":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dataset preview is only available for archive assets")
@@ -501,9 +545,21 @@ def compare_dataset_versions(
     left_id: str = Query(..., description="左侧版本ID / Left dataset version id"),
     right_id: str = Query(..., description="右侧版本ID / Right dataset version id"),
     sample_limit: int = Query(default=DATASET_COMPARE_SAMPLE_LIMIT, ge=1, le=20, description="样本差异返回条数 / Sample diff rows"),
+    change_scope: str = Query(default="all", description="差异范围 / all|added|removed|changed"),
+    label: str | None = Query(default=None, description="按标签筛选 / Filter diff rows by label"),
+    review_status: str | None = Query(default=None, description="按 review 状态筛选 / Filter by review status"),
+    changed_field: str | None = Query(default=None, description="按变更字段筛选 / Filter changed rows by changed field"),
+    q: str | None = Query(default=None, description="样本关键词 / Sample keyword in id, file name or prompt"),
     db: Session = Depends(get_db),
     current_user: AuthUser = Depends(require_roles(*MODEL_READ_ROLES)),
 ):
+    normalized_scope = str(change_scope or "all").strip().lower()
+    if normalized_scope not in DATASET_COMPARE_SCOPES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid change_scope")
+    normalized_label = str(label or "").strip()
+    normalized_review_status = str(review_status or "").strip()
+    normalized_changed_field = str(changed_field or "").strip()
+    sample_query = str(q or "").strip().lower()
     left = _get_visible_dataset_version_or_404(db, left_id, current_user)
     right = _get_visible_dataset_version_or_404(db, right_id, current_user)
     left_asset = db.query(DataAsset).filter(DataAsset.id == left.asset_id).first() if left.asset_id else None
@@ -524,6 +580,79 @@ def compare_dataset_versions(
         if _dataset_sample_signature(left_samples[sample_id]) != _dataset_sample_signature(right_samples[sample_id])
     )
 
+    added_samples = [right_samples[sample_id] for sample_id in added_ids]
+    if normalized_label or normalized_review_status or sample_query:
+        added_samples = [
+            row
+            for row in added_samples
+            if _matches_dataset_sample_filters(
+                row,
+                label=normalized_label or None,
+                review_status=normalized_review_status or None,
+                sample_query=sample_query or None,
+            )
+        ]
+
+    removed_samples = [left_samples[sample_id] for sample_id in removed_ids]
+    if normalized_label or normalized_review_status or sample_query:
+        removed_samples = [
+            row
+            for row in removed_samples
+            if _matches_dataset_sample_filters(
+                row,
+                label=normalized_label or None,
+                review_status=normalized_review_status or None,
+                sample_query=sample_query or None,
+            )
+        ]
+
+    changed_samples = []
+    for sample_id in changed_ids:
+        left_row = left_samples[sample_id]
+        right_row = right_samples[sample_id]
+        change_fields = [
+            field
+            for field in ("matched_labels", "review_status", "object_count", "object_prompt")
+            if left_row.get(field) != right_row.get(field)
+        ]
+        if normalized_changed_field and normalized_changed_field not in change_fields:
+            continue
+        if normalized_label or normalized_review_status or sample_query:
+            if not (
+                _matches_dataset_sample_filters(
+                    left_row,
+                    label=normalized_label or None,
+                    review_status=normalized_review_status or None,
+                    sample_query=sample_query or None,
+                )
+                or _matches_dataset_sample_filters(
+                    right_row,
+                    label=normalized_label or None,
+                    review_status=normalized_review_status or None,
+                    sample_query=sample_query or None,
+                )
+            ):
+                continue
+        changed_samples.append(
+            {
+                "sample_id": sample_id,
+                "source_file_name": right_row.get("source_file_name") or left_row.get("source_file_name"),
+                "change_fields": change_fields,
+                "left": left_row,
+                "right": right_row,
+            }
+        )
+
+    if normalized_scope == "added":
+        removed_samples = []
+        changed_samples = []
+    elif normalized_scope == "removed":
+        added_samples = []
+        changed_samples = []
+    elif normalized_scope == "changed":
+        added_samples = []
+        removed_samples = []
+
     return {
         "left": _serialize_dataset_version(left, asset=left_asset),
         "right": _serialize_dataset_version(right, asset=right_asset),
@@ -538,22 +667,17 @@ def compare_dataset_versions(
             "sample_removed_count": len(removed_ids),
             "sample_changed_count": len(changed_ids),
             "sample_task_count_delta": int(right_manifest.get("task_count") or len(right_sample_ids)) - int(left_manifest.get("task_count") or len(left_sample_ids)),
-            "added_samples": [right_samples[sample_id] for sample_id in added_ids[:sample_limit]],
-            "removed_samples": [left_samples[sample_id] for sample_id in removed_ids[:sample_limit]],
-            "changed_samples": [
-                {
-                    "sample_id": sample_id,
-                    "source_file_name": right_samples[sample_id].get("source_file_name") or left_samples[sample_id].get("source_file_name"),
-                    "change_fields": [
-                        field
-                        for field in ("matched_labels", "review_status", "object_count", "object_prompt")
-                        if left_samples[sample_id].get(field) != right_samples[sample_id].get(field)
-                    ],
-                    "left": left_samples[sample_id],
-                    "right": right_samples[sample_id],
-                }
-                for sample_id in changed_ids[:sample_limit]
-            ],
+            "filtered_sample_count": len(added_samples) + len(removed_samples) + len(changed_samples),
+            "applied_filters": {
+                "change_scope": normalized_scope,
+                "label": normalized_label or None,
+                "review_status": normalized_review_status or None,
+                "changed_field": normalized_changed_field or None,
+                "q": sample_query or None,
+            },
+            "added_samples": added_samples[:sample_limit],
+            "removed_samples": removed_samples[:sample_limit],
+            "changed_samples": changed_samples[:sample_limit],
         },
     }
 
@@ -619,6 +743,121 @@ def recommend_dataset_version(
     db.refresh(asset)
     buyer = db.query(Tenant).filter(Tenant.id == row.buyer_tenant_id).first() if row.buyer_tenant_id else None
     return {"dataset_version": _serialize_dataset_version(row, asset=asset, buyer=buyer)}
+
+
+@router.post("/dataset-versions/{version_id}/rollback")
+def rollback_dataset_version(
+    version_id: str,
+    payload: DatasetVersionRollbackRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*ASSET_UPLOAD_ROLES)),
+):
+    row = _get_visible_dataset_version_or_404(db, version_id, current_user)
+    asset = _get_visible_asset_or_404(db, row.asset_id, current_user)
+    if asset.asset_type != "archive":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only archive dataset versions can be rolled back")
+    if not os.path.exists(asset.storage_uri):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset archive file missing")
+
+    settings = get_settings()
+    rollback_dir = os.path.join(settings.asset_repo_path, "generated_datasets")
+    os.makedirs(rollback_dir, exist_ok=True)
+
+    new_asset_id = str(uuid.uuid4())
+    ext = os.path.splitext(asset.file_name or "")[1] or ".zip"
+    rollback_file_name = f"{(row.dataset_label or 'dataset').replace(' ', '-')}_rollback{ext}"
+    rollback_storage_uri = os.path.join(rollback_dir, f"{new_asset_id}{ext}")
+    checksum, file_size = _copy_file_with_checksum(asset.storage_uri, rollback_storage_uri)
+
+    note = str(payload.note or "").strip() or None
+    target_purpose = str(payload.asset_purpose or row.asset_purpose or "").strip() or row.asset_purpose
+    source_meta = dict(asset.meta or {})
+    for key in (
+        "dataset_version",
+        "dataset_version_id",
+        "dataset_recommended",
+        "dataset_recommended_for",
+        "dataset_recommended_by",
+        "dataset_recommended_note",
+    ):
+        source_meta.pop(key, None)
+    source_meta.update(
+        {
+            "size": file_size,
+            "asset_purpose": target_purpose,
+            "dataset_label": row.dataset_label,
+            "dataset_rollback_from_version_id": row.id,
+            "dataset_rollback_from_version": row.version,
+            "dataset_rollback_note": note,
+        }
+    )
+    rollback_asset = DataAsset(
+        id=new_asset_id,
+        file_name=rollback_file_name,
+        asset_type="archive",
+        storage_uri=rollback_storage_uri,
+        source_uri=f"vistral://assets/dataset-rollback/{row.id}",
+        sensitivity_level=asset.sensitivity_level,
+        checksum=checksum,
+        buyer_tenant_id=asset.buyer_tenant_id,
+        meta=source_meta,
+        uploaded_by=current_user.id,
+    )
+    db.add(rollback_asset)
+    db.flush()
+
+    rollback_summary = {
+        **(row.summary or {}),
+        "recommended": False,
+        "recommended_for": None,
+        "recommended_at": None,
+        "recommended_by": None,
+        "recommended_note": None,
+        "rollback_from_version_id": row.id,
+        "rollback_from_version": row.version,
+        "rollback_at": datetime.utcnow().isoformat(),
+        "rollback_by": current_user.username,
+        "rollback_note": note,
+    }
+    dataset_version = create_dataset_version_record(
+        db,
+        asset=rollback_asset,
+        dataset_label=row.dataset_label,
+        dataset_key=row.dataset_key,
+        asset_purpose=target_purpose,
+        source_type="rollback",
+        summary=rollback_summary,
+        created_by=current_user.id,
+    )
+
+    record_audit(
+        db,
+        action=actions.DATASET_VERSION_ROLLBACK,
+        resource_type="dataset_version",
+        resource_id=dataset_version.id,
+        detail={
+            "dataset_key": row.dataset_key,
+            "dataset_label": row.dataset_label,
+            "rollback_from_version_id": row.id,
+            "rollback_from_version": row.version,
+            "rollback_to_version_id": dataset_version.id,
+            "rollback_to_version": dataset_version.version,
+            "asset_id": rollback_asset.id,
+            "asset_purpose": target_purpose,
+            "note": note,
+        },
+        request=request,
+        actor=current_user,
+    )
+    db.commit()
+    db.refresh(dataset_version)
+    db.refresh(rollback_asset)
+    buyer = db.query(Tenant).filter(Tenant.id == dataset_version.buyer_tenant_id).first() if dataset_version.buyer_tenant_id else None
+    return {
+        "dataset_version": _serialize_dataset_version(dataset_version, asset=rollback_asset, buyer=buyer),
+        "rolled_back_from": _serialize_dataset_version(row, asset=asset, buyer=buyer),
+    }
 
 
 @router.get("/dataset-versions/{version_id}/preview")

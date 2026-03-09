@@ -1,8 +1,46 @@
 from functools import lru_cache
-from pydantic import Field
+from pathlib import Path
+
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.brand import BACKEND_APP_NAME, DATABASE_NAME
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _default_repo_path(*parts: str) -> str:
+    return str((PROJECT_ROOT.joinpath(*parts)).resolve())
+
+
+def _normalize_runtime_path(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return text
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        path = (PROJECT_ROOT / path).resolve()
+    else:
+        path = path.resolve()
+    return str(path)
+
+
+def _ensure_runtime_path_inside_workspace(raw: str, *, label: str) -> str:
+    normalized = Path(_normalize_runtime_path(raw))
+    allowed_roots = [PROJECT_ROOT.resolve()]
+
+    # Docker runtime mounts the backend repo under /app, keep that path valid.
+    docker_root = Path("/app")
+    if docker_root.exists():
+        allowed_roots.append(docker_root.resolve())
+
+    for root in allowed_roots:
+        try:
+            normalized.relative_to(root)
+            return str(normalized)
+        except ValueError:
+            continue
+    raise ValueError(f"{label} must stay inside RVision workspace or /app runtime mount: {normalized}")
 
 
 class Settings(BaseSettings):
@@ -19,8 +57,8 @@ class Settings(BaseSettings):
     jwt_algorithm: str = Field(default="HS256", description="JWT 算法 / JWT signing algorithm")
     jwt_expires_minutes: int = Field(default=120, description="JWT 过期分钟数 / JWT expiration in minutes")
 
-    model_repo_path: str = Field(default="/app/app/models_repo", description="模型仓库存储路径 / Model repository path")
-    asset_repo_path: str = Field(default="/app/app/uploads", description="资产存储路径 / Uploaded asset storage path")
+    model_repo_path: str = Field(default=_default_repo_path("backend", "app", "models_repo"), description="模型仓库存储路径 / Model repository path")
+    asset_repo_path: str = Field(default=_default_repo_path("backend", "app", "uploads"), description="资产存储路径 / Uploaded asset storage path")
     asset_upload_max_bytes: int = Field(
         default=268435456,
         description="单个资产上传大小上限（字节） / Max size in bytes for a single uploaded asset",
@@ -39,8 +77,26 @@ class Settings(BaseSettings):
     )
 
     audit_export_enabled: bool = Field(default=True, description="是否启用审计导出 / Enable audit export or not")
+    training_worker_stale_seconds: int = Field(
+        default=300,
+        description="训练 Worker 判定为心跳超时的秒数 / Seconds before a training worker is considered stale",
+    )
+    training_dispatch_timeout_seconds: int = Field(
+        default=900,
+        description="训练作业从派发到开始执行的最长秒数 / Max seconds allowed between dispatch and start",
+    )
+    training_running_timeout_seconds: int = Field(
+        default=14400,
+        description="训练作业 RUNNING 状态允许的最长秒数 / Max seconds allowed for a RUNNING training job",
+    )
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False)
+
+    @model_validator(mode="after")
+    def _normalize_storage_paths(self) -> "Settings":
+        self.model_repo_path = _ensure_runtime_path_inside_workspace(self.model_repo_path, label="model_repo_path")
+        self.asset_repo_path = _ensure_runtime_path_inside_workspace(self.asset_repo_path, label="asset_repo_path")
+        return self
 
 
 @lru_cache
