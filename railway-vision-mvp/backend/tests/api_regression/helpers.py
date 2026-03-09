@@ -35,7 +35,13 @@ class ApiRegressionHelper(unittest.TestCase):
     def setUpClass(cls) -> None:
         super().setUpClass()
         cls.api_base = os.getenv(API_BASE_ENV, DEFAULT_API_BASE).rstrip("/")
-        cls.client = httpx.Client(base_url=cls.api_base, timeout=60.0, verify=False, follow_redirects=True)
+        cls.client = httpx.Client(
+            base_url=cls.api_base,
+            timeout=60.0,
+            verify=False,
+            follow_redirects=True,
+            trust_env=False,
+        )
         health = cls.client.get("/health")
         if health.status_code != 200:
             raise RuntimeError(f"backend health check failed: {health.status_code} {health.text}")

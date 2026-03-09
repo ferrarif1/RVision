@@ -363,6 +363,36 @@ function summarizeResultRow(row) {
   const scores = predictions.map((item) => Number(item?.score)).filter((value) => Number.isFinite(value));
   const avgScore = scores.length ? scores.reduce((sum, value) => sum + value, 0) / scores.length : null;
   const durationMs = Number(row?.duration_ms ?? resultJson?.metrics?.duration_ms ?? summary?.metrics?.duration_ms);
+  const taskType = String(resultJson.task_type || summary.task_type || '-');
+  const primaryPrediction = predictions[0] || null;
+  const ocrText = recognizedTexts[0] || '';
+  const ocrConfidenceRaw = Number(resultJson.confidence ?? summary.confidence ?? primaryPrediction?.score);
+  const ocrConfidence = Number.isFinite(ocrConfidenceRaw) ? ocrConfidenceRaw : null;
+  const ocrEngine = String(resultJson.engine || summary.engine || primaryPrediction?.attributes?.engine || '').trim() || null;
+  const ocrBBox = normalizeReviewBBox(resultJson.bbox || summary.bbox || primaryPrediction?.bbox);
+  const ocrRisk = taskType !== 'car_number_ocr'
+    ? null
+    : !ocrText
+      ? 'high'
+      : ocrConfidence == null
+        ? 'warning'
+        : ocrConfidence < 0.6
+          ? 'warning'
+          : 'ok';
+  const ocrRiskLabel = !ocrRisk
+    ? ''
+    : ocrRisk === 'high'
+      ? '需要复核'
+      : ocrRisk === 'warning'
+        ? '低置信度'
+        : '结果稳定';
+  const ocrRiskSummary = !ocrRisk
+    ? ''
+    : ocrRisk === 'high'
+      ? '当前没有稳定 OCR 文本，建议人工框选或重新复核。'
+      : ocrRisk === 'warning'
+        ? '当前已识别出车号文本，但置信度偏低，建议人工复核后再用于训练或验收。'
+        : '当前 OCR 文本和置信度均达到可直接浏览的水平。';
   return {
     row,
     resultJson,
@@ -371,10 +401,17 @@ function summarizeResultRow(row) {
     recognizedTexts,
     labelCounts,
     stage: String(resultJson.stage || summary.stage || '-'),
-    taskType: String(resultJson.task_type || summary.task_type || '-'),
+    taskType,
     objectCount: Number(resultJson.object_count ?? summary.object_count ?? predictions.length ?? 0) || 0,
     avgScore,
     durationMs: Number.isFinite(durationMs) ? durationMs : null,
+    ocrText,
+    ocrConfidence,
+    ocrEngine,
+    ocrBBox,
+    ocrRisk,
+    ocrRiskLabel,
+    ocrRiskSummary,
   };
 }
 
@@ -401,6 +438,28 @@ function renderResultConfidenceBars(predictions) {
         </div>
       `).join('')}
     </div>
+  `;
+}
+
+function renderResultOcrSignal(item) {
+  if (item?.taskType !== 'car_number_ocr') return '';
+  const riskClass = item.ocrRisk || 'warning';
+  return `
+    <section class="result-ocr-signal result-risk-${esc(riskClass)}">
+      <div class="result-panel-head">
+        <div>
+          <strong>OCR 风险提示</strong>
+          <p>${esc(item.ocrRiskSummary || '当前识别结果建议人工复核。')}</p>
+        </div>
+        <span class="risk-pill ${esc(riskClass)}">${esc(item.ocrRiskLabel || '待确认')}</span>
+      </div>
+      <div class="result-ocr-grid">
+        <div><span>文本</span><strong>${esc(item.ocrText || '-')}</strong></div>
+        <div><span>confidence</span><strong>${esc(formatMetricValue(item.ocrConfidence, { percent: true }))}</strong></div>
+        <div><span>engine</span><strong>${esc(item.ocrEngine || '-')}</strong></div>
+        <div><span>bbox</span><strong>${esc(item.ocrBBox?.join(', ') || '-')}</strong></div>
+      </div>
+    </section>
   `;
 }
 
@@ -5496,6 +5555,7 @@ function buildResultListHtml(rows, modelInsights = {}) {
                   `
                 : ''
             }
+            ${renderResultOcrSignal(item)}
             <div class="result-card-grid">
               ${
                 row._screenshot_preview_url

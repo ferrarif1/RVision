@@ -417,14 +417,81 @@ def _dedupe_rois(rois: list[list[int]], *, limit: int = 6) -> list[list[int]]:
     return deduped
 
 
+def _detect_text_band_rois(frame: np.ndarray) -> list[list[int]]:
+    h, w = frame.shape[:2]
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    y1 = int(h * 0.14)
+    y2 = int(h * 0.5)
+    x1 = int(w * 0.12)
+    x2 = int(w * 0.82)
+    search = gray[y1:y2, x1:x2]
+    if not search.size:
+        return []
+
+    rect = cv2.getStructuringElement(cv2.MORPH_RECT, (17, 3))
+    tophat = cv2.morphologyEx(search, cv2.MORPH_TOPHAT, rect)
+    threshold = max(20, int(np.percentile(tophat, 95)))
+    _, mask = cv2.threshold(tophat, threshold, 255, cv2.THRESH_BINARY)
+    mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_RECT, (9, 3)), iterations=1)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    rois: list[list[int]] = []
+    for contour in contours:
+        x, y, bw, bh = cv2.boundingRect(contour)
+        if bw < int(w * 0.12) or bh < int(h * 0.018):
+            continue
+        if bh > int(h * 0.14) or (bw / max(bh, 1)) < 2.4:
+            continue
+        abs_x1 = x1 + x
+        abs_y1 = y1 + y
+        abs_x2 = abs_x1 + bw
+        abs_y2 = abs_y1 + bh
+        top_bias_pad_top = max(4, int(bh * 0.08))
+        top_bias_pad_right = max(3, int(bw * 0.02))
+        top_bias_pad_bottom = max(3, int(bh * 0.08))
+        wide_pad_x = max(10, int(bw * 0.1))
+        wide_pad_top = max(5, int(bh * 0.18))
+        wide_pad_bottom = max(6, int(bh * 0.16))
+        rois.append(
+            [
+                abs_x1,
+                max(0, abs_y1 - top_bias_pad_top),
+                min(w, abs_x2 + top_bias_pad_right),
+                min(h, abs_y2 + top_bias_pad_bottom),
+            ]
+        )
+        rois.append(
+            [
+                abs_x1,
+                abs_y1,
+                abs_x2,
+                abs_y2,
+            ]
+        )
+        rois.append(
+            [
+                max(0, abs_x1 - wide_pad_x),
+                max(0, abs_y1 - wide_pad_top),
+                min(w, abs_x2 + wide_pad_x),
+                min(h, abs_y2 + wide_pad_bottom),
+            ]
+        )
+    return rois
+
+
 def _candidate_car_number_rois(frame: np.ndarray) -> list[list[int]]:
     h, w = frame.shape[:2]
     rois = [
+        [int(w * 0.28), int(h * 0.28), int(w * 0.65), int(h * 0.4)],
+        [int(w * 0.26), int(h * 0.27), int(w * 0.67), int(h * 0.4)],
+        [int(w * 0.22), int(h * 0.24), int(w * 0.7), int(h * 0.42)],
+        [int(w * 0.18), int(h * 0.22), int(w * 0.72), int(h * 0.44)],
         [int(w * 0.08), int(h * 0.2), int(w * 0.56), int(h * 0.48)],
         [int(w * 0.12), int(h * 0.24), int(w * 0.62), int(h * 0.52)],
         [int(w * 0.18), int(h * 0.3), int(w * 0.68), int(h * 0.56)],
         [int(w * 0.2), int(h * 0.35), int(w * 0.8), int(h * 0.55)],
     ]
+    rois = _detect_text_band_rois(frame) + rois
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     search = gray[: int(h * 0.65), : int(w * 0.75)]
     if search.size:
@@ -511,8 +578,11 @@ def _run_car_number_ocr(frame: np.ndarray, file_name: str, *, force_mock_ocr: bo
             if tesseract_result:
                 ocr_candidates.append((tesseract_result[0], tesseract_result[1], f"tesseract:{variant_name}"))
         for raw_text, confidence, engine in ocr_candidates:
+            normalized_raw_text = _clean_car_number_text(raw_text)
             for candidate_text in _candidate_car_number_texts(raw_text):
                 quality = _score_car_number_text(candidate_text, confidence)
+                if candidate_text != normalized_raw_text:
+                    quality -= 0.08
                 if quality > best_quality:
                     best_quality = quality
                     best_candidate = {
