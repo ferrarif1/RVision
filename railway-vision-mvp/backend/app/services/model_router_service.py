@@ -282,6 +282,10 @@ def _keyword_matches(task_type: str, texts: list[str]) -> set[str]:
     return matches
 
 
+def _is_canonical_task_model(model: ModelRecord, task_type: str) -> bool:
+    return str(model.model_code or "").strip() == str(task_type or "").strip()
+
+
 def _build_summary(
     *,
     requested_task_type: str | None,
@@ -347,6 +351,13 @@ def recommend_small_models(
 
         reasons: list[str] = []
         score = 0
+
+        if _is_canonical_task_model(model, task_type):
+            score += 28
+            reasons.append("标准任务模型编码与任务类型一致")
+        else:
+            score -= 14
+            reasons.append("候选模型编码与标准任务类型不一致")
 
         if inferred_task_type and task_type == inferred_task_type:
             score += 70
@@ -450,5 +461,8 @@ def latest_schedulable_models_by_task_type(
         current_exact_match = current.model_code == task_type
         next_exact_match = model.model_code == task_type
         if next_exact_match and not current_exact_match:
+            latest[task_type] = candidate
+            continue
+        if next_exact_match == current_exact_match and (candidate.created_at or datetime.min) > (current.created_at or datetime.min):
             latest[task_type] = candidate
     return latest

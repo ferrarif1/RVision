@@ -1748,6 +1748,9 @@ function pageTraining(route, rawCtx) {
       <section class="card">
         <h2>训练中心</h2>
         <p>${esc(introText)}</p>
+        <div class="row-actions">
+          <button id="openCarNumberLabeling" class="ghost" type="button">打开车号文本复核</button>
+        </div>
       </section>
       <section class="card">
         <h3>运行告警</h3>
@@ -1899,6 +1902,7 @@ function pageTraining(route, rawCtx) {
       }
     `,
     async mount(root) {
+      root.querySelector('#openCarNumberLabeling')?.addEventListener('click', () => ctx.navigate('training/car-number-labeling'));
       const jobsWrap = root.querySelector('#trainingJobsTableWrap');
       const workersWrap = root.querySelector('#trainingWorkersWrap');
       const filterForm = root.querySelector('#trainingFilterForm');
@@ -1927,9 +1931,11 @@ function pageTraining(route, rawCtx) {
       const datasetPreviewWrap = root.querySelector('#trainingDatasetPreviewWrap');
       const selectionSummary = root.querySelector('#trainingSelectionSummary');
       const prefillTrainingAssetIds = localStorage.getItem(STORAGE_KEYS.prefillTrainingAssetIds);
+      const prefillTrainingValidationAssetIds = localStorage.getItem(STORAGE_KEYS.prefillTrainingValidationAssetIds);
       const prefillTrainingDatasetLabel = localStorage.getItem(STORAGE_KEYS.prefillTrainingDatasetLabel);
       let prefillTrainingDatasetVersionId = localStorage.getItem(STORAGE_KEYS.prefillTrainingDatasetVersionId);
       const prefillTrainingTargetModelCode = localStorage.getItem(STORAGE_KEYS.prefillTrainingTargetModelCode);
+      const requestedFocusTrainingJobId = localStorage.getItem(STORAGE_KEYS.focusTrainingJobId);
       const assetIdsInput = createForm?.querySelector('input[name="asset_ids"]');
       const validationAssetIdsInput = createForm?.querySelector('input[name="validation_asset_ids"]');
       const baseModelInput = createForm?.querySelector('input[name="base_model_id"]');
@@ -1958,13 +1964,15 @@ function pageTraining(route, rawCtx) {
         datasetRecommendedOnly: false,
       };
 
-      if (createForm && (prefillTrainingAssetIds || prefillTrainingDatasetVersionId)) {
+      if (createForm && (prefillTrainingAssetIds || prefillTrainingValidationAssetIds || prefillTrainingDatasetVersionId)) {
         if (assetIdsInput && prefillTrainingAssetIds) assetIdsInput.value = prefillTrainingAssetIds;
+        if (validationAssetIdsInput && prefillTrainingValidationAssetIds) validationAssetIdsInput.value = prefillTrainingValidationAssetIds;
         if (targetModelCodeInput && prefillTrainingTargetModelCode) targetModelCodeInput.value = prefillTrainingTargetModelCode;
         if (createMsg) {
-          createMsg.textContent = `已预填来自快速识别的数据集资产：${prefillTrainingAssetIds || '-'}${prefillTrainingDatasetLabel ? ` · ${prefillTrainingDatasetLabel}` : ''}${prefillTrainingDatasetVersionId ? ` · ${prefillTrainingDatasetVersionId}` : ''}`;
+          createMsg.textContent = `已预填 OCR 文本训练资产：train ${prefillTrainingAssetIds || '-'} / validation ${prefillTrainingValidationAssetIds || '-'}${prefillTrainingDatasetLabel ? ` · ${prefillTrainingDatasetLabel}` : ''}${prefillTrainingDatasetVersionId ? ` · ${prefillTrainingDatasetVersionId}` : ''}`;
         }
         localStorage.removeItem(STORAGE_KEYS.prefillTrainingAssetIds);
+        localStorage.removeItem(STORAGE_KEYS.prefillTrainingValidationAssetIds);
         localStorage.removeItem(STORAGE_KEYS.prefillTrainingDatasetLabel);
         localStorage.removeItem(STORAGE_KEYS.prefillTrainingDatasetVersionId);
         localStorage.removeItem(STORAGE_KEYS.prefillTrainingTargetModelCode);
@@ -2400,7 +2408,10 @@ function pageTraining(route, rawCtx) {
             training_kind: fd.get('training_kind'),
           });
           cachedTrainingJobs = await ctx.get(`/training/jobs${query}`);
-          if (!activeTrainingJobId || !cachedTrainingJobs.some((row) => row.id === activeTrainingJobId)) {
+          if (requestedFocusTrainingJobId && cachedTrainingJobs.some((row) => row.id === requestedFocusTrainingJobId)) {
+            activeTrainingJobId = requestedFocusTrainingJobId;
+            localStorage.removeItem(STORAGE_KEYS.focusTrainingJobId);
+          } else if (!activeTrainingJobId || !cachedTrainingJobs.some((row) => row.id === activeTrainingJobId)) {
             activeTrainingJobId = pickDefaultTrainingJob(cachedTrainingJobs)?.id || '';
           }
           renderTrainingJobTable(cachedTrainingJobs);
@@ -3244,6 +3255,512 @@ function pageTraining(route, rawCtx) {
       });
 
       await Promise.all([loadJobTable(), loadWorkers(), loadFormAssistData()]);
+    },
+  };
+}
+
+function pageCarNumberLabeling(route, rawCtx) {
+  const ctx = makeContext(route, rawCtx);
+  return {
+    html: `
+      <section class="card">
+        <h2>车号文本复核</h2>
+        <p>直接浏览 <code>demo_data/train</code> 裁剪出来的车号 crop，接受或修正 OCR 建议，并把复核结果回写到标注清单。</p>
+        <form id="carNumberLabelingFilterForm" class="section-toolbar compact">
+          <input id="carNumberLabelingSearch" name="q" placeholder="搜索 sample_id / 源文件 / 建议文本" />
+          <select id="carNumberLabelingStatus" name="review_status">
+            <option value="">全部状态</option>
+            <option value="pending">pending</option>
+            <option value="done">done</option>
+            <option value="needs_check">needs_check</option>
+          </select>
+          <select id="carNumberLabelingSplit" name="split_hint">
+            <option value="">全部切分</option>
+            <option value="train">train</option>
+            <option value="validation">validation</option>
+          </select>
+          <label class="checkbox-row"><input id="carNumberOnlyMissingFinal" type="checkbox" /> 仅看未补 final_text</label>
+          <label class="checkbox-row"><input id="carNumberOnlyWithSuggestion" type="checkbox" /> 仅看有建议</label>
+          <button class="ghost" type="submit">刷新列表</button>
+        </form>
+        <div class="row-actions review-toolbar">
+          <button id="presetCarNumberTodo" class="ghost" type="button">只看待处理</button>
+          <button id="presetCarNumberNeedsCheck" class="ghost" type="button">只看 needs_check</button>
+          <button id="presetCarNumberReset" class="ghost" type="button">重置筛选</button>
+        </div>
+        <div class="row-actions review-toolbar">
+          <label class="checkbox-row"><input id="carNumberAllowSuggestionsExport" type="checkbox" /> 导出时允许建议值补空</label>
+          <button id="exportCarNumberTextDataset" class="ghost" type="button">导出 OCR 文本训练包</button>
+          <button id="exportCarNumberTextAssets" class="primary" type="button">导出并送训练中心</button>
+          <button id="exportCarNumberTrainingJob" class="ghost" type="button">导出并创建训练作业</button>
+          <span class="hint">快捷键：<code>Ctrl/Cmd+S</code> 保存，<code>Alt+↑/↓</code> 切换上一条/下一条</span>
+        </div>
+        <div id="carNumberLabelingExportMsg" class="hint"></div>
+        <div id="carNumberLabelingSummaryWrap">${renderLoading('加载复核摘要...')}</div>
+      </section>
+      <section class="grid-two">
+        <section class="card">
+          <div id="carNumberLabelingListMeta" class="hint"></div>
+          <div id="carNumberLabelingListWrap">${renderLoading('加载待复核样本...')}</div>
+        </section>
+        <section class="card">
+          <div id="carNumberLabelingDetailWrap">${renderEmpty('从左侧选择一个样本开始复核')}</div>
+        </section>
+      </section>
+    `,
+    async mount(root) {
+      const filterForm = root.querySelector('#carNumberLabelingFilterForm');
+      const summaryWrap = root.querySelector('#carNumberLabelingSummaryWrap');
+      const listMeta = root.querySelector('#carNumberLabelingListMeta');
+      const listWrap = root.querySelector('#carNumberLabelingListWrap');
+      const detailWrap = root.querySelector('#carNumberLabelingDetailWrap');
+      const searchInput = root.querySelector('#carNumberLabelingSearch');
+      const statusInput = root.querySelector('#carNumberLabelingStatus');
+      const splitInput = root.querySelector('#carNumberLabelingSplit');
+      const onlyMissingFinalInput = root.querySelector('#carNumberOnlyMissingFinal');
+      const onlyWithSuggestionInput = root.querySelector('#carNumberOnlyWithSuggestion');
+      const presetTodoBtn = root.querySelector('#presetCarNumberTodo');
+      const presetNeedsCheckBtn = root.querySelector('#presetCarNumberNeedsCheck');
+      const presetResetBtn = root.querySelector('#presetCarNumberReset');
+      const exportAllowSuggestionsInput = root.querySelector('#carNumberAllowSuggestionsExport');
+      const exportBtn = root.querySelector('#exportCarNumberTextDataset');
+      const exportAssetsBtn = root.querySelector('#exportCarNumberTextAssets');
+      const exportTrainingJobBtn = root.querySelector('#exportCarNumberTrainingJob');
+      const exportMsg = root.querySelector('#carNumberLabelingExportMsg');
+      let selectedSampleId = '';
+      let currentItems = [];
+      let currentPreviewUrl = '';
+      let activeSaveRequest = null;
+
+      function revokePreviewUrl() {
+        if (currentPreviewUrl) URL.revokeObjectURL(currentPreviewUrl);
+        currentPreviewUrl = '';
+      }
+
+      function currentFilters() {
+        return {
+          q: String(searchInput?.value || '').trim(),
+          review_status: String(statusInput?.value || '').trim(),
+          split_hint: String(splitInput?.value || '').trim(),
+          has_final_text: onlyMissingFinalInput?.checked ? 'false' : '',
+          has_suggestion: onlyWithSuggestionInput?.checked ? 'true' : '',
+          limit: 120,
+        };
+      }
+
+      function renderSummary(summary) {
+        const reviewCounts = summary?.review_status_counts || {};
+        const latestExport = summary?.latest_export || null;
+        const latestTrainCount = latestExport?.bundles?.train?.sample_count ?? 0;
+        const latestValidationCount = latestExport?.bundles?.validation?.sample_count ?? 0;
+        const latestSourceLabel = Object.entries(latestExport?.text_sources || {})
+          .map(([key, value]) => `${key} ${value}`)
+          .join(' / ');
+        return `
+          <div class="result-overview-grid">
+            <article class="metric-card">
+              <h4>总样本</h4>
+              <p class="metric">${esc(summary?.annotated_rows ?? '-')}</p>
+              <span>当前车号文本复核队列中的 crop 数量</span>
+            </article>
+            <article class="metric-card">
+              <h4>已有建议</h4>
+              <p class="metric">${esc(summary?.suggestion_rows ?? '-')}</p>
+              <span>${esc(summary?.suggestion_ratio != null ? `${Math.round(Number(summary.suggestion_ratio) * 100)}%` : '-')}</span>
+            </article>
+            <article class="metric-card">
+              <h4>已补真值</h4>
+              <p class="metric">${esc(summary?.final_text_rows ?? '-')}</p>
+              <span>${esc(summary?.final_text_ratio != null ? `${Math.round(Number(summary.final_text_ratio) * 100)}%` : '-')}</span>
+            </article>
+            <article class="metric-card">
+              <h4>复核状态</h4>
+              <p class="metric">${esc(reviewCounts.done ?? 0)}</p>
+              <span>${esc(`pending ${reviewCounts.pending ?? 0} / needs_check ${reviewCounts.needs_check ?? 0}`)}</span>
+            </article>
+            <article class="metric-card">
+              <h4>最近导出</h4>
+              <p class="metric">${esc(latestExport?.accepted_rows ?? 0)}</p>
+              <span>${esc(latestExport ? `train ${latestTrainCount} / validation ${latestValidationCount}` : '还没有导出记录')}</span>
+            </article>
+          </div>
+          ${
+            latestExport
+              ? `<div class="hint">最近导出：${esc(formatDateTime(latestExport.generated_at) || '-')} · ${esc(latestSourceLabel || '无来源拆分统计')} · 输出 ${esc(latestExport.output_dir || '-')}</div>`
+              : ''
+          }
+        `;
+      }
+
+      function renderList(payload) {
+        const items = payload?.items || [];
+        if (!items.length) return renderEmpty('当前筛选条件下没有样本');
+        return `
+          <div class="text-review-list">
+            ${items.map((item) => `
+              <button class="text-review-item ${selectedSampleId === item.sample_id ? 'active' : ''}" type="button" data-labeling-sample="${esc(item.sample_id)}">
+                <div class="text-review-item-head">
+                  <strong>${esc(item.sample_id)}</strong>
+                  <span class="badge">${esc(item.review_status)}</span>
+                </div>
+                <div class="text-review-item-meta">${esc(item.source_file || '-')}</div>
+                <div class="text-review-item-badges">
+                  ${item.ocr_suggestion ? `<span class="badge">${esc(`建议 ${item.ocr_suggestion}`)}</span>` : '<span class="badge">无建议</span>'}
+                  ${item.final_text ? `<span class="badge">${esc(`真值 ${item.final_text}`)}</span>` : ''}
+                  ${item.split_hint ? `<span class="badge">${esc(item.split_hint)}</span>` : ''}
+                </div>
+              </button>
+            `).join('')}
+          </div>
+        `;
+      }
+
+      function renderDetail(item) {
+        if (!item) {
+          detailWrap.innerHTML = renderEmpty('从左侧选择一个样本开始复核');
+          return;
+        }
+        detailWrap.innerHTML = `
+          <div class="text-review-detail">
+            <div class="text-review-preview">
+              ${
+                currentPreviewUrl
+                  ? `<img src="${esc(currentPreviewUrl)}" alt="车号 crop 预览" />`
+                  : `<div class="text-review-preview-empty">${renderLoading('加载 crop 预览...')}</div>`
+              }
+            </div>
+            <form id="carNumberReviewForm" class="form-grid">
+              <div class="selection-summary">
+                <strong>${esc(item.sample_id)}</strong>
+                <span>${esc(item.source_file || '-')}</span>
+              </div>
+              <div class="keyvals compact">
+                <div><span>split</span><strong>${esc(item.split_hint || '-')}</strong></div>
+                <div><span>review_status</span><strong>${esc(item.review_status || '-')}</strong></div>
+                <div><span>bbox</span><strong>${esc((item.bbox || []).join(', ') || '-')}</strong></div>
+                <div><span>engine</span><strong>${esc(item.ocr_suggestion_engine || '-')}</strong></div>
+              </div>
+              <label>ocr_suggestion(模型建议)</label>
+              <input value="${esc(item.ocr_suggestion || '')}" disabled />
+              <div class="hint">confidence=${esc(item.ocr_suggestion_confidence || '-')} · quality=${esc(item.ocr_suggestion_quality || '-')}</div>
+              <label>final_text(人工确认文本)</label>
+              <input id="carNumberFinalText" name="final_text" value="${esc(item.final_text || '')}" placeholder="输入最终车号文本" />
+              <label>review_status(复核状态)</label>
+              <select name="review_status">
+                <option value="pending" ${item.review_status === 'pending' ? 'selected' : ''}>pending</option>
+                <option value="done" ${item.review_status === 'done' ? 'selected' : ''}>done</option>
+                <option value="needs_check" ${item.review_status === 'needs_check' ? 'selected' : ''}>needs_check</option>
+              </select>
+              <label>reviewer(复核人)</label>
+              <input name="reviewer" value="${esc(item.reviewer || ctx.state.user?.username || '')}" />
+              <label>notes(备注)</label>
+              <textarea name="notes" rows="3" placeholder="记录特殊情况、模糊字符、需要复查的原因">${esc(item.notes || '')}</textarea>
+              <div class="row-actions">
+                <button id="acceptCarNumberSuggestion" class="ghost" type="button" ${item.ocr_suggestion ? '' : 'disabled'}>采用建议</button>
+                <button id="clearCarNumberFinalText" class="ghost" type="button">清空 final_text</button>
+              </div>
+              <div class="row-actions">
+                <button id="selectPrevCarNumberReview" class="ghost" type="button">上一条</button>
+                <button id="selectNextCarNumberReview" class="ghost" type="button">下一条</button>
+              </div>
+              <div class="row-actions">
+                <button class="primary" type="submit">保存复核</button>
+                <button id="saveAndNextCarNumberReview" class="ghost" type="button">保存并下一条</button>
+              </div>
+              <div id="carNumberReviewMsg" class="hint"></div>
+            </form>
+          </div>
+        `;
+        const finalTextInput = detailWrap.querySelector('#carNumberFinalText');
+        detailWrap.querySelector('#acceptCarNumberSuggestion')?.addEventListener('click', () => {
+          if (finalTextInput) finalTextInput.value = item.ocr_suggestion || '';
+        });
+        detailWrap.querySelector('#clearCarNumberFinalText')?.addEventListener('click', () => {
+          if (finalTextInput) finalTextInput.value = '';
+        });
+        detailWrap.querySelector('#selectPrevCarNumberReview')?.addEventListener('click', async () => {
+          await selectRelativeItem(-1);
+        });
+        detailWrap.querySelector('#selectNextCarNumberReview')?.addEventListener('click', async () => {
+          await selectRelativeItem(1);
+        });
+        detailWrap.querySelector('#saveAndNextCarNumberReview')?.addEventListener('click', async () => {
+          const form = detailWrap.querySelector('#carNumberReviewForm');
+          if (!form) return;
+          await submitReview(form, { moveNext: true });
+        });
+        detailWrap.querySelector('#carNumberReviewForm')?.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          await submitReview(event.currentTarget, { moveNext: false });
+        });
+      }
+
+      async function loadPreview(sampleId) {
+        revokePreviewUrl();
+        try {
+          currentPreviewUrl = await fetchAuthorizedBlobUrl(`/training/car-number-labeling/items/${sampleId}/crop`, ctx.token);
+        } catch {
+          currentPreviewUrl = '';
+        }
+      }
+
+      async function selectItem(sampleId) {
+        selectedSampleId = sampleId;
+        const item = currentItems.find((row) => row.sample_id === sampleId) || null;
+        renderDetail(item);
+        if (!item) return;
+        await loadPreview(sampleId);
+        if (selectedSampleId === sampleId) renderDetail(item);
+        listWrap.innerHTML = renderList({ items: currentItems });
+        bindListClicks();
+      }
+
+      function bindListClicks() {
+        listWrap.querySelectorAll('[data-labeling-sample]').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            await selectItem(btn.getAttribute('data-labeling-sample') || '');
+          });
+        });
+      }
+
+      async function selectRelativeItem(step) {
+        if (!currentItems.length) return;
+        const currentIndex = currentItems.findIndex((item) => item.sample_id === selectedSampleId);
+        const baseIndex = currentIndex >= 0 ? currentIndex : 0;
+        const nextIndex = (baseIndex + step + currentItems.length) % currentItems.length;
+        const nextItem = currentItems[nextIndex];
+        if (nextItem) await selectItem(nextItem.sample_id);
+      }
+
+      function activeReviewForm() {
+        return detailWrap.querySelector('#carNumberReviewForm');
+      }
+
+      function preferredOpenItem(items, currentId = '') {
+        if (currentId && items.some((item) => item.sample_id === currentId)) return currentId;
+        const unresolved = items.find((item) => item.review_status !== 'done' || !item.has_final_text);
+        return unresolved?.sample_id || items[0]?.sample_id || '';
+      }
+
+      async function loadSummary() {
+        summaryWrap.innerHTML = renderLoading('加载复核摘要...');
+        try {
+          const summary = await ctx.get('/training/car-number-labeling/summary');
+          summaryWrap.innerHTML = renderSummary(summary);
+        } catch (error) {
+          summaryWrap.innerHTML = renderError(error.message);
+        }
+      }
+
+      async function loadItems({ preserveSelection = true } = {}) {
+        listWrap.innerHTML = renderLoading('加载待复核样本...');
+        detailWrap.innerHTML = renderLoading('加载样本详情...');
+        try {
+          const payload = await ctx.get(`/training/car-number-labeling/items${toQuery(currentFilters())}`);
+          currentItems = payload?.items || [];
+          listMeta.textContent = `当前列表 ${currentItems.length} / ${payload?.total ?? 0}`;
+          listWrap.innerHTML = renderList(payload);
+          bindListClicks();
+          const nextSampleId = preserveSelection
+            ? preferredOpenItem(currentItems, selectedSampleId)
+            : preferredOpenItem(currentItems);
+          if (nextSampleId) {
+            await selectItem(nextSampleId);
+          } else {
+            selectedSampleId = '';
+            revokePreviewUrl();
+            renderDetail(null);
+          }
+        } catch (error) {
+          listWrap.innerHTML = renderError(error.message);
+          detailWrap.innerHTML = renderEmpty('列表加载失败，无法展示复核详情');
+        }
+      }
+
+      async function submitReview(form, { moveNext = false } = {}) {
+        if (!selectedSampleId) return null;
+        const msg = detailWrap.querySelector('#carNumberReviewMsg');
+        const formData = new FormData(form);
+        const payload = {
+          final_text: String(formData.get('final_text') || '').trim().toUpperCase(),
+          review_status: String(formData.get('review_status') || 'pending').trim() || 'pending',
+          reviewer: String(formData.get('reviewer') || '').trim(),
+          notes: String(formData.get('notes') || '').trim(),
+        };
+        if (msg) msg.textContent = '保存中...';
+        try {
+          activeSaveRequest = ctx.post(`/training/car-number-labeling/items/${selectedSampleId}/review`, payload);
+          const data = await activeSaveRequest;
+          ctx.toast('复核已保存');
+          await Promise.all([loadSummary(), loadItems({ preserveSelection: true })]);
+          if (moveNext && currentItems.length > 1) {
+            const currentIndex = currentItems.findIndex((item) => item.sample_id === data?.item?.sample_id);
+            const pendingAfter = currentItems
+              .slice(currentIndex + 1)
+              .concat(currentItems.slice(0, currentIndex + 1))
+              .find((item) => item.review_status !== 'done' || !item.has_final_text);
+            const nextItem = pendingAfter || currentItems[(currentIndex + 1) % currentItems.length];
+            if (nextItem) await selectItem(nextItem.sample_id);
+          }
+          if (msg) msg.textContent = '保存成功';
+          return data;
+        } catch (error) {
+          if (msg) msg.textContent = error.message || '保存失败';
+          throw error;
+        } finally {
+          activeSaveRequest = null;
+        }
+      }
+
+      async function exportTextDataset() {
+        if (!exportBtn || !exportMsg) return;
+        exportBtn.disabled = true;
+        if (exportAssetsBtn) exportAssetsBtn.disabled = true;
+        if (exportTrainingJobBtn) exportTrainingJobBtn.disabled = true;
+        exportMsg.textContent = '正在导出 OCR 文本训练包...';
+        try {
+          const payload = await ctx.post('/training/car-number-labeling/export-text-dataset', {
+            allow_suggestions: !!exportAllowSuggestionsInput?.checked,
+          });
+          const trainCount = payload?.bundles?.train?.sample_count ?? 0;
+          const validationCount = payload?.bundles?.validation?.sample_count ?? 0;
+          exportMsg.textContent = `导出完成：train ${trainCount}，validation ${validationCount}。输出目录 ${payload?.output_dir || '-'}`;
+          ctx.toast('OCR 文本训练包已导出');
+        } catch (error) {
+          exportMsg.textContent = error.message || '导出失败';
+          ctx.toast(error.message || '导出失败', 'error');
+        } finally {
+          exportBtn.disabled = false;
+          if (exportAssetsBtn) exportAssetsBtn.disabled = false;
+          if (exportTrainingJobBtn) exportTrainingJobBtn.disabled = false;
+        }
+      }
+
+      async function exportAssetsToTraining() {
+        if (!exportAssetsBtn || !exportMsg) return;
+        exportBtn.disabled = true;
+        exportAssetsBtn.disabled = true;
+        if (exportTrainingJobBtn) exportTrainingJobBtn.disabled = true;
+        exportMsg.textContent = '正在导出并注册训练/验证资产...';
+        try {
+          const payload = await ctx.post('/training/car-number-labeling/export-text-assets', {
+            allow_suggestions: !!exportAllowSuggestionsInput?.checked,
+          });
+          const prefill = payload?.prefill || {};
+          localStorage.setItem(STORAGE_KEYS.prefillTrainingAssetIds, (prefill.train_asset_ids || []).join(', '));
+          localStorage.setItem(STORAGE_KEYS.prefillTrainingValidationAssetIds, (prefill.validation_asset_ids || []).join(', '));
+          if (prefill.dataset_label) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetLabel, prefill.dataset_label);
+          if (prefill.training_dataset_version_id) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetVersionId, prefill.training_dataset_version_id);
+          if (prefill.intended_model_code) localStorage.setItem(STORAGE_KEYS.prefillTrainingTargetModelCode, prefill.intended_model_code);
+          exportMsg.textContent = `已注册训练资产 ${payload?.training_asset?.asset_id || '-'} / 验证资产 ${payload?.validation_asset?.asset_id || '-'}，即将跳转训练中心。`;
+          ctx.toast('OCR 文本训练资产已送入训练中心');
+          ctx.navigate('training');
+        } catch (error) {
+          exportMsg.textContent = error.message || '注册训练资产失败';
+          ctx.toast(error.message || '注册训练资产失败', 'error');
+        } finally {
+          exportBtn.disabled = false;
+          exportAssetsBtn.disabled = false;
+          if (exportTrainingJobBtn) exportTrainingJobBtn.disabled = false;
+        }
+      }
+
+      async function exportTrainingJob() {
+        if (!exportTrainingJobBtn || !exportMsg) return;
+        exportBtn.disabled = true;
+        if (exportAssetsBtn) exportAssetsBtn.disabled = true;
+        exportTrainingJobBtn.disabled = true;
+        exportMsg.textContent = '正在导出资产并创建 car_number_ocr 训练作业...';
+        try {
+          const payload = await ctx.post('/training/car-number-labeling/export-text-training-job', {
+            allow_suggestions: !!exportAllowSuggestionsInput?.checked,
+          });
+          const job = payload?.job || {};
+          if (job.id) localStorage.setItem(STORAGE_KEYS.focusTrainingJobId, job.id);
+          exportMsg.textContent = `已创建训练作业 ${job.job_code || '-'} · ${job.target_model_code || 'car_number_ocr'}:${job.target_version || '-'}，即将跳转训练中心。`;
+          ctx.toast('OCR 文本训练作业已创建');
+          ctx.navigate('training');
+        } catch (error) {
+          exportMsg.textContent = error.message || '创建训练作业失败';
+          ctx.toast(error.message || '创建训练作业失败', 'error');
+        } finally {
+          exportBtn.disabled = false;
+          if (exportAssetsBtn) exportAssetsBtn.disabled = false;
+          exportTrainingJobBtn.disabled = false;
+        }
+      }
+
+      filterForm?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        await loadItems({ preserveSelection: false });
+      });
+
+      presetTodoBtn?.addEventListener('click', async () => {
+        statusInput.value = '';
+        onlyMissingFinalInput.checked = true;
+        onlyWithSuggestionInput.checked = false;
+        searchInput.value = '';
+        await loadItems({ preserveSelection: false });
+      });
+
+      presetNeedsCheckBtn?.addEventListener('click', async () => {
+        statusInput.value = 'needs_check';
+        onlyMissingFinalInput.checked = false;
+        onlyWithSuggestionInput.checked = false;
+        searchInput.value = '';
+        await loadItems({ preserveSelection: false });
+      });
+
+      presetResetBtn?.addEventListener('click', async () => {
+        statusInput.value = '';
+        splitInput.value = '';
+        onlyMissingFinalInput.checked = false;
+        onlyWithSuggestionInput.checked = false;
+        searchInput.value = '';
+        await loadItems({ preserveSelection: false });
+      });
+
+      exportBtn?.addEventListener('click', async () => {
+        await exportTextDataset();
+      });
+
+      exportAssetsBtn?.addEventListener('click', async () => {
+        await exportAssetsToTraining();
+      });
+
+      exportTrainingJobBtn?.addEventListener('click', async () => {
+        await exportTrainingJob();
+      });
+
+      root.setAttribute('tabindex', '-1');
+      root.addEventListener('keydown', async (event) => {
+        const target = event.target;
+        const isTextEditing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+          event.preventDefault();
+          if (activeSaveRequest) return;
+          const form = activeReviewForm();
+          if (!form) return;
+          try {
+            await submitReview(form, { moveNext: false });
+          } catch {
+            return;
+          }
+          return;
+        }
+        if (!event.altKey || (isTextEditing && !event.ctrlKey && !event.metaKey)) return;
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          await selectRelativeItem(-1);
+        }
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          await selectRelativeItem(1);
+        }
+      });
+
+      await Promise.all([loadSummary(), loadItems({ preserveSelection: false })]);
+      root.focus();
     },
   };
 }
@@ -4621,10 +5138,11 @@ function pageTasks(route, rawCtx) {
 
         quickDetectResult.innerHTML = renderLoading(`正在执行快速识别 ${index + 1}/${total} ...`);
         const task = await ctx.post('/tasks/create', {
+          model_id: recommendation?.selected_model?.model_id || null,
           asset_id: assetId,
           task_type: resolvedTaskType,
           device_code: deviceCode,
-          use_master_scheduler: true,
+          use_master_scheduler: false,
           intent_text: prompt,
           context: quickContext,
           options: quickOptions,
@@ -4979,6 +5497,21 @@ function buildResultListHtml(rows, modelInsights = {}) {
                 : ''
             }
             <div class="result-card-grid">
+              ${
+                row._screenshot_preview_url
+                  ? `
+                      <section class="result-card-panel result-shot-panel">
+                        <div class="result-panel-head">
+                          <strong>截图预览</strong>
+                          <span>点击可放大</span>
+                        </div>
+                        <button class="result-shot-link" type="button" data-open-shot-url="${esc(row._screenshot_preview_url)}" title="打开结果截图">
+                          <img src="${esc(row._screenshot_preview_url)}" alt="结果截图预览" loading="lazy" />
+                        </button>
+                      </section>
+                    `
+                  : ''
+              }
               <section class="result-card-panel">
                 <div class="result-panel-head">
                   <strong>命中标签</strong>
@@ -4999,7 +5532,13 @@ function buildResultListHtml(rows, modelInsights = {}) {
               </section>
             </div>
             <div class="row-actions">
-              ${row.screenshot_uri ? `<button class="ghost" data-open-shot="${esc(row.id)}">查看截图</button>` : '<span class="hint">无截图</span>'}
+              ${
+                row._screenshot_preview_url
+                  ? `<button class="ghost" type="button" data-open-shot-url="${esc(row._screenshot_preview_url)}">在新窗口打开截图</button>`
+                  : row.screenshot_uri
+                    ? `<button class="ghost" type="button" data-open-shot="${esc(row.id)}">查看截图</button>`
+                    : '<span class="hint">无截图</span>'
+              }
               <details class="inline-details">
                 <summary>更多详情</summary>
                 <div class="details-panel">
@@ -5051,6 +5590,12 @@ function pageResults(route, rawCtx) {
       const resultMeta = root.querySelector('#resultMeta');
       const listWrap = root.querySelector('#resultListWrap');
       const exportBtn = root.querySelector('#resultExportBtn');
+      let resultBlobUrls = [];
+
+      function revokeResultBlobUrls() {
+        resultBlobUrls.forEach((url) => URL.revokeObjectURL(url));
+        resultBlobUrls = [];
+      }
 
       async function openScreenshot(resultId) {
         try {
@@ -5073,6 +5618,13 @@ function pageResults(route, rawCtx) {
             await openScreenshot(resultId);
           });
         });
+        listWrap.querySelectorAll('[data-open-shot-url]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const url = btn.getAttribute('data-open-shot-url') || '';
+            if (!url) return;
+            window.open(url, '_blank');
+          });
+        });
       }
 
       async function loadModelInsights(rows) {
@@ -5088,9 +5640,24 @@ function pageResults(route, rawCtx) {
         return Object.fromEntries(entries.filter(([, value]) => value));
       }
 
+      async function enrichRowsWithScreenshots(rows) {
+        revokeResultBlobUrls();
+        return Promise.all((rows || []).map(async (row) => {
+          if (!row?.screenshot_uri) return row;
+          try {
+            const previewUrl = await fetchAuthorizedBlobUrl(`/results/${row.id}/screenshot`, ctx.token);
+            if (previewUrl) resultBlobUrls.push(previewUrl);
+            return { ...row, _screenshot_preview_url: previewUrl || '' };
+          } catch {
+            return { ...row, _screenshot_preview_url: '' };
+          }
+        }));
+      }
+
       async function loadByTaskId(taskId) {
         const clean = String(taskId || '').trim();
         if (!clean) {
+          revokeResultBlobUrls();
           listWrap.innerHTML = renderEmpty('请输入 task_id，或先在任务中心创建并执行任务');
           resultMeta.textContent = '';
           return;
@@ -5099,10 +5666,11 @@ function pageResults(route, rawCtx) {
         resultMeta.textContent = '';
         try {
           const rows = await ctx.get(`/results${toQuery({ task_id: clean })}`);
-          const modelInsights = await loadModelInsights(rows || []);
-          listWrap.innerHTML = buildResultListHtml(rows || [], modelInsights);
-          const modelCount = [...new Set((rows || []).map((row) => String(row.model_id || '').trim()).filter(Boolean))].length;
-          resultMeta.textContent = `task_id=${clean} · 结果条数=${rows.length} · 关联模型=${modelCount}`;
+          const enrichedRows = await enrichRowsWithScreenshots(rows || []);
+          const modelInsights = await loadModelInsights(enrichedRows || []);
+          listWrap.innerHTML = buildResultListHtml(enrichedRows || [], modelInsights);
+          const modelCount = [...new Set((enrichedRows || []).map((row) => String(row.model_id || '').trim()).filter(Boolean))].length;
+          resultMeta.textContent = `task_id=${clean} · 结果条数=${enrichedRows.length} · 关联模型=${modelCount}`;
           localStorage.setItem(STORAGE_KEYS.lastTaskId, clean);
           await bindScreenshotButtons();
         } catch (error) {
@@ -5307,6 +5875,7 @@ const factories = {
   assets: pageAssets,
   models: pageModels,
   training: pageTraining,
+  carNumberLabeling: pageCarNumberLabeling,
   pipelines: pagePipelines,
   tasks: pageTasks,
   taskDetail: pageTaskDetail,

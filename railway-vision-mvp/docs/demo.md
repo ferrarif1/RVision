@@ -232,6 +232,48 @@ docker compose -f docker/docker-compose.yml exec backend sh -lc '
 6. 以 `car_number_ocr` 为基模创建一条微调作业
 7. 通过 `training_worker_runner.py --once` 跑完一次候选模型生成
 
+## 1.5.2 生成 OCR 文本待标注清单
+
+如果 `demo_data/train/` 只有号码框，没有文本真值，可先生成一份待标注队列：
+
+```bash
+cd <repo-root>
+python3 docker/scripts/prepare_local_car_number_labeling_manifest.py \
+  --source-dir demo_data/train \
+  --output-dir demo_data/generated_datasets/car_number_ocr_labeling
+```
+
+输出内容：
+- `demo_data/generated_datasets/car_number_ocr_labeling/manifest.csv`
+- `demo_data/generated_datasets/car_number_ocr_labeling/manifest.jsonl`
+- `demo_data/generated_datasets/car_number_ocr_labeling/crops/`
+- `demo_data/generated_datasets/car_number_ocr_labeling/summary.json`
+
+标注建议：
+1. 用表格打开 `manifest.csv`
+2. 按 `crop_file` 查看 crop，并填写 `final_text`
+3. 用 `review_status` 标记 `pending / done / needs_check`
+4. 保留 `ocr_suggestion` 列，后续可回算建议命中率
+
+## 1.5.3 把已标注文本回灌成 OCR 训练包
+
+当 `manifest.csv` 已经补好 `final_text` 后，可直接打成 crop 级 OCR 训练包：
+
+```bash
+cd <repo-root>
+python3 docker/scripts/prepare_local_car_number_text_dataset.py \
+  --manifest demo_data/generated_datasets/car_number_ocr_labeling/manifest.csv \
+  --output-dir demo_data/generated_datasets/car_number_ocr_text_dataset
+```
+
+输出内容：
+- `demo_data/generated_datasets/car_number_ocr_text_dataset/car_number_ocr_text_train_bundle.zip`
+- `demo_data/generated_datasets/car_number_ocr_text_dataset/car_number_ocr_text_validation_bundle.zip`
+- `demo_data/generated_datasets/car_number_ocr_text_dataset/car_number_ocr_text_dataset_summary.json`
+
+临时试验时，如需先用建议值凑一版数据包，可附加：
+- `--allow-suggestions`
+
 ## 1.6 创建任务
 
 推荐路径：

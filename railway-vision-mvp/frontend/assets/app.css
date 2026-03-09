@@ -1792,6 +1792,35 @@ label {
   gap: 10px;
 }
 
+.result-shot-panel {
+  align-content: start;
+}
+
+.result-shot-link {
+  width: 100%;
+  border: 1px solid rgba(156, 128, 52, 0.18);
+  border-radius: 12px;
+  background: rgba(10, 11, 8, 0.96);
+  padding: 0;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.result-shot-link:hover {
+  border-color: rgba(214, 175, 85, 0.45);
+  transform: translateY(-1px);
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.22);
+}
+
+.result-shot-link img {
+  display: block;
+  width: 100%;
+  max-height: 280px;
+  object-fit: cover;
+  background: #0a0b08;
+}
+
 .result-confidence-list {
   display: grid;
   gap: 10px;
@@ -1812,6 +1841,83 @@ label {
 .result-confidence-meta strong {
   font-size: 12px;
   color: #efe3bf;
+}
+
+.text-review-list {
+  display: grid;
+  gap: 10px;
+}
+
+.review-toolbar {
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  margin: 12px 0 10px;
+}
+
+.text-review-item {
+  width: 100%;
+  text-align: left;
+  border: 1px solid rgba(156, 128, 52, 0.16);
+  border-radius: 12px;
+  background: rgba(15, 16, 11, 0.94);
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+  transition: border-color 0.18s ease, transform 0.18s ease;
+}
+
+.text-review-item:hover,
+.text-review-item.active {
+  border-color: rgba(214, 175, 85, 0.42);
+  transform: translateY(-1px);
+}
+
+.text-review-item-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.text-review-item-meta {
+  color: var(--muted);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.text-review-item-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.text-review-detail {
+  display: grid;
+  gap: 14px;
+}
+
+.text-review-preview {
+  border: 1px solid rgba(156, 128, 52, 0.18);
+  border-radius: 14px;
+  background: rgba(10, 11, 8, 0.96);
+  min-height: 220px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.text-review-preview img {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+  background: #0a0b08;
+}
+
+.text-review-preview-empty {
+  width: 100%;
+  padding: 24px;
 }
 
 .result-confidence-meta span {

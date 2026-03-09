@@ -238,6 +238,47 @@ python3 docker/scripts/prepare_local_car_number_dataset.py \
 - `image.jpg x1,y1,x2,y2,0`
 - `image.jpg`（无框样本，打包时会跳过其空标注）
 
+### 方式C4：生成 OCR 文本待标注清单
+
+如果 `demo_data/train/` 里目前只有 bbox、还没有车号文本真值，可先把它转成待标注队列：
+
+```bash
+cd <repo-root>
+python3 docker/scripts/prepare_local_car_number_labeling_manifest.py \
+  --source-dir demo_data/train \
+  --output-dir demo_data/generated_datasets/car_number_ocr_labeling
+```
+
+输出内容：
+- `demo_data/generated_datasets/car_number_ocr_labeling/manifest.csv`
+- `demo_data/generated_datasets/car_number_ocr_labeling/manifest.jsonl`
+- `demo_data/generated_datasets/car_number_ocr_labeling/crops/`
+- `demo_data/generated_datasets/car_number_ocr_labeling/summary.json`
+
+说明：
+- 每条 bbox 会被裁成单独 crop，便于人工补 `final_text`
+- `split_hint` 会沿用当前稳定的 train / validation 切分规则
+- 如果当前 Python 环境具备边缘 OCR 依赖，脚本会尝试预填 `ocr_suggestion`
+
+### 方式C5：把已标注文本回灌成 OCR 训练包
+
+当 `manifest.csv` 中已经补好 `final_text` 后，可直接打成 crop 级 OCR 训练/验证 ZIP：
+
+```bash
+cd <repo-root>
+python3 docker/scripts/prepare_local_car_number_text_dataset.py \
+  --manifest demo_data/generated_datasets/car_number_ocr_labeling/manifest.csv \
+  --output-dir demo_data/generated_datasets/car_number_ocr_text_dataset
+```
+
+输出内容：
+- `demo_data/generated_datasets/car_number_ocr_text_dataset/car_number_ocr_text_train_bundle.zip`
+- `demo_data/generated_datasets/car_number_ocr_text_dataset/car_number_ocr_text_validation_bundle.zip`
+- `demo_data/generated_datasets/car_number_ocr_text_dataset/car_number_ocr_text_dataset_summary.json`
+
+可选：
+- `--allow-suggestions`：在 `final_text` 为空时，临时使用 `ocr_suggestion` 先生成试验包
+
 ### 方式D：发布 GO/NO-GO 门禁
 
 ```bash

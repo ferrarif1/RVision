@@ -52,6 +52,7 @@ services:
     volumes:
       - ../backend/app/models_repo:/app/app/models_repo
       - ../backend/app/uploads:/app/app/uploads
+      - ../demo_data:/app/demo_data
       - ../docker/keys:/app/keys:ro
     depends_on:
       - postgres

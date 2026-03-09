@@ -31,6 +31,7 @@ class TasksResultsEdgeRegressionTest(ApiRegressionHelper):
         selected = preflight["selected_candidate"]
         self.assertIsNotNone(selected, preflight)
         self.assertEqual(selected["task_type"], "car_number_ocr")
+        self.assertEqual(selected["model_code"], "car_number_ocr")
         self.assertGreaterEqual(int(selected["score"]), 25, selected)
 
     def test_car_number_recommendation_and_text_review(self) -> None:
@@ -48,6 +49,7 @@ class TasksResultsEdgeRegressionTest(ApiRegressionHelper):
         selected = decision["selected_model"]
         self.assertIsNotNone(selected, decision)
         self.assertEqual(selected["task_type"], "car_number_ocr")
+        self.assertEqual(selected["model_code"], "car_number_ocr")
 
         task = self.request_json(
             "POST",

@@ -15,6 +15,7 @@ const routes = [
   { name: 'assets', pattern: 'assets', requiresAuth: true, permission: 'asset.upload', label: '资产', navPage: 'assets' },
   { name: 'models', pattern: 'models', requiresAuth: true, permission: 'model.view', label: '模型', navPage: 'models' },
   { name: 'training', pattern: 'training', requiresAuth: true, permission: 'training.job.view', label: '训练', navPage: 'training' },
+  { name: 'carNumberLabeling', pattern: 'training/car-number-labeling', requiresAuth: true, permission: 'training.job.view', label: '车号文本复核', navPage: 'training', parentPath: 'training' },
   { name: 'pipelines', pattern: 'pipelines', requiresAuth: true, permission: 'model.view', label: '流水线', navPage: 'pipelines' },
   { name: 'tasks', pattern: 'tasks', requiresAuth: true, permission: 'task.create', label: '任务', navPage: 'tasks' },
   { name: 'taskDetail', pattern: 'tasks/:task_id', requiresAuth: true, permission: 'task.create', label: '任务详情', navPage: 'tasks', parentPath: 'tasks' },
@@ -32,6 +33,7 @@ const NAV_COMMANDS = [
   { path: 'assets', title: '资产中心', description: '上传和筛选图片/视频资产', keywords: 'asset upload 资产 上传' },
   { path: 'models', title: '模型中心', description: '提交模型、审批、发布时间线', keywords: 'model release approve 模型 审批 发布' },
   { path: 'training', title: '训练管理', description: '训练作业与 worker 资源', keywords: 'training worker 训练 作业' },
+  { path: 'training/car-number-labeling', title: '车号文本复核', description: '复核车号 OCR 建议并回写标注清单', keywords: 'ocr labeling review 车号 文本 复核 标注' },
   { path: 'pipelines', title: '流水线', description: '注册和管理推理流水线', keywords: 'pipeline 流水线 路由' },
   { path: 'tasks', title: '任务执行', description: '创建推理任务并跟踪状态', keywords: 'task infer 任务 推理' },
   { path: 'results', title: '结果中心', description: '查看任务输出与摘要', keywords: 'result 结果 输出' },
@@ -121,6 +123,15 @@ function buildRouteView(route) {
       showBack: true,
       backPath: 'results',
       breadcrumb: [{ label: '结果', path: 'results' }, { label: route.params?.task_id || '详情' }],
+    };
+  }
+  if (route.name === 'carNumberLabeling') {
+    return {
+      label: '车号文本复核',
+      navPage: 'training',
+      showBack: true,
+      backPath: 'training',
+      breadcrumb: [{ label: '训练', path: 'training' }, { label: '车号文本复核' }],
     };
   }
   if (route.name === '403') {

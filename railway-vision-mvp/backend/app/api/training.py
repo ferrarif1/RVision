@@ -1,12 +1,17 @@
 import base64
+import csv
+import hashlib
 import json
 import os
 import secrets
 import uuid
+import zipfile
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -24,7 +29,7 @@ from app.core.constants import TRAINING_JOB_STATUS_RUNNING
 from app.core.constants import TRAINING_JOB_STATUS_SUCCEEDED
 from app.core.constants import TRAINING_JOB_TERMINAL_STATUSES
 from app.db.database import get_db
-from app.db.models import DataAsset, ModelRecord, ModelRelease, Tenant, TrainingJob, TrainingWorker
+from app.db.models import DataAsset, DatasetVersion, ModelRecord, ModelRelease, Tenant, TrainingJob, TrainingWorker
 from app.security.auth import hash_password
 from app.security.dependencies import AuthUser, TrainingWorkerContext, get_training_worker, require_roles
 from app.security.roles import (
@@ -37,6 +42,7 @@ from app.security.roles import (
     is_supplier_user,
 )
 from app.services.audit_service import record_audit
+from app.services.dataset_version_service import create_dataset_version_record
 from app.services.model_package_service import ModelPackageError, load_model_blobs, parse_and_validate_model_package, persist_model_package
 from app.services.pipeline_service import normalize_model_inputs, normalize_model_outputs
 from app.services.training_runtime_service import reconcile_training_runtime_health
@@ -47,6 +53,9 @@ TRAINING_KIND_PATTERN = "^(train|finetune|evaluate)$"
 WORKER_STATUS_PATTERN = "^(ACTIVE|INACTIVE|UNHEALTHY)$"
 WORKER_UPDATE_STATUS_PATTERN = "^(RUNNING|SUCCEEDED|FAILED|CANCELLED)$"
 MODEL_TYPE_PATTERN = "^(router|expert)$"
+REVIEW_STATUS_PATTERN = "^(pending|done|needs_check)$"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 
 class TrainingJobCreateRequest(BaseModel):
@@ -109,6 +118,33 @@ class TrainingRuntimeReconcileRequest(BaseModel):
     running_timeout_seconds: int | None = Field(default=None, ge=1, description="本次 reconcile 的 running timeout 秒数覆盖 / Optional running timeout override")
 
 
+class CarNumberLabelingReviewRequest(BaseModel):
+    final_text: str | None = Field(default=None, description="人工确认后的车号文本 / Reviewed OCR text")
+    review_status: str = Field(default="pending", pattern=REVIEW_STATUS_PATTERN, description="复核状态 / pending|done|needs_check")
+    reviewer: str | None = Field(default=None, description="复核人 / Reviewer")
+    notes: str | None = Field(default=None, description="备注 / Notes")
+
+
+class CarNumberTextDatasetExportRequest(BaseModel):
+    allow_suggestions: bool = Field(default=False, description="当 final_text 为空时，是否允许使用 ocr_suggestion / Allow OCR suggestion fallback")
+
+
+class CarNumberTextDatasetAssetImportRequest(BaseModel):
+    allow_suggestions: bool = Field(default=False, description="当 final_text 为空时，是否允许使用 ocr_suggestion / Allow OCR suggestion fallback")
+    use_case: str = Field(default="railcar-number-ocr", description="业务场景 / Dataset use case")
+    intended_model_code: str = Field(default="car_number_ocr", description="目标模型编码 / Intended target model code")
+    sensitivity_level: str = Field(default="L2", description="敏感级别 / L1|L2|L3")
+
+
+class CarNumberTextTrainingJobCreateRequest(CarNumberTextDatasetAssetImportRequest):
+    training_kind: str = Field(default="finetune", pattern=TRAINING_KIND_PATTERN, description="训练类型 / train|finetune|evaluate")
+    target_version: str | None = Field(default=None, description="目标版本；为空时自动生成 / Optional explicit target version")
+    base_model_id: str | None = Field(default=None, description="基础模型 ID；为空时自动选择可见的同编码模型 / Optional base model ID")
+    worker_code: str | None = Field(default=None, description="指定训练机编码 / Optional worker code")
+    worker_host: str | None = Field(default=None, description="指定训练机 host / Optional worker host")
+    spec: dict[str, Any] = Field(default_factory=dict, description="训练参数覆盖 / Optional spec overrides")
+
+
 def _job_visible_to_user(job: TrainingJob, current_user: AuthUser) -> bool:
     if is_platform_user(current_user.roles):
         return True
@@ -154,6 +190,77 @@ def _clean_optional(value: str | None) -> str | None:
     return cleaned or None
 
 
+def _car_number_labeling_dir() -> Path:
+    override = str(os.getenv("CAR_NUMBER_LABELING_DIR") or "").strip()
+    candidates = [Path(override)] if override else []
+    candidates.extend(
+        [
+            REPO_ROOT / "demo_data" / "generated_datasets" / "car_number_ocr_labeling",
+            Path("/app/demo_data/generated_datasets/car_number_ocr_labeling"),
+        ]
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _car_number_labeling_manifest_path() -> Path:
+    return _car_number_labeling_dir() / "manifest.csv"
+
+
+def _car_number_labeling_jsonl_path() -> Path:
+    return _car_number_labeling_dir() / "manifest.jsonl"
+
+
+def _car_number_labeling_summary_path() -> Path:
+    return _car_number_labeling_dir() / "summary.json"
+
+
+def _car_number_text_dataset_dir() -> Path:
+    override = str(os.getenv("CAR_NUMBER_TEXT_DATASET_DIR") or "").strip()
+    candidates = [Path(override)] if override else []
+    candidates.extend(
+        [
+            REPO_ROOT / "demo_data" / "generated_datasets" / "car_number_ocr_text_dataset",
+            Path("/app/demo_data/generated_datasets/car_number_ocr_text_dataset"),
+        ]
+    )
+    for candidate in candidates:
+        parent = candidate.parent
+        if candidate.exists() or parent.exists():
+            return candidate
+    return candidates[0]
+
+
+def _car_number_text_dataset_summary_path() -> Path:
+    return _car_number_text_dataset_dir() / "car_number_ocr_text_dataset_summary.json"
+
+
+def _resolve_repo_relative_path(path_value: str | Path) -> Path:
+    raw = Path(path_value)
+    candidates = [raw]
+    if not raw.is_absolute():
+        candidates.extend([REPO_ROOT / raw, Path("/app") / raw])
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[-1]
+
+
+def _relative_repo_path(path: Path) -> str:
+    resolved = path.resolve()
+    for base in (Path("/app"), REPO_ROOT):
+        try:
+            return str(resolved.relative_to(base).as_posix())
+        except Exception:
+            continue
+    try:
+        return str(resolved.relative_to(REPO_ROOT).as_posix())
+    except Exception:
+        return str(path)
+
+
 def _parse_json_or_none(value: str | None) -> dict[str, Any] | None:
     cleaned = _clean_optional(value)
     if not cleaned:
@@ -166,6 +273,587 @@ def _parse_json_or_none(value: str | None) -> dict[str, Any] | None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="JSON metadata field must be an object")
     return parsed
 
+
+def _load_car_number_labeling_rows() -> list[dict[str, str]]:
+    manifest_path = _car_number_labeling_manifest_path()
+    if not manifest_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Car-number labeling manifest not found")
+    with manifest_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        return [dict(row) for row in reader]
+
+
+def _rewrite_car_number_labeling_files(rows: list[dict[str, str]]) -> None:
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Labeling manifest is empty")
+    manifest_path = _car_number_labeling_manifest_path()
+    jsonl_path = _car_number_labeling_jsonl_path()
+    summary_path = _car_number_labeling_summary_path()
+    fieldnames = list(rows[0].keys())
+    with manifest_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    jsonl_path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    summary = {}
+    if summary_path.exists():
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            summary = {}
+    review_status_counts: dict[str, int] = {}
+    final_text_count = 0
+    suggestion_count = 0
+    for row in rows:
+        status_key = str(row.get("review_status") or "pending").strip() or "pending"
+        review_status_counts[status_key] = review_status_counts.get(status_key, 0) + 1
+        if str(row.get("final_text") or "").strip():
+            final_text_count += 1
+        if str(row.get("ocr_suggestion") or "").strip():
+            suggestion_count += 1
+    summary.update(
+        {
+            "status": "ok",
+            "annotated_rows": len(rows),
+            "suggestion_rows": suggestion_count,
+            "suggestion_ratio": round((suggestion_count / len(rows)), 4) if rows else 0.0,
+            "review_status_counts": review_status_counts,
+            "final_text_rows": final_text_count,
+            "final_text_ratio": round((final_text_count / len(rows)), 4) if rows else 0.0,
+            "files": {
+                "manifest_jsonl": "demo_data/generated_datasets/car_number_ocr_labeling/manifest.jsonl",
+                "manifest_csv": "demo_data/generated_datasets/car_number_ocr_labeling/manifest.csv",
+                "summary": "demo_data/generated_datasets/car_number_ocr_labeling/summary.json",
+                "crops_dir": "demo_data/generated_datasets/car_number_ocr_labeling/crops",
+            },
+        }
+    )
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _labeling_item_summary(row: dict[str, str]) -> dict[str, Any]:
+    final_text = str(row.get("final_text") or "").strip()
+    suggestion = str(row.get("ocr_suggestion") or "").strip()
+    return {
+        "sample_id": str(row.get("sample_id") or "").strip(),
+        "split_hint": str(row.get("split_hint") or "").strip(),
+        "source_file": str(row.get("source_file") or "").strip(),
+        "crop_file": str(row.get("crop_file") or "").strip(),
+        "label_class": str(row.get("label_class") or "").strip(),
+        "review_status": str(row.get("review_status") or "pending").strip() or "pending",
+        "reviewer": str(row.get("reviewer") or "").strip(),
+        "notes": str(row.get("notes") or "").strip(),
+        "final_text": final_text,
+        "ocr_suggestion": suggestion,
+        "ocr_suggestion_confidence": row.get("ocr_suggestion_confidence"),
+        "ocr_suggestion_quality": row.get("ocr_suggestion_quality"),
+        "ocr_suggestion_engine": row.get("ocr_suggestion_engine"),
+        "bbox": [
+            int(row.get("bbox_x1") or 0),
+            int(row.get("bbox_y1") or 0),
+            int(row.get("bbox_x2") or 0),
+            int(row.get("bbox_y2") or 0),
+        ],
+        "has_final_text": bool(final_text),
+        "has_suggestion": bool(suggestion),
+    }
+
+
+def _resolve_car_number_text(row: dict[str, str], *, allow_suggestions: bool) -> tuple[str, str]:
+    final_text = str(row.get("final_text") or "").strip().upper()
+    if final_text:
+        return final_text, "final_text"
+    if allow_suggestions:
+        suggestion = str(row.get("ocr_suggestion") or "").strip().upper()
+        if suggestion:
+            return suggestion, "ocr_suggestion"
+    return "", ""
+
+
+def _write_car_number_text_bundle(
+    *,
+    rows: list[dict[str, str]],
+    output_path: Path,
+    split_name: str,
+    dataset_label: str,
+) -> dict[str, Any]:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    records: list[dict[str, Any]] = []
+    dataset_key = f"local-car-number-ocr-text-{split_name}"
+    with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for row in rows:
+            crop_rel = str(row.get("crop_file") or "").strip()
+            crop_abs = _car_number_labeling_dir() / crop_rel
+            if not crop_abs.exists():
+                continue
+            image_member = f"images/{Path(crop_rel).name}"
+            zf.write(crop_abs, arcname=image_member)
+            records.append(
+                {
+                    "sample_id": row.get("sample_id"),
+                    "task_type": "car_number_ocr",
+                    "label": row.get("label_class") or "number",
+                    "text": row.get("resolved_text"),
+                    "text_source": row.get("resolved_text_source"),
+                    "image_file": image_member,
+                    "preview_file": image_member,
+                    "source_file_name": row.get("source_file"),
+                    "source_file": row.get("crop_file"),
+                    "object_prompt": row.get("resolved_text"),
+                    "object_count": 1,
+                    "matched_labels": [row.get("label_class") or "number"],
+                    "split_hint": row.get("split_hint"),
+                    "review_status": row.get("review_status"),
+                    "bbox": [
+                        int(row.get("bbox_x1") or 0),
+                        int(row.get("bbox_y1") or 0),
+                        int(row.get("bbox_x2") or 0),
+                        int(row.get("bbox_y2") or 0),
+                    ],
+                }
+            )
+        manifest = {
+            "dataset_key": dataset_key,
+            "dataset_label": dataset_label,
+            "task_type": "car_number_ocr",
+            "split": split_name,
+            "sample_count": len(records),
+            "annotation_count": len(records),
+            "annotation_format": "vistral_local_car_number_text_v1",
+            "generated_at": datetime.utcnow().isoformat(),
+            "source_manifest": "demo_data/generated_datasets/car_number_ocr_labeling/manifest.csv",
+        }
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+        zf.writestr(
+            "README.txt",
+            "Vistral local car-number text dataset bundle\n"
+            f"split={split_name}\n"
+            f"samples={len(records)}\n"
+            "images/ contains cropped number regions\n"
+            "annotations/records.jsonl contains OCR text labels\n",
+        )
+        zf.writestr(
+            "annotations/records.jsonl",
+            "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in records),
+        )
+    return {
+        "split": split_name,
+        "dataset_label": dataset_label,
+        "dataset_key": dataset_key,
+        "zip_path": _relative_repo_path(output_path),
+        "sample_count": len(records),
+        "annotation_count": len(records),
+    }
+
+
+def _export_car_number_text_dataset(*, allow_suggestions: bool) -> dict[str, Any]:
+    rows = _load_car_number_labeling_rows()
+    accepted: list[dict[str, str]] = []
+    skipped_missing_text = 0
+    source_counts: dict[str, int] = {}
+    for row in rows:
+        text_value, text_source = _resolve_car_number_text(row, allow_suggestions=allow_suggestions)
+        if not text_value:
+            skipped_missing_text += 1
+            continue
+        item = dict(row)
+        item["resolved_text"] = text_value
+        item["resolved_text_source"] = text_source
+        source_counts[text_source] = source_counts.get(text_source, 0) + 1
+        accepted.append(item)
+    if len(accepted) < 2:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Not enough labeled rows to export OCR text dataset")
+    train_rows = [row for row in accepted if str(row.get("split_hint") or "") == "train"]
+    validation_rows = [row for row in accepted if str(row.get("split_hint") or "") == "validation"]
+    if not train_rows or not validation_rows:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Need both train and validation rows to export OCR text dataset")
+    output_dir = _car_number_text_dataset_dir()
+    train_bundle = _write_car_number_text_bundle(
+        rows=train_rows,
+        output_path=output_dir / "car_number_ocr_text_train_bundle.zip",
+        split_name="train",
+        dataset_label="local-car-number-text-train",
+    )
+    validation_bundle = _write_car_number_text_bundle(
+        rows=validation_rows,
+        output_path=output_dir / "car_number_ocr_text_validation_bundle.zip",
+        split_name="validation",
+        dataset_label="local-car-number-text-validation",
+    )
+    summary = {
+        "status": "ok",
+        "generated_at": datetime.utcnow().isoformat(),
+        "source_manifest": "demo_data/generated_datasets/car_number_ocr_labeling/manifest.csv",
+        "output_dir": _relative_repo_path(output_dir),
+        "accepted_rows": len(accepted),
+        "skipped_missing_text": skipped_missing_text,
+        "text_sources": source_counts,
+        "bundles": {
+            "train": train_bundle,
+            "validation": validation_bundle,
+        },
+    }
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "car_number_ocr_text_dataset_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return summary
+
+
+def _copy_file_with_checksum(source_path: Path, target_path: Path) -> tuple[str, int]:
+    checksum = hashlib.sha256()
+    size = 0
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    with source_path.open("rb") as source, target_path.open("wb") as target:
+        while True:
+            chunk = source.read(1024 * 1024)
+            if not chunk:
+                break
+            checksum.update(chunk)
+            target.write(chunk)
+            size += len(chunk)
+    return checksum.hexdigest(), size
+
+
+def _inspect_local_dataset_archive(storage_path: Path) -> dict[str, Any]:
+    try:
+        with zipfile.ZipFile(storage_path) as zf:
+            infos = zf.infolist()
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Generated OCR dataset bundle is invalid") from exc
+
+    preview_members: list[str] = []
+    image_count = 0
+    file_count = 0
+    directory_count = 0
+    ignored_entry_count = 0
+    max_depth = 0
+    total_uncompressed_bytes = 0
+    for info in infos:
+        path = Path(str(info.filename or "").replace("\\", "/"))
+        if info.is_dir() or str(info.filename).endswith("/"):
+            directory_count += 1
+            max_depth = max(max_depth, len(path.parts) - 1)
+            continue
+        file_count += 1
+        max_depth = max(max_depth, len(path.parts) - 1)
+        total_uncompressed_bytes += max(int(info.file_size or 0), 0)
+        ext = path.suffix.lower()
+        if ext in IMAGE_EXTENSIONS and str(info.filename).startswith("images/"):
+            image_count += 1
+            if len(preview_members) < 12:
+                preview_members.append(str(info.filename))
+        else:
+            ignored_entry_count += 1
+    return {
+        "archive_kind": "zip_dataset",
+        "archive_entry_count": len(infos),
+        "archive_file_count": file_count,
+        "archive_directory_count": directory_count,
+        "archive_resource_count": image_count,
+        "archive_image_count": image_count,
+        "archive_video_count": 0,
+        "archive_ignored_entry_count": ignored_entry_count,
+        "archive_max_depth": max_depth,
+        "archive_preview_members": preview_members,
+        "archive_uncompressed_bytes": total_uncompressed_bytes,
+    }
+
+
+def _find_reusable_local_dataset_asset(
+    db: Session,
+    *,
+    checksum: str,
+    file_name: str,
+    sensitivity_level: str,
+    buyer_tenant_id: str | None,
+    source_uri: str,
+    meta: dict[str, Any],
+) -> DataAsset | None:
+    query = db.query(DataAsset).filter(
+        DataAsset.checksum == checksum,
+        DataAsset.file_name == file_name,
+        DataAsset.asset_type == "archive",
+        DataAsset.sensitivity_level == sensitivity_level,
+    )
+    if buyer_tenant_id:
+        query = query.filter(DataAsset.buyer_tenant_id == buyer_tenant_id)
+    else:
+        query = query.filter(DataAsset.buyer_tenant_id.is_(None))
+    for row in query.order_by(DataAsset.created_at.desc()).limit(8).all():
+        row_meta = row.meta if isinstance(row.meta, dict) else {}
+        if row.source_uri == source_uri and row_meta == meta:
+            return row
+    return None
+
+
+def _register_car_number_text_dataset_asset(
+    *,
+    db: Session,
+    current_user: AuthUser,
+    request: Request,
+    bundle_summary: dict[str, Any],
+    export_summary: dict[str, Any],
+    asset_purpose: str,
+    use_case: str,
+    intended_model_code: str,
+    sensitivity_level: str,
+) -> dict[str, Any]:
+    source_bundle = _resolve_repo_relative_path(str(bundle_summary.get("zip_path") or ""))
+    if not source_bundle.exists() or not source_bundle.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Exported OCR dataset bundle file not found")
+    if sensitivity_level not in {"L1", "L2", "L3"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid sensitivity_level")
+
+    settings = get_settings()
+    os.makedirs(settings.asset_repo_path, exist_ok=True)
+    asset_id = str(uuid.uuid4())
+    ext = source_bundle.suffix or ".zip"
+    target_path = Path(settings.asset_repo_path) / f"{asset_id}{ext}"
+    checksum, file_size = _copy_file_with_checksum(source_bundle, target_path)
+    dataset_label = str(bundle_summary.get("dataset_label") or f"local-car-number-text-{asset_purpose}").strip()
+    source_uri = f"vistral://training/car-number-labeling/export-text-dataset/{asset_purpose}"
+    meta = {
+        "size": file_size,
+        "extension": ext,
+        "asset_purpose": asset_purpose,
+        "dataset_label": dataset_label,
+        "use_case": use_case,
+        "intended_model_code": intended_model_code,
+        "task_type": "car_number_ocr",
+        "text_source_counts": export_summary.get("text_sources") or {},
+        "generated_from": "car_number_labeling_review",
+        "accepted_rows": export_summary.get("accepted_rows"),
+        "split": bundle_summary.get("split"),
+        **_inspect_local_dataset_archive(target_path),
+    }
+    buyer_tenant_id = current_user.tenant_id if is_buyer_user(current_user.roles) else None
+    reusable_asset = _find_reusable_local_dataset_asset(
+        db,
+        checksum=checksum,
+        file_name=source_bundle.name,
+        sensitivity_level=sensitivity_level,
+        buyer_tenant_id=buyer_tenant_id,
+        source_uri=source_uri,
+        meta=meta,
+    )
+    if reusable_asset:
+        if target_path.exists():
+            target_path.unlink()
+        asset = reusable_asset
+        reused = True
+    else:
+        asset = DataAsset(
+            id=asset_id,
+            file_name=source_bundle.name,
+            asset_type="archive",
+            storage_uri=str(target_path),
+            source_uri=source_uri,
+            sensitivity_level=sensitivity_level,
+            checksum=checksum,
+            buyer_tenant_id=buyer_tenant_id,
+            meta=meta,
+            uploaded_by=current_user.id,
+        )
+        db.add(asset)
+        db.commit()
+        db.refresh(asset)
+        reused = False
+        record_audit(
+            db,
+            action=actions.ASSET_UPLOAD,
+            resource_type="asset",
+            resource_id=asset.id,
+            detail={
+                "file_name": asset.file_name,
+                "size": file_size,
+                "asset_purpose": asset_purpose,
+                "asset_type": asset.asset_type,
+                "dataset_label": dataset_label,
+                "use_case": use_case,
+                "intended_model_code": intended_model_code,
+                "generated_from": "car_number_labeling_review",
+            },
+            request=request,
+            actor=current_user,
+        )
+
+    version_summary = {
+        "task_type": "car_number_ocr",
+        "resource_count": bundle_summary.get("sample_count") or 0,
+        "task_count": bundle_summary.get("sample_count") or 0,
+        "reviewed_task_count": bundle_summary.get("sample_count") or 0,
+        "label_vocab": ["number"],
+        "text_source_counts": export_summary.get("text_sources") or {},
+        "generated_from": "car_number_labeling_review",
+        "generated_at": export_summary.get("generated_at"),
+        "accepted_rows": export_summary.get("accepted_rows"),
+        "skipped_missing_text": export_summary.get("skipped_missing_text"),
+    }
+    dataset_version = create_dataset_version_record(
+        db,
+        asset=asset,
+        dataset_label=dataset_label,
+        dataset_key=str(bundle_summary.get("dataset_key") or dataset_label),
+        asset_purpose=asset_purpose,
+        source_type="ocr_text_export",
+        summary=version_summary,
+        created_by=current_user.id,
+    )
+    db.commit()
+    db.refresh(dataset_version)
+    db.refresh(asset)
+    record_audit(
+        db,
+        action=actions.DATASET_VERSION_CREATE,
+        resource_type="dataset_version",
+        resource_id=dataset_version.id,
+        detail={
+            "dataset_key": dataset_version.dataset_key,
+            "dataset_label": dataset_version.dataset_label,
+            "version": dataset_version.version,
+            "asset_id": asset.id,
+            "asset_purpose": asset_purpose,
+            "source_type": "ocr_text_export",
+        },
+        request=request,
+        actor=current_user,
+    )
+    return {
+        "asset_id": asset.id,
+        "dataset_version_id": dataset_version.id,
+        "dataset_label": dataset_version.dataset_label,
+        "dataset_key": dataset_version.dataset_key,
+        "version": dataset_version.version,
+        "asset_purpose": asset_purpose,
+        "reused_asset": reused,
+    }
+
+
+def _export_car_number_text_assets_internal(
+    *,
+    payload: CarNumberTextDatasetAssetImportRequest,
+    request: Request,
+    db: Session,
+    current_user: AuthUser,
+) -> dict[str, Any]:
+    export_summary = _export_car_number_text_dataset(allow_suggestions=payload.allow_suggestions)
+    intended_model_code = str(payload.intended_model_code or "").strip() or "car_number_ocr"
+    use_case = str(payload.use_case or "").strip() or "railcar-number-ocr"
+    train_bundle = export_summary.get("bundles", {}).get("train") or {}
+    validation_bundle = export_summary.get("bundles", {}).get("validation") or {}
+    train_asset = _register_car_number_text_dataset_asset(
+        db=db,
+        current_user=current_user,
+        request=request,
+        bundle_summary=train_bundle,
+        export_summary=export_summary,
+        asset_purpose="training",
+        use_case=use_case,
+        intended_model_code=intended_model_code,
+        sensitivity_level=payload.sensitivity_level,
+    )
+    validation_asset = _register_car_number_text_dataset_asset(
+        db=db,
+        current_user=current_user,
+        request=request,
+        bundle_summary=validation_bundle,
+        export_summary=export_summary,
+        asset_purpose="validation",
+        use_case=use_case,
+        intended_model_code=intended_model_code,
+        sensitivity_level=payload.sensitivity_level,
+    )
+    return {
+        "status": "ok",
+        "export": export_summary,
+        "training_asset": train_asset,
+        "validation_asset": validation_asset,
+        "prefill": {
+            "train_asset_ids": [train_asset["asset_id"]],
+            "validation_asset_ids": [validation_asset["asset_id"]],
+            "dataset_label": train_asset["dataset_label"],
+            "training_dataset_version_id": train_asset["dataset_version_id"],
+            "validation_dataset_version_id": validation_asset["dataset_version_id"],
+            "intended_model_code": intended_model_code,
+        },
+    }
+
+
+def _buyer_can_use_model(base_model: ModelRecord, current_user: AuthUser, db: Session) -> bool:
+    if not is_buyer_user(current_user.roles):
+        return True
+    releases = (
+        db.query(ModelRelease)
+        .filter(ModelRelease.model_id == base_model.id, ModelRelease.status == MODEL_RELEASE_STATUS_RELEASED)
+        .order_by(ModelRelease.created_at.desc())
+        .all()
+    )
+    buyer_code = current_user.tenant_code
+    for release in releases:
+        targets = release.target_buyers or []
+        if not targets or (buyer_code and buyer_code in targets):
+            return True
+    return False
+
+
+def _resolve_default_base_model(
+    *,
+    db: Session,
+    current_user: AuthUser,
+    intended_model_code: str,
+    base_model_id: str | None,
+) -> ModelRecord | None:
+    if base_model_id:
+        base_model = db.query(ModelRecord).filter(ModelRecord.id == base_model_id).first()
+        if not base_model:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Base model not found")
+        if not _buyer_can_use_model(base_model, current_user, db):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Base model is not released to current buyer tenant")
+        return base_model
+
+    query = db.query(ModelRecord).filter(
+        ModelRecord.model_type == MODEL_TYPE_EXPERT,
+        ModelRecord.model_code == intended_model_code,
+    )
+    candidates = query.order_by(ModelRecord.created_at.desc()).all()
+    for candidate in candidates:
+        if _buyer_can_use_model(candidate, current_user, db):
+            return candidate
+    return None
+
+
+def _default_car_number_training_spec(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    base = {
+        "trainer": "car_number_ocr_local",
+        "epochs": 8,
+        "learning_rate": 0.0005,
+        "batch_size": 16,
+        "image_size": [192, 64],
+        "text_head": "ctc",
+        "augmentation": {
+            "motion_blur": 0.15,
+            "brightness": 0.2,
+            "contrast": 0.2,
+            "perspective": 0.12,
+        },
+    }
+    if not isinstance(overrides, dict):
+        return base
+    merged = dict(base)
+    for key, value in overrides.items():
+        if key == "augmentation" and isinstance(value, dict) and isinstance(merged.get("augmentation"), dict):
+            merged["augmentation"] = {**merged["augmentation"], **value}
+        else:
+            merged[key] = value
+    return merged
+
+
+def _auto_target_version(model_code: str) -> str:
+    timestamp = datetime.utcnow().strftime("%Y%m%d.%H%M%S")
+    suffix = hashlib.sha1(f"{model_code}:{timestamp}".encode("utf-8")).hexdigest()[:4]
+    return f"v{timestamp}.{suffix}"
 
 def _ensure_single_buyer_scope(rows: list[DataAsset]) -> str | None:
     buyer_ids = {row.buyer_tenant_id for row in rows if row.buyer_tenant_id}
@@ -491,6 +1179,203 @@ def list_training_jobs(
     rows = query.all()
     visible = [row for row in rows if _job_visible_to_user(row, current_user)]
     return [_serialize_job(db, row) for row in visible]
+
+
+@router.get("/car-number-labeling/summary")
+def get_car_number_labeling_summary(
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_READ_ROLES)),
+):
+    _ = current_user
+    rows = _load_car_number_labeling_rows()
+    summary_payload = {}
+    summary_path = _car_number_labeling_summary_path()
+    if summary_path.exists():
+        try:
+            summary_payload = json.loads(summary_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            summary_payload = {}
+    review_status_counts: dict[str, int] = {}
+    final_text_rows = 0
+    suggestion_rows = 0
+    for row in rows:
+        status_key = str(row.get("review_status") or "pending").strip() or "pending"
+        review_status_counts[status_key] = review_status_counts.get(status_key, 0) + 1
+        if str(row.get("final_text") or "").strip():
+            final_text_rows += 1
+        if str(row.get("ocr_suggestion") or "").strip():
+            suggestion_rows += 1
+    summary_payload.update(
+        {
+            "annotated_rows": len(rows),
+            "review_status_counts": review_status_counts,
+            "final_text_rows": final_text_rows,
+            "final_text_ratio": round((final_text_rows / len(rows)), 4) if rows else 0.0,
+            "suggestion_rows": suggestion_rows,
+            "suggestion_ratio": round((suggestion_rows / len(rows)), 4) if rows else 0.0,
+        }
+    )
+    export_summary_path = _car_number_text_dataset_summary_path()
+    if export_summary_path.exists():
+        try:
+            export_summary = json.loads(export_summary_path.read_text(encoding="utf-8"))
+            summary_payload["latest_export"] = {
+                "generated_at": export_summary.get("generated_at"),
+                "accepted_rows": export_summary.get("accepted_rows"),
+                "skipped_missing_text": export_summary.get("skipped_missing_text"),
+                "text_sources": export_summary.get("text_sources") or {},
+                "output_dir": export_summary.get("output_dir"),
+                "bundles": export_summary.get("bundles") or {},
+            }
+        except json.JSONDecodeError:
+            summary_payload["latest_export"] = None
+    return summary_payload
+
+
+@router.get("/car-number-labeling/items")
+def list_car_number_labeling_items(
+    q: str | None = Query(default=None, description="关键词搜索 / Search sample_id, source_file, suggestion, final_text"),
+    review_status: str | None = Query(default=None, pattern=REVIEW_STATUS_PATTERN, description="复核状态 / pending|done|needs_check"),
+    has_final_text: bool | None = Query(default=None, description="是否已有 final_text / Has reviewed text"),
+    has_suggestion: bool | None = Query(default=None, description="是否有 OCR 建议 / Has OCR suggestion"),
+    split_hint: str | None = Query(default=None, description="数据集切分 / train|validation"),
+    limit: int = Query(default=80, ge=1, le=500, description="返回条数 / Max items"),
+    offset: int = Query(default=0, ge=0, description="偏移量 / Offset"),
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_READ_ROLES)),
+):
+    rows = _load_car_number_labeling_rows()
+    token = str(q or "").strip().lower()
+    filtered = []
+    for row in rows:
+        item = _labeling_item_summary(row)
+        if token:
+            searchable = " ".join(
+                [
+                    item["sample_id"],
+                    item["source_file"],
+                    item["ocr_suggestion"],
+                    item["final_text"],
+                    item["notes"],
+                ]
+            ).lower()
+            if token not in searchable:
+                continue
+        if review_status and item["review_status"] != review_status:
+            continue
+        if split_hint and item["split_hint"] != split_hint:
+            continue
+        if has_final_text is not None and item["has_final_text"] != has_final_text:
+            continue
+        if has_suggestion is not None and item["has_suggestion"] != has_suggestion:
+            continue
+        filtered.append(item)
+    total = len(filtered)
+    page = filtered[offset: offset + limit]
+    return {
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "items": page,
+    }
+
+
+@router.get("/car-number-labeling/items/{sample_id}/crop")
+def get_car_number_labeling_crop(
+    sample_id: str,
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_READ_ROLES)),
+):
+    rows = _load_car_number_labeling_rows()
+    matched = next((row for row in rows if str(row.get("sample_id") or "").strip() == sample_id), None)
+    if not matched:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Labeling sample not found")
+    crop_rel = str(matched.get("crop_file") or "").strip()
+    crop_path = _car_number_labeling_dir() / crop_rel
+    if not crop_path.exists() or not crop_path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Crop file not found")
+    return FileResponse(crop_path)
+
+
+@router.post("/car-number-labeling/items/{sample_id}/review")
+def update_car_number_labeling_review(
+    sample_id: str,
+    payload: CarNumberLabelingReviewRequest,
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_CREATE_ROLES)),
+):
+    rows = _load_car_number_labeling_rows()
+    matched_index = next((idx for idx, row in enumerate(rows) if str(row.get("sample_id") or "").strip() == sample_id), None)
+    if matched_index is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Labeling sample not found")
+    row = dict(rows[matched_index])
+    row["final_text"] = str(payload.final_text or "").strip().upper()
+    row["review_status"] = payload.review_status
+    row["reviewer"] = str(payload.reviewer or "").strip()
+    row["notes"] = str(payload.notes or "").strip()
+    rows[matched_index] = row
+    _rewrite_car_number_labeling_files(rows)
+    return {
+        "status": "ok",
+        "item": _labeling_item_summary(row),
+    }
+
+
+@router.post("/car-number-labeling/export-text-dataset")
+def export_car_number_text_dataset(
+    payload: CarNumberTextDatasetExportRequest,
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_CREATE_ROLES)),
+):
+    _ = current_user
+    return _export_car_number_text_dataset(allow_suggestions=payload.allow_suggestions)
+
+
+@router.post("/car-number-labeling/export-text-assets")
+def export_car_number_text_assets(
+    payload: CarNumberTextDatasetAssetImportRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_CREATE_ROLES)),
+):
+    return _export_car_number_text_assets_internal(payload=payload, request=request, db=db, current_user=current_user)
+
+
+@router.post("/car-number-labeling/export-text-training-job")
+def export_car_number_text_training_job(
+    payload: CarNumberTextTrainingJobCreateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_CREATE_ROLES)),
+):
+    asset_result = _export_car_number_text_assets_internal(payload=payload, request=request, db=db, current_user=current_user)
+    intended_model_code = str(payload.intended_model_code or "").strip() or "car_number_ocr"
+    base_model = _resolve_default_base_model(
+        db=db,
+        current_user=current_user,
+        intended_model_code=intended_model_code,
+        base_model_id=payload.base_model_id,
+    )
+    worker_selector: dict[str, Any] = {}
+    worker_code = _clean_optional(payload.worker_code)
+    worker_host = _clean_optional(payload.worker_host)
+    if worker_code:
+        worker_selector["worker_codes"] = [worker_code]
+    if worker_host:
+        worker_selector["hosts"] = [worker_host]
+    create_payload = TrainingJobCreateRequest(
+        asset_ids=asset_result["prefill"]["train_asset_ids"],
+        validation_asset_ids=asset_result["prefill"]["validation_asset_ids"],
+        base_model_id=base_model.id if base_model else None,
+        owner_tenant_id=base_model.owner_tenant_id if base_model else None,
+        training_kind=payload.training_kind,
+        target_model_code=intended_model_code,
+        target_version=_clean_optional(payload.target_version) or _auto_target_version(intended_model_code),
+        worker_selector=worker_selector,
+        spec=_default_car_number_training_spec(payload.spec),
+    )
+    job = create_training_job(create_payload, request=request, db=db, current_user=current_user)
+    return {
+        **asset_result,
+        "job": job,
+        "resolved_base_model": _model_summary(base_model),
+        "resolved_spec": create_payload.spec,
+    }
 
 
 @router.get("/jobs/{job_id}")

@@ -1,11 +1,108 @@
 from __future__ import annotations
 
+import csv
 import time
 
-from backend.tests.api_regression.helpers import ApiRegressionHelper
+from backend.tests.api_regression.helpers import ApiRegressionHelper, REPO_ROOT
 
 
 class TrainingRegressionTest(ApiRegressionHelper):
+    def test_car_number_labeling_review_contract(self) -> None:
+        summary = self.request_json("GET", "/training/car-number-labeling/summary", token=self.buyer_token)
+        self.assertGreater(summary["annotated_rows"], 0)
+        self.assertGreaterEqual(summary["suggestion_rows"], 0)
+
+        listing = self.request_json("GET", "/training/car-number-labeling/items?limit=5", token=self.buyer_token)
+        self.assertTrue(listing["items"], listing)
+        item = listing["items"][0]
+        sample_id = item["sample_id"]
+
+        crop_response = self.request_json(
+            "GET",
+            f"/training/car-number-labeling/items/{sample_id}/crop",
+            token=self.buyer_token,
+        )
+        self.assertIn("image", crop_response.headers.get("content-type", ""))
+
+        manifest_path = REPO_ROOT / "demo_data" / "generated_datasets" / "car_number_ocr_labeling" / "manifest.csv"
+        with manifest_path.open("r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        original = next(row for row in rows if row.get("sample_id") == sample_id)
+
+        try:
+            updated = self.request_json(
+                "POST",
+                f"/training/car-number-labeling/items/{sample_id}/review",
+                token=self.buyer_token,
+                json={
+                    "final_text": "RV123456",
+                    "review_status": "done",
+                    "reviewer": "api-regression",
+                    "notes": "reviewed in api regression",
+                },
+            )
+            self.assertEqual(updated["item"]["final_text"], "RV123456")
+            self.assertEqual(updated["item"]["review_status"], "done")
+
+            refreshed = self.request_json("GET", f"/training/car-number-labeling/items?q={sample_id}&limit=1", token=self.buyer_token)
+            self.assertEqual(refreshed["items"][0]["final_text"], "RV123456")
+            self.assertEqual(refreshed["items"][0]["reviewer"], "api-regression")
+
+            export_result = self.request_json(
+                "POST",
+                "/training/car-number-labeling/export-text-dataset",
+                token=self.buyer_token,
+                json={"allow_suggestions": True},
+            )
+            self.assertEqual(export_result["status"], "ok")
+            self.assertGreater(export_result["bundles"]["train"]["sample_count"], 0)
+            self.assertGreater(export_result["bundles"]["validation"]["sample_count"], 0)
+            train_bundle_path = REPO_ROOT / export_result["bundles"]["train"]["zip_path"]
+            validation_bundle_path = REPO_ROOT / export_result["bundles"]["validation"]["zip_path"]
+            self.assertTrue(train_bundle_path.exists(), train_bundle_path)
+            self.assertTrue(validation_bundle_path.exists(), validation_bundle_path)
+
+            import_result = self.request_json(
+                "POST",
+                "/training/car-number-labeling/export-text-assets",
+                token=self.buyer_token,
+                json={"allow_suggestions": True},
+            )
+            self.assertEqual(import_result["status"], "ok")
+            self.assertTrue(import_result["prefill"]["train_asset_ids"])
+            self.assertTrue(import_result["prefill"]["validation_asset_ids"])
+            self.assertTrue(import_result["training_asset"]["dataset_version_id"])
+            self.assertTrue(import_result["validation_asset"]["dataset_version_id"])
+
+            training_job_result = self.request_json(
+                "POST",
+                "/training/car-number-labeling/export-text-training-job",
+                token=self.buyer_token,
+                json={"allow_suggestions": True},
+            )
+            self.assertEqual(training_job_result["status"], "ok")
+            self.assertEqual(training_job_result["job"]["target_model_code"], "car_number_ocr")
+            self.assertTrue(training_job_result["job"]["asset_ids"])
+            self.assertTrue(training_job_result["job"]["validation_asset_ids"])
+            self.assertIn(training_job_result["job"]["training_kind"], {"finetune", "train", "evaluate"})
+            self.assertIsInstance(training_job_result["resolved_spec"], dict)
+
+            summary_after_export = self.request_json("GET", "/training/car-number-labeling/summary", token=self.buyer_token)
+            self.assertIsNotNone(summary_after_export.get("latest_export"))
+            self.assertEqual(summary_after_export["latest_export"]["accepted_rows"], export_result["accepted_rows"])
+        finally:
+            self.request_json(
+                "POST",
+                f"/training/car-number-labeling/items/{sample_id}/review",
+                token=self.buyer_token,
+                json={
+                    "final_text": original.get("final_text") or "",
+                    "review_status": original.get("review_status") or "pending",
+                    "reviewer": original.get("reviewer") or "",
+                    "notes": original.get("notes") or "",
+                },
+            )
+
     def test_training_job_worker_control_contract(self) -> None:
         train_label = self.unique_name("api-regression-train")
         validation_label = self.unique_name("api-regression-val")

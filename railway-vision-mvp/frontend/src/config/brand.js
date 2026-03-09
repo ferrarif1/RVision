@@ -19,6 +19,7 @@ export const STORAGE_KEYS = {
   lastRoute: namespacedStorageKey('last_route'),
   sidebarCollapsed: namespacedStorageKey('sidebar_collapsed'),
   prefillTrainingAssetIds: namespacedStorageKey('prefill_training_asset_ids'),
+  prefillTrainingValidationAssetIds: namespacedStorageKey('prefill_training_validation_asset_ids'),
   prefillAssetId: namespacedStorageKey('prefill_asset_id'),
   quickDetectAssetId: namespacedStorageKey('quick_detect_asset_id'),
   focusModelId: namespacedStorageKey('focus_model_id'),
@@ -26,6 +27,7 @@ export const STORAGE_KEYS = {
   prefillTrainingDatasetLabel: namespacedStorageKey('prefill_training_dataset_label'),
   prefillTrainingDatasetVersionId: namespacedStorageKey('prefill_training_dataset_version_id'),
   prefillTrainingTargetModelCode: namespacedStorageKey('prefill_training_target_model_code'),
+  focusTrainingJobId: namespacedStorageKey('focus_training_job_id'),
   lastTaskId: namespacedStorageKey('last_task_id'),
 };
 
@@ -36,6 +38,7 @@ const LEGACY_STORAGE_KEYS = {
   lastRoute: 'rv_last_route',
   sidebarCollapsed: 'rv_sidebar_collapsed',
   prefillTrainingAssetIds: 'rv_prefill_training_asset_ids',
+  prefillTrainingValidationAssetIds: 'rv_prefill_training_validation_asset_ids',
   prefillAssetId: 'rv_prefill_asset_id',
   quickDetectAssetId: 'rv_quick_detect_asset_id',
   focusModelId: 'rv_focus_model_id',
@@ -43,6 +46,7 @@ const LEGACY_STORAGE_KEYS = {
   prefillTrainingDatasetLabel: 'rv_prefill_training_dataset_label',
   prefillTrainingDatasetVersionId: 'rv_prefill_training_dataset_version_id',
   prefillTrainingTargetModelCode: 'rv_prefill_training_target_model_code',
+  focusTrainingJobId: 'rv_focus_training_job_id',
   lastTaskId: 'rv_last_task_id',
 };
 
