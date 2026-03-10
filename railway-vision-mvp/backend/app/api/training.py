@@ -28,6 +28,7 @@ from app.core.constants import TRAINING_JOB_STATUS_PENDING
 from app.core.constants import TRAINING_JOB_STATUS_RUNNING
 from app.core.constants import TRAINING_JOB_STATUS_SUCCEEDED
 from app.core.constants import TRAINING_JOB_TERMINAL_STATUSES
+from app.core.ui_errors import raise_ui_error
 from app.db.database import get_db
 from app.db.models import DataAsset, DatasetVersion, ModelRecord, ModelRelease, Tenant, TrainingJob, TrainingWorker
 from app.security.auth import hash_password
@@ -170,7 +171,12 @@ def _job_visible_to_user(job: TrainingJob, current_user: AuthUser) -> bool:
 def _get_training_job_or_404(db: Session, job_id: str, current_user: AuthUser) -> TrainingJob:
     job = db.query(TrainingJob).filter(TrainingJob.id == job_id).first()
     if not job or not _job_visible_to_user(job, current_user):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Training job not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "training_job_not_found",
+            "训练作业不存在，或当前账号看不到这条作业。",
+            next_step="请回到训练中心刷新列表，再重新选择需要查看的作业。",
+        )
     return job
 
 
@@ -179,7 +185,13 @@ def _get_assets_or_400(db: Session, asset_ids: list[str]) -> list[DataAsset]:
     found = {row.id: row for row in rows}
     missing = [asset_id for asset_id in asset_ids if asset_id not in found]
     if missing:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Asset not found: {missing[0]}")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "training_asset_not_found",
+            "训练或验证资源里有记录不存在，当前作业不能继续创建。",
+            next_step="请刷新资源列表，确认 asset_id 是否仍有效，再重新提交训练作业。",
+            raw_detail={"missing_asset_id": missing[0]},
+        )
     return [found[asset_id] for asset_id in asset_ids]
 
 
@@ -1095,9 +1107,12 @@ def create_training_job(
     validation_asset_ids = _normalize_asset_ids(payload.validation_asset_ids)
     duplicated = set(train_asset_ids) & set(validation_asset_ids)
     if duplicated:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Training and validation assets must not overlap: {next(iter(duplicated))}",
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "training_validation_assets_overlap",
+            "训练集和验证集不能引用同一条资源。",
+            next_step="请把重复资源从训练集或验证集里移除后再创建作业。",
+            raw_detail={"duplicate_asset_id": next(iter(duplicated))},
         )
 
     train_assets = _get_assets_or_400(db, train_asset_ids) if train_asset_ids else []
@@ -1107,7 +1122,12 @@ def create_training_job(
     buyer_tenant_id = _ensure_single_buyer_scope([*train_assets, *validation_assets])
     if is_buyer_user(current_user.roles):
         if buyer_tenant_id and buyer_tenant_id != current_user.tenant_id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Buyer training job cannot reference a different tenant scope")
+            raise_ui_error(
+                status.HTTP_403_FORBIDDEN,
+                "buyer_training_cross_tenant_forbidden",
+                "买方训练作业不能引用其他租户范围内的资源。",
+                next_step="请只选择当前租户自己的训练/验证资源后再创建作业。",
+            )
         buyer_tenant_id = current_user.tenant_id
 
     base_model = None
@@ -1115,7 +1135,12 @@ def create_training_job(
     if payload.base_model_id:
         base_model = db.query(ModelRecord).filter(ModelRecord.id == payload.base_model_id).first()
         if not base_model:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Base model not found")
+            raise_ui_error(
+                status.HTTP_404_NOT_FOUND,
+                "base_model_not_found",
+                "基础模型不存在，当前作业无法继续创建。",
+                next_step="请重新选择一版可见的基础模型，或改用默认基线。",
+            )
         if is_buyer_user(current_user.roles):
             releases = (
                 db.query(ModelRelease)
@@ -1131,9 +1156,19 @@ def create_training_job(
                     allowed = True
                     break
             if not allowed:
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Base model is not released to current buyer tenant")
+                raise_ui_error(
+                    status.HTTP_403_FORBIDDEN,
+                    "base_model_not_released_to_buyer",
+                    "当前基础模型还没有授权给当前买方租户。",
+                    next_step="请先发布这版基础模型到当前买方，或改选已授权模型。",
+                )
         if owner_tenant_id and base_model.owner_tenant_id and owner_tenant_id != base_model.owner_tenant_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="owner_tenant_id does not match base model owner")
+            raise_ui_error(
+                status.HTTP_400_BAD_REQUEST,
+                "owner_tenant_mismatch_with_base_model",
+                "目标归属租户和基础模型归属不一致。",
+                next_step="请把归属租户改成和基础模型一致，或改选另一版基础模型。",
+            )
         owner_tenant_id = base_model.owner_tenant_id or owner_tenant_id
 
     if owner_tenant_id:
@@ -1788,6 +1823,47 @@ def training_worker_pull_jobs(
     db.add(worker)
 
     jobs = []
+
+    resumable_rows = (
+        db.query(TrainingJob)
+        .filter(
+            TrainingJob.status == TRAINING_JOB_STATUS_DISPATCHED,
+            TrainingJob.assigned_worker_code == worker.worker_code,
+            TrainingJob.started_at.is_(None),
+        )
+        .order_by(TrainingJob.created_at.asc())
+        .all()
+    )
+    for row in resumable_rows:
+        if len(jobs) >= payload.limit:
+            break
+
+        existing_summary = row.output_summary if isinstance(row.output_summary, dict) else {}
+        row.output_summary = {
+            **existing_summary,
+            "last_resumed_at": datetime.utcnow().isoformat(),
+            "last_resumed_worker_code": worker.worker_code,
+            "alert_level": None,
+            "alert_reason": None,
+            "recommended_action": None,
+        }
+        worker.last_job_at = datetime.utcnow()
+        db.add(row)
+        db.add(worker)
+
+        assets = _get_assets_or_400(db, row.asset_ids or [])
+        validations = _get_assets_or_400(db, row.validation_asset_ids or []) if row.validation_asset_ids else []
+        base_model = db.query(ModelRecord).filter(ModelRecord.id == row.base_model_id).first() if row.base_model_id else None
+
+        jobs.append(
+            {
+                **_serialize_job(db, row),
+                "assets": [_asset_summary(asset) for asset in assets],
+                "validation_assets": [_asset_summary(asset) for asset in validations],
+                "base_model": _model_summary(base_model),
+            }
+        )
+
     pending_rows = (
         db.query(TrainingJob)
         .filter(TrainingJob.status == TRAINING_JOB_STATUS_PENDING)

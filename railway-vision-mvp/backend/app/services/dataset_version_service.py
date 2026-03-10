@@ -35,12 +35,42 @@ def create_dataset_version_record(
     created_by: str,
 ) -> DatasetVersion:
     normalized_dataset_key = normalize_dataset_key(dataset_key or dataset_label)
-    query = db.query(DatasetVersion).filter(DatasetVersion.dataset_key == normalized_dataset_key)
+    existing_query = db.query(DatasetVersion).filter(
+        DatasetVersion.asset_id == asset.id,
+        DatasetVersion.dataset_key == normalized_dataset_key,
+        DatasetVersion.asset_purpose == asset_purpose,
+    )
     if asset.buyer_tenant_id:
-        query = query.filter(DatasetVersion.buyer_tenant_id == asset.buyer_tenant_id)
+        existing_query = existing_query.filter(DatasetVersion.buyer_tenant_id == asset.buyer_tenant_id)
     else:
-        query = query.filter(DatasetVersion.buyer_tenant_id.is_(None))
+        existing_query = existing_query.filter(DatasetVersion.buyer_tenant_id.is_(None))
+    existing = existing_query.order_by(DatasetVersion.created_at.desc()).first()
+    if existing:
+        if existing.dataset_label != dataset_label:
+            existing.dataset_label = dataset_label
+        if existing.source_type != source_type:
+            existing.source_type = source_type
+        if existing.summary != summary:
+            existing.summary = summary
+        db.add(existing)
+        db.flush()
 
+        meta = dict(asset.meta or {})
+        meta.update(
+            {
+                "dataset_key": normalized_dataset_key,
+                "dataset_label": existing.dataset_label,
+                "dataset_version": existing.version,
+                "dataset_version_id": existing.id,
+                "dataset_source_type": existing.source_type,
+            }
+        )
+        asset.meta = meta
+        db.add(asset)
+        db.flush()
+        return existing
+
+    query = db.query(DatasetVersion).filter(DatasetVersion.dataset_key == normalized_dataset_key)
     version = _next_dataset_version([row.version for row in query.all()])
     dataset_version = DatasetVersion(
         id=str(uuid.uuid4()),

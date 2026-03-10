@@ -14,8 +14,28 @@
 
 ```bash
 cd <repo-root>
-cp deploy/training-worker/worker.env.example deploy/training-worker/worker.env
-bash deploy/training-worker/run_worker.sh --help
+python3 deploy/training-worker/bootstrap_local_worker.py bootstrap --start --restart
+```
+
+这条命令会自动：
+
+- 用 `platform_admin` 登录当前中心端
+- 注册 / 刷新 `local-train-worker`
+- 写入 `deploy/training-worker/worker.env`
+- 在后台拉起本机 worker
+
+如需只看状态：
+
+```bash
+cd <repo-root>
+python3 deploy/training-worker/bootstrap_local_worker.py status
+```
+
+如需停止：
+
+```bash
+cd <repo-root>
+python3 deploy/training-worker/bootstrap_local_worker.py stop
 ```
 
 如果当前仓库已经执行过 `docker/scripts/generate_local_materials.sh`，`run_worker.sh` 会自动优先使用仓库里的：
@@ -55,7 +75,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp worker.env.example worker.env
-# 编辑 worker.env，填入 worker_code / worker_token / backend 地址
+# 也可以先手工填 worker.env，再执行：
 bash run_worker.sh
 ```
 

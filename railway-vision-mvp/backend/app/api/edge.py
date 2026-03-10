@@ -18,6 +18,7 @@ from app.core.constants import TASK_STATUS_FAILED
 from app.core.constants import TASK_STATUS_PENDING
 from app.core.constants import TASK_STATUS_SUCCEEDED
 from app.core.config import get_settings
+from app.core.ui_errors import raise_ui_error
 from app.db.database import get_db
 from app.db.models import DataAsset, InferenceResult, InferenceRun, InferenceTask, ModelRecord, ModelRelease, PipelineRecord, ReviewQueue
 from app.security.dependencies import EdgeDeviceContext, get_edge_device
@@ -260,7 +261,12 @@ def edge_pull_model(
 ):
     model = db.query(ModelRecord).filter(ModelRecord.id == payload.model_id).first()
     if not model:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "model_not_found",
+            "模型不存在，边缘端当前无法拉取这版模型。",
+            next_step="请在平台侧确认模型记录仍存在，再重新派发或重新拉取模型。",
+        )
 
     if not _is_model_released_to_device(db, model.id, device.code) and not _is_model_authorized_for_task(
         db,
@@ -268,10 +274,20 @@ def edge_pull_model(
         task_id=payload.task_id,
         device_code=device.code,
     ):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Model not released to this device")
+        raise_ui_error(
+            status.HTTP_403_FORBIDDEN,
+            "model_not_released_to_device",
+            "这版模型还没有授权到当前设备，边缘端不能直接拉取。",
+            next_step="请先发布到当前设备，或通过任务级授权重新派发验证任务。",
+        )
 
     if not (os.path.exists(model.manifest_uri) and os.path.exists(model.encrypted_uri) and os.path.exists(model.signature_uri)):
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Model artifacts missing")
+        raise_ui_error(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "model_artifacts_missing",
+            "模型记录存在，但模型文件不完整，边缘端暂时无法加载。",
+            next_step="请重新发布这版模型，或在平台侧重新生成并回收模型产物。",
+        )
 
     blobs = load_model_blobs(model.manifest_uri, model.encrypted_uri, model.signature_uri)
 

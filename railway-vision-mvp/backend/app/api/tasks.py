@@ -12,6 +12,7 @@ from app.core.constants import MODEL_RELEASE_STATUS_RELEASED
 from app.core.constants import TASK_STATUS_FAILED
 from app.core.constants import TASK_STATUS_PENDING
 from app.core.constants import TASK_STATUS_SUCCEEDED
+from app.core.ui_errors import raise_ui_error
 from app.db.database import get_db
 from app.db.models import DataAsset, InferenceResult, InferenceRun, InferenceTask, ModelRecord, ModelRelease, ReviewQueue
 from app.security.dependencies import AuthUser, require_roles
@@ -86,21 +87,38 @@ def _is_model_released_to_buyer(
 def _get_asset_in_scope(db: Session, asset_id: str, current_user: AuthUser) -> DataAsset:
     asset = db.query(DataAsset).filter(DataAsset.id == asset_id).first()
     if not asset:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "asset_not_found",
+            "资源不存在，或当前账号无权访问这个资源。",
+            next_step="请回到资源中心刷新列表，或重新上传图片/视频后再创建任务。",
+        )
 
     if is_buyer_user(current_user.roles):
         if not current_user.tenant_id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Buyer tenant missing")
+            raise_ui_error(
+                status.HTTP_403_FORBIDDEN,
+                "buyer_tenant_missing",
+                "当前买方账号缺少租户上下文，暂时不能创建任务。",
+                next_step="请重新登录；如果问题持续存在，再检查当前账号是否绑定了买方租户。",
+            )
         if asset.buyer_tenant_id != current_user.tenant_id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Asset not in your tenant scope")
+            raise_ui_error(
+                status.HTTP_403_FORBIDDEN,
+                "asset_out_of_scope",
+                "这个资源不在当前买方租户范围内，不能直接用于任务执行。",
+                next_step="请改选当前租户下的资源，或使用有权限的账号重试。",
+            )
     return asset
 
 
 def _ensure_inference_ready_asset(asset: DataAsset) -> None:
     if asset.asset_type == "archive":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Archive dataset assets cannot be used for inference tasks",
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "archive_asset_not_supported_for_inference",
+            "ZIP 数据集包不能直接做在线识别任务。",
+            next_step="请改选单图、视频，或从已有推理资产里选择一条资源。",
         )
 
 
@@ -490,24 +508,49 @@ def create_task(
         ).to_dict()
         selected_model = decision.get("selected_model")
         if not selected_model:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No schedulable model found")
+            raise_ui_error(
+                status.HTTP_404_NOT_FOUND,
+                "no_schedulable_model",
+                "当前没有可调度的模型，系统没法替你自动选模。",
+                next_step="请先发布一版可用模型，或在任务中心显式选择具体模型后再试。",
+            )
         model = db.query(ModelRecord).filter(ModelRecord.id == selected_model["model_id"]).first()
         if not model:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scheduled model not found")
+            raise_ui_error(
+                status.HTTP_404_NOT_FOUND,
+                "scheduled_model_missing",
+                "系统推荐的模型记录已不存在或不可见。",
+                next_step="请刷新模型列表后重新创建任务；如果持续出现，检查模型数据是否被清理。",
+            )
         resolved_task_type = decision.get("inferred_task_type") or selected_model.get("task_type")
         scheduler_detail = _build_scheduler_detail(decision, payload.intent_text)
     elif not payload.pipeline_id:
         model = db.query(ModelRecord).filter(ModelRecord.id == payload.model_id).first()
         if not model:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
+            raise_ui_error(
+                status.HTTP_404_NOT_FOUND,
+                "model_not_found",
+                "所选模型不存在，或当前账号看不到这版模型。",
+                next_step="请重新选择一版模型，或回到模型中心确认这版模型是否还在。",
+            )
 
         if is_buyer_user(current_user.roles):
             if not _is_model_released_to_buyer(db, model.id, current_user.tenant_code, payload.device_code):
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Model not released to your tenant or device")
+                raise_ui_error(
+                    status.HTTP_403_FORBIDDEN,
+                    "model_not_released_to_scope",
+                    "这版模型还没有授权给当前租户或目标设备。",
+                    next_step="请先发布到当前买方/设备，或改选一版已经发布可用的模型。",
+                )
 
         manifest_task_type = task_type_from_model(model)
         if payload.task_type and manifest_task_type and payload.task_type != manifest_task_type:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Task type does not match model capability")
+            raise_ui_error(
+                status.HTTP_400_BAD_REQUEST,
+                "task_type_model_capability_mismatch",
+                "当前任务类型和所选模型能力不匹配。",
+                next_step="请改选同任务类型的模型，或把任务类型切回模型支持的能力。",
+            )
         resolved_task_type = payload.task_type or manifest_task_type
 
     buyer_tenant_id = asset.buyer_tenant_id
@@ -515,9 +558,19 @@ def create_task(
         buyer_tenant_id = current_user.tenant_id
 
     if not model:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Model or pipeline resolution failed")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "model_or_pipeline_resolution_failed",
+            "任务没有解析到可执行的模型或流水线。",
+            next_step="请检查是否已选模型/流水线、是否已发布，以及任务类型是否明确。",
+        )
     if not resolved_task_type:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Task type cannot be resolved")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "task_type_unresolved",
+            "系统没能判断当前任务应该按哪类能力执行。",
+            next_step="请明确填写识别目标，或直接选择一版具体模型后重试。",
+        )
 
     merged_policy = dict(DEFAULT_TASK_POLICY)
     merged_policy.update(payload.policy or {})

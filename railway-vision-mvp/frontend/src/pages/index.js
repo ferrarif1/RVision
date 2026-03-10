@@ -1,4 +1,4 @@
-import { api, apiForm, apiPost, formatDateTime, toQuery } from '../core/api.js';
+import { api, apiForm, apiPost, formatDateTime, normalizeUiErrorMessage, toQuery } from '../core/api.js';
 import { BRAND_NAME, BRAND_TAGLINE, STORAGE_KEYS } from '../config/brand.js';
 
 function esc(value) {
@@ -1027,7 +1027,7 @@ async function fetchAuthorizedBlobUrl(path, token) {
   const headers = token ? { Authorization: `Bearer ${token}` } : {};
   const resp = await fetch(`/api${path}`, { headers });
   if (!resp.ok) {
-    throw new Error(`HTTP ${resp.status}`);
+    throw new Error(normalizeUiErrorMessage(`HTTP ${resp.status}`, resp.status));
   }
   const blob = await resp.blob();
   return URL.createObjectURL(blob);
@@ -2764,7 +2764,7 @@ function pageTraining(route, rawCtx) {
           const task = await ctx.get(`/tasks/${taskId}`);
           if (['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(task?.status)) {
             if (task.status !== 'SUCCEEDED') {
-              throw new Error(task.error_message || `任务已结束：${task.status}`);
+              throw new Error(normalizeUiErrorMessage(task.error_message || `任务已结束：${task.status}`));
             }
             return task;
           }
@@ -3697,8 +3697,55 @@ function pageTraining(route, rawCtx) {
         if (!workerPool) return;
         const currentCode = String(workerCodeInput?.value || '').trim();
         const currentHost = String(workerHostInput?.value || '').trim().toLowerCase();
+        const localWorker = assistWorkers.find((row) => row.worker_code === 'local-train-worker') || null;
+        const localWorkerStartCmd = 'python3 deploy/training-worker/bootstrap_local_worker.py bootstrap --start --restart';
+        const localWorkerStatus = localWorker?.status || 'NOT_REGISTERED';
+        const localWorkerSummary = localWorkerStatus === 'ACTIVE'
+          ? '本机训练 worker 已在线，页面创建的新训练作业会优先改派或调度到这台机器。'
+          : localWorkerStatus === 'UNHEALTHY'
+            ? '检测到本机 worker 曾注册但当前离线。建议重新生成 token 并后台拉起本机 worker。'
+            : '当前还没有可用的本机训练 worker。建议先注册并启动本机 worker，再创建训练作业。';
+        const localWorkerMeta = localWorker
+          ? `
+              <div class="selection-card-meta">
+                <span>worker_code</span><strong class="mono">${esc(localWorker.worker_code)}</strong>
+                <span>状态</span><strong>${esc(enumText('worker_status', localWorker.status))}</strong>
+                <span>host</span><strong class="mono">${esc(localWorker.host || '-')}</strong>
+                <span>最近心跳</span><strong>${esc(localWorker.heartbeat_age_sec == null ? '-' : `${localWorker.heartbeat_age_sec}s`)}</strong>
+              </div>
+            `
+          : `
+              <div class="selection-card-meta">
+                <span>worker_code</span><strong class="mono">local-train-worker</strong>
+                <span>状态</span><strong>未注册</strong>
+                <span>推荐脚本</span><strong class="mono">deploy/training-worker/bootstrap_local_worker.py</strong>
+              </div>
+            `;
+        const localWorkerGuide = `
+          <article class="selection-card ${localWorkerStatus === 'ACTIVE' ? 'selected' : ''}">
+            <div class="selection-card-head">
+              <strong>本机训练 Worker</strong>
+              <span class="badge">${esc(localWorkerStatus === 'NOT_REGISTERED' ? '未注册' : enumText('worker_status', localWorkerStatus))}</span>
+            </div>
+            <p class="muted">${esc(localWorkerSummary)}</p>
+            ${localWorkerMeta}
+            <div class="row-actions">
+              <button class="ghost" type="button" data-copy-local-worker-cmd>复制启动命令</button>
+              ${localWorker ? `<button class="primary" type="button" data-pick-worker-card="${esc(localWorker.worker_code)}">选这台机器</button>` : ''}
+            </div>
+            <div class="hint mono">${esc(localWorkerStartCmd)}</div>
+          </article>
+        `;
         if (!assistWorkers.length) {
-          workerPool.innerHTML = renderEmpty('当前没有训练机可供分配');
+          workerPool.innerHTML = `${localWorkerGuide}${renderEmpty('当前没有训练机可供分配')}`;
+          workerPool.querySelector('[data-copy-local-worker-cmd]')?.addEventListener('click', async () => {
+            try {
+              await navigator.clipboard.writeText(localWorkerStartCmd);
+              ctx.toast('本机 worker 启动命令已复制');
+            } catch {
+              ctx.toast('复制失败，请手工复制命令', 'error');
+            }
+          });
           return;
         }
         const q = String(trainingLibraryFilters.workerQuery || '').trim().toLowerCase();
@@ -3736,6 +3783,7 @@ function pageTraining(route, rawCtx) {
           return 0;
         });
         workerPool.innerHTML = `
+          ${localWorkerGuide}
           <div class="selection-grid">
             ${sorted.map((row) => {
               const isSelected = currentCode === row.worker_code || (currentHost && currentHost === String(row.host || '').trim().toLowerCase());
@@ -3760,6 +3808,14 @@ function pageTraining(route, rawCtx) {
             }).join('')}
           </div>
         `;
+        workerPool.querySelector('[data-copy-local-worker-cmd]')?.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(localWorkerStartCmd);
+            ctx.toast('本机 worker 启动命令已复制');
+          } catch {
+            ctx.toast('复制失败，请手工复制命令', 'error');
+          }
+        });
         workerPool.querySelectorAll('[data-pick-worker-card]').forEach((button) => {
           button.addEventListener('click', () => fillWorkerSelection(button.getAttribute('data-pick-worker-card') || ''));
         });
@@ -5441,11 +5497,14 @@ function pageTasks(route, rawCtx) {
           <div class="selection-grid">
             ${models.map((row) => `
               <article class="selection-card ${quickSelectedModelId === row.id ? 'selected' : ''}">
-                <div class="selection-card-head">
-                  <strong>${esc(row.model_code)}:${esc(row.version)}</strong>
+                <div class="selection-card-head selection-card-head--stack">
+                  <div class="selection-card-title">
+                    <strong title="${esc(`${row.model_code}:${row.version}`)}">${esc(row.model_code)}</strong>
+                    <span class="selection-card-subtitle mono" title="${esc(row.version)}">${esc(truncateMiddle(row.version, 18, 10))}</span>
+                  </div>
                   <span class="badge">${esc(row.model_code === intent.taskType ? '推荐' : enumText('model_status', row.status || '-'))}</span>
                 </div>
-                <div class="selection-card-meta">
+                <div class="selection-card-meta selection-card-meta--compact">
                   <span>task_type</span><strong>${esc(row.task_type || row.plugin_name || '-')}</strong>
                   <span>plugin</span><strong>${esc(row.plugin_name || '-')}</strong>
                   <span>来源</span><strong>${esc(enumText('model_source_type', (row.platform_meta || {}).model_source_type || '-'))}</strong>
@@ -5812,11 +5871,14 @@ function pageTasks(route, rawCtx) {
           <div class="selection-grid">
             ${filtered.map((row) => `
               <article class="selection-card ${currentModelId === row.id ? 'selected' : ''}">
-                <div class="selection-card-head">
-                  <strong>${esc(row.model_code)}:${esc(row.version)}</strong>
+                <div class="selection-card-head selection-card-head--stack">
+                  <div class="selection-card-title">
+                    <strong title="${esc(`${row.model_code}:${row.version}`)}">${esc(row.model_code)}</strong>
+                    <span class="selection-card-subtitle mono" title="${esc(row.version)}">${esc(truncateMiddle(row.version, 18, 10))}</span>
+                  </div>
                   <span class="badge">${esc(enumText('model_status', row.status || '-'))}</span>
                 </div>
-                <div class="selection-card-meta">
+                <div class="selection-card-meta selection-card-meta--compact">
                   <span>task_type</span><strong>${esc(row.task_type || row.plugin_name || '-')}</strong>
                   <span>来源</span><strong>${esc(enumText('model_source_type', (row.platform_meta || {}).model_source_type || '-'))}</strong>
                   <span>plugin</span><strong>${esc(row.plugin_name || '-')}</strong>
@@ -5843,7 +5905,7 @@ function pageTasks(route, rawCtx) {
             return { task, rows };
           }
           if (['FAILED', 'CANCELLED'].includes(String(task?.status || ''))) {
-            throw new Error(task?.error_message || `任务执行失败：${task?.status}`);
+            throw new Error(normalizeUiErrorMessage(task?.error_message || `任务执行失败：${task?.status}`));
           }
           await new Promise((resolve) => window.setTimeout(resolve, 2000));
         }
@@ -5857,7 +5919,7 @@ function pageTasks(route, rawCtx) {
           const status = String(task?.status || '');
           if (status === 'SUCCEEDED') return task;
           if (['FAILED', 'CANCELLED'].includes(status)) {
-            throw new Error(task?.error_message || `任务执行失败：${status}`);
+            throw new Error(normalizeUiErrorMessage(task?.error_message || `任务执行失败：${status}`));
           }
           await new Promise((resolve) => window.setTimeout(resolve, 2000));
         }
@@ -6336,17 +6398,20 @@ function pageTasks(route, rawCtx) {
                 .map((item, outcomeIndex) => `
                   <article class="quick-detect-batch-card">
                     <div class="quick-detect-batch-head">
-                      <strong>${esc(item.uploadedAsset?.file_name || item.focus?.result_json?.source_file_name || item.task.id)}</strong>
+                      <div class="quick-detect-batch-title">
+                        <strong title="${esc(item.uploadedAsset?.file_name || item.focus?.result_json?.source_file_name || item.task.id)}">${esc(item.uploadedAsset?.file_name || item.focus?.result_json?.source_file_name || item.task.id)}</strong>
+                        <span class="hint">${esc(`${Math.max(0, Number(item.uploadedAsset?.meta?.size || 0) / 1024 | 0)} KB` || '')}</span>
+                      </div>
                       <div class="quick-review-statuses">
                         <span class="badge">${esc(enumText('task_status', item.task.status))}</span>
                         <span class="badge">${esc(item.reviewDirty ? '修订未保存' : item.reviewStatus === 'revised' ? '已确认' : '自动结果')}</span>
                       </div>
                     </div>
-                    <div class="keyvals">
-                      <div><span>asset_id</span><strong class="mono">${esc(item.uploadedAsset?.id || item.task.asset_id || '-')}</strong></div>
-                      <div><span>task_id</span><strong class="mono">${esc(item.task.id)}</strong></div>
+                    <div class="keyvals compact quick-detect-batch-meta">
+                      <div><span>asset_id</span><strong class="mono" title="${esc(item.uploadedAsset?.id || item.task.asset_id || '-')}">${esc(truncateMiddle(item.uploadedAsset?.id || item.task.asset_id || '-', 10, 8))}</strong></div>
+                      <div><span>task_id</span><strong class="mono" title="${esc(item.task.id)}">${esc(truncateMiddle(item.task.id, 10, 8))}</strong></div>
                       <div><span>task_type</span><strong>${esc(enumText('task_type', item.taskType || item.task.task_type || '-'))}</strong></div>
-                      <div><span>selected_model</span><strong>${esc(`${item.recommendation?.selected_model?.model_code || '-'}:${item.recommendation?.selected_model?.version || '-'}`)}</strong></div>
+                      <div><span>selected_model</span><strong title="${esc(`${item.recommendation?.selected_model?.model_code || '-'}:${item.recommendation?.selected_model?.version || '-'}`)}">${esc(item.recommendation?.selected_model?.model_code || '-')} · ${esc(truncateMiddle(item.recommendation?.selected_model?.version || '-', 16, 8))}</strong></div>
                       <div><span>object_count</span><strong>${esc(String(item.predictions.length))}</strong></div>
                     </div>
                     <div class="quick-detect-recommend">${esc(item.recommendation?.summary || '已完成自动选模并执行快速识别')}</div>
@@ -6390,6 +6455,16 @@ function pageTasks(route, rawCtx) {
                             item.predictions.length
                               ? item.predictions.map((pred) => `
                                   <div class="quick-review-row ${item.activePredictionId === pred._id ? 'selected' : ''}">
+                                    <div class="quick-review-row-head">
+                                      <div class="quick-review-row-summary">
+                                        <span class="badge">${esc(pred.source === 'manual' ? 'manual' : 'auto')}</span>
+                                        <strong title="${esc(predictionBadgeText(pred))}">${esc(predictionBadgeText(pred))}</strong>
+                                      </div>
+                                      <div class="row-actions">
+                                        <button class="ghost" type="button" data-review-focus="${outcomeIndex}" data-review-pred="${esc(pred._id)}">选中</button>
+                                        <button class="ghost" type="button" data-review-remove="${outcomeIndex}" data-review-pred="${esc(pred._id)}">删掉误检</button>
+                                      </div>
+                                    </div>
                                     <div class="quick-review-fields">
                                       <input data-review-index="${outcomeIndex}" data-review-pred="${esc(pred._id)}" data-review-field="label" value="${esc(pred.label)}" placeholder="label" />
                                       <input data-review-index="${outcomeIndex}" data-review-pred="${esc(pred._id)}" data-review-field="text" value="${esc(pred.text || '')}" placeholder="text / OCR 输出" />
@@ -6398,11 +6473,6 @@ function pageTasks(route, rawCtx) {
                                       <input data-review-index="${outcomeIndex}" data-review-pred="${esc(pred._id)}" data-review-field="y1" type="number" step="1" value="${esc(String(pred.bbox?.[1] ?? 0))}" />
                                       <input data-review-index="${outcomeIndex}" data-review-pred="${esc(pred._id)}" data-review-field="x2" type="number" step="1" value="${esc(String(pred.bbox?.[2] ?? 0))}" />
                                       <input data-review-index="${outcomeIndex}" data-review-pred="${esc(pred._id)}" data-review-field="y2" type="number" step="1" value="${esc(String(pred.bbox?.[3] ?? 0))}" />
-                                    </div>
-                                    <div class="row-actions">
-                                      <span class="badge">${esc(pred.source === 'manual' ? 'manual' : 'auto')}</span>
-                                      <button class="ghost" type="button" data-review-focus="${outcomeIndex}" data-review-pred="${esc(pred._id)}">选中</button>
-                                      <button class="ghost" type="button" data-review-remove="${outcomeIndex}" data-review-pred="${esc(pred._id)}">删掉误检</button>
                                     </div>
                                   </div>
                                 `).join('')
@@ -7289,7 +7359,7 @@ function pageResults(route, rawCtx) {
           const resp = await fetch(`/api/results/${resultId}/screenshot`, {
             headers: { Authorization: `Bearer ${ctx.token}` },
           });
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          if (!resp.ok) throw new Error(normalizeUiErrorMessage(`HTTP ${resp.status}`, resp.status));
           const blob = await resp.blob();
           const objectUrl = URL.createObjectURL(blob);
           window.open(objectUrl, '_blank');

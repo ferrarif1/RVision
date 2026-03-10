@@ -1592,6 +1592,32 @@ def _build_final_item(
     final_task_type = "pipeline_orchestrated"
     if not (pipeline or {}).get("id") and requested_task_type and len(selected_tasks) == 1:
         final_task_type = requested_task_type
+    final_summary: dict[str, Any] = {
+        "task_type": final_task_type,
+        "prediction_count": len(fused_predictions),
+        "review_reasons": review_reasons,
+    }
+    if fused_predictions:
+        best_prediction = max(fused_predictions, key=lambda item: float(item.get("score") or 0.0))
+        final_summary["confidence"] = float(best_prediction.get("score") or 0.0)
+        if isinstance(best_prediction.get("bbox"), list):
+            final_summary["bbox"] = best_prediction["bbox"]
+        if final_task_type == "car_number_ocr":
+            car_number = str(best_prediction.get("text") or "").strip()
+            if car_number:
+                final_summary["car_number"] = car_number
+        elif final_task_type == "bolt_missing_detect":
+            final_summary["bolt_count"] = len(fused_predictions)
+            final_summary["missing"] = any(str(item.get("label") or "").strip() == "bolt_missing" for item in fused_predictions)
+        else:
+            matched_labels: list[str] = []
+            for item in fused_predictions:
+                label = str(item.get("label") or "").strip()
+                if label and label not in matched_labels:
+                    matched_labels.append(label)
+            if matched_labels:
+                final_summary["matched_labels"] = matched_labels
+                final_summary["top_label"] = matched_labels[0]
     return {
         "model_id": None,
         "model_hash": router_output.get("metrics", {}).get("version", "pipeline") if router_output else "pipeline",
@@ -1610,6 +1636,7 @@ def _build_final_item(
             "predictions": fused_predictions,
             "review_reasons": review_reasons,
             "timings": timings,
+            "summary": final_summary,
         },
     }
 

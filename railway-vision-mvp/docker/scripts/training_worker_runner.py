@@ -80,12 +80,23 @@ TRAINER_EXIT_CODE_MAP: dict[int, dict[str, Any]] = {
     22: {"category": "interrupted", "retryable": True, "summary": "trainer was interrupted"},
 }
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent.parent
+
 
 def _default_existing_path(*candidates: str) -> str:
     for candidate in candidates:
         if candidate and Path(candidate).expanduser().exists():
             return candidate
     return candidates[0] if candidates else ""
+
+
+def _repo_default_path(*relative_candidates: str) -> str:
+    for relative in relative_candidates:
+        candidate = REPO_ROOT / relative
+        if candidate.exists():
+            return str(candidate)
+    return str(REPO_ROOT / relative_candidates[0]) if relative_candidates else ""
 
 
 def _tail_lines(text: str, limit: int = TRAINER_STDIO_TAIL_LINES) -> list[str]:
@@ -1093,22 +1104,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--worker-host", default=os.getenv("TRAINING_WORKER_HOST", "training-worker-local"))
     parser.add_argument(
         "--backend-root",
-        default=os.getenv("TRAINING_BACKEND_ROOT", _default_existing_path("./backend", "./backend_stub")),
+        default=os.getenv("TRAINING_BACKEND_ROOT", _repo_default_path("backend", "backend_stub")),
     )
     parser.add_argument("--work-dir", default=os.getenv("TRAINING_WORK_DIR", "/tmp/vistral_training_worker"))
     parser.add_argument(
         "--model-decrypt-key",
-        default=os.getenv("MODEL_DECRYPT_KEY", _default_existing_path("./keys/model_decrypt.key", "./edge/keys/model_decrypt.key")),
+        default=os.getenv("MODEL_DECRYPT_KEY", _repo_default_path("edge/keys/model_decrypt.key")),
     )
     parser.add_argument(
         "--model-encrypt-key",
-        default=os.getenv("MODEL_ENCRYPT_KEY", _default_existing_path("./keys/model_encrypt.key", "./docker/keys/model_encrypt.key")),
+        default=os.getenv("MODEL_ENCRYPT_KEY", _repo_default_path("docker/keys/model_encrypt.key")),
     )
     parser.add_argument(
         "--model-sign-private-key",
         default=os.getenv(
             "MODEL_SIGN_PRIVATE_KEY",
-            _default_existing_path("./keys/model_sign_private.pem", "./docker/keys/model_sign_private.pem"),
+            _repo_default_path("docker/keys/model_sign_private.pem"),
         ),
     )
     parser.add_argument("--output-model-name", default=os.getenv("TRAINING_OUTPUT_MODEL", "candidate_model.bin"))

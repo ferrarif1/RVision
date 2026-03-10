@@ -1,0 +1,143 @@
+[
+  {
+    "asset": {
+      "id": "1361ec05-49d9-41d5-8e89-c7d5e14845e1",
+      "file_name": "car_number_ocr_text_validation_bundle.zip",
+      "asset_type": "archive",
+      "sensitivity_level": "L2",
+      "checksum": "20c72ae57e9b0f54f2bc33f08a6d1f7af769fc7fa0de382e8a287d9dbce6ae31",
+      "meta": {
+        "size": 410264,
+        "split": "validation",
+        "use_case": "railcar-number-ocr",
+        "extension": ".zip",
+        "task_type": "car_number_ocr",
+        "dataset_key": "local-car-number-ocr-text-validation",
+        "archive_kind": "zip_dataset",
+        "accepted_rows": 57,
+        "asset_purpose": "validation",
+        "dataset_label": "local-car-number-text-validation",
+        "generated_from": "car_number_labeling_review",
+        "dataset_version": "v23",
+        "archive_max_depth": 1,
+        "archive_file_count": 16,
+        "dataset_version_id": "d919e80f-6b6e-497c-9eae-ccd86eff3f91",
+        "text_source_counts": {
+          "final_text": 57
+        },
+        "archive_entry_count": 16,
+        "archive_image_count": 13,
+        "archive_video_count": 0,
+        "dataset_source_type": "ocr_text_export",
+        "intended_model_code": "car_number_ocr",
+        "archive_resource_count": 13,
+        "archive_directory_count": 0,
+        "archive_preview_members": [
+          "images/6775_104_1_jpg.rf.3713dc1b980c226251f8e7c5810daeb2__0004.png",
+          "images/6472_104_0_jpg.rf.2bb2221c4b152125ac61ce2b2a105a30__0005.png",
+          "images/3542_104_0_jpg.rf.0df66ec9ab0f91510738e2c6090c1f8d__0008.png",
+          "images/6845_104_0_jpg.rf.13787b70faaa27363c21638f152db33d__0010.png",
+          "images/9670_104_1_jpg.rf.25bf7368b445aa4cb486d543e4c9ad84__0022.png",
+          "images/386_104_0_jpg.rf.52b5f99aa1b386d48686b26651f0ca53__0025.png",
+          "images/6185_104_1_jpg.rf.c21878560de9233e81ed85c7831ece00__0033.png",
+          "images/6361_104_0_jpg.rf.f626b801836972c69d1e6b75482cadb2__0042.png",
+          "images/6515_104_1_jpg.rf.75022ce71ac3ad440a8d933de5527298__0049.png",
+          "images/6319_104_0_jpg.rf.c9d7e08eabce9d12116e71663cfcc70e__0053.png",
+          "images/6276_104_1_jpg.rf.1933058fdc3d62e8f985aa20cfc3f24f__0054.png",
+          "images/6447_104_1_jpg.rf.b55880df9e298ac03b46c54b516a495d__0056.png"
+        ],
+        "archive_uncompressed_bytes": 424683,
+        "archive_ignored_entry_count": 3
+      },
+      "purpose": "validation"
+    },
+    "path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_943408ff-9908-4831-8a8e-4bf4a45bd47a/val/val_1_1361ec05-49d9-41d5-8e89-c7d5e14845e1_car_number_ocr_text_validation_bundle.zip",
+    "size_bytes": 410264,
+    "archive_path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_943408ff-9908-4831-8a8e-4bf4a45bd47a/val/val_1_1361ec05-49d9-41d5-8e89-c7d5e14845e1_car_number_ocr_text_validation_bundle.zip",
+    "extracted_dir": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_943408ff-9908-4831-8a8e-4bf4a45bd47a/val/val_1_1361ec05-49d9-41d5-8e89-c7d5e14845e1_car_number_ocr_text_validation_bundle_dataset",
+    "members": [
+      {
+        "relative_path": "images/6775_104_1_jpg.rf.3713dc1b980c226251f8e7c5810daeb2__0004.png",
+        "path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_943408ff-9908-4831-8a8e-4bf4a45bd47a/val/val_1_1361ec05-49d9-41d5-8e89-c7d5e14845e1_car_number_ocr_text_validation_bundle_dataset/images/6775_104_1_jpg.rf.3713dc1b980c226251f8e7c5810daeb2__0004.png",
+        "size_bytes": 37242
+      },
+      {
+        "relative_path": "images/6472_104_0_jpg.rf.2bb2221c4b152125ac61ce2b2a105a30__0005.png",
+        "path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_943408ff-9908-4831-8a8e-4bf4a45bd47a/val/val_1_1361ec05-49d9-41d5-8e89-c7d5e14845e1_car_number_ocr_text_validation_bundle_dataset/images/6472_104_0_jpg.rf.2bb2221c4b152125ac61ce2b2a105a30__0005.png",
+        "size_bytes": 36755
+      },
+      {
+        "relative_path": "images/3542_104_0_jpg.rf.0df66ec9ab0f91510738e2c6090c1f8d__0008.png",
+        "path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_943408ff-9908-4831-8a8e-4bf4a45bd47a/val/val_1_1361ec05-49d9-41d5-8e89-c7d5e14845e1_car_number_ocr_text_validation_bundle_dataset/images/3542_104_0_jpg.rf.0df66ec9ab0f91510738e2c6090c1f8d__0008.png",
+        "size_bytes": 24976
+      },
+      {
+        "relative_path": "images/6845_104_0_jpg.rf.13787b70faaa27363c21638f152db33d__0010.png",
+        "path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_943408ff-9908-4831-8a8e-4bf4a45bd47a/val/val_1_1361ec05-49d9-41d5-8e89-c7d5e14845e1_car_number_ocr_text_validation_bundle_dataset/images/6845_104_0_jpg.rf.13787b70faaa27363c21638f152db33d__0010.png",
+        "size_bytes": 28179
+      },
+      {
+        "relative_path": "images/9670_104_1_jpg.rf.25bf7368b445aa4cb486d543e4c9ad84__0022.png",
+        "path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_943408ff-9908-4831-8a8e-4bf4a45bd47a/val/val_1_1361ec05-49d9-41d5-8e89-c7d5e14845e1_car_number_ocr_text_validation_bundle_dataset/images/9670_104_1_jpg.rf.25bf7368b445aa4cb486d543e4c9ad84__0022.png",
+        "size_bytes": 38183
+      },
+      {
+        "relative_path": "images/386_104_0_jpg.rf.52b5f99aa1b386d48686b26651f0ca53__0025.png",
+        "path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_943408ff-9908-4831-8a8e-4bf4a45bd47a/val/val_1_1361ec05-49d9-41d5-8e89-c7d5e14845e1_car_number_ocr_text_validation_bundle_dataset/images/386_104_0_jpg.rf.52b5f99aa1b386d48686b26651f0ca53__0025.png",
+        "size_bytes": 34703
+      },
+      {
+        "relative_path": "images/6185_104_1_jpg.rf.c21878560de9233e81ed85c7831ece00__0033.png",
+        "path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_943408ff-9908-4831-8a8e-4bf4a45bd47a/val/val_1_1361ec05-49d9-41d5-8e89-c7d5e14845e1_car_number_ocr_text_validation_bundle_dataset/images/6185_104_1_jpg.rf.c21878560de9233e81ed85c7831ece00__0033.png",
+        "size_bytes": 30739
+      },
+      {
+        "relative_path": "images/6361_104_0_jpg.rf.f626b801836972c69d1e6b75482cadb2__0042.png",
+        "path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_943408ff-9908-4831-8a8e-4bf4a45bd47a/val/val_1_1361ec05-49d9-41d5-8e89-c7d5e14845e1_car_number_ocr_text_validation_bundle_dataset/images/6361_104_0_jpg.rf.f626b801836972c69d1e6b75482cadb2__0042.png",
+        "size_bytes": 14574
+      },
+      {
+        "relative_path": "images/6515_104_1_jpg.rf.75022ce71ac3ad440a8d933de5527298__0049.png",
+        "path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_943408ff-9908-4831-8a8e-4bf4a45bd47a/val/val_1_1361ec05-49d9-41d5-8e89-c7d5e14845e1_car_number_ocr_text_validation_bundle_dataset/images/6515_104_1_jpg.rf.75022ce71ac3ad440a8d933de5527298__0049.png",
+        "size_bytes": 34258
+      },
+      {
+        "relative_path": "images/6319_104_0_jpg.rf.c9d7e08eabce9d12116e71663cfcc70e__0053.png",
+        "path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_943408ff-9908-4831-8a8e-4bf4a45bd47a/val/val_1_1361ec05-49d9-41d5-8e89-c7d5e14845e1_car_number_ocr_text_validation_bundle_dataset/images/6319_104_0_jpg.rf.c9d7e08eabce9d12116e71663cfcc70e__0053.png",
+        "size_bytes": 17822
+      },
+      {
+        "relative_path": "images/6276_104_1_jpg.rf.1933058fdc3d62e8f985aa20cfc3f24f__0054.png",
+        "path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_943408ff-9908-4831-8a8e-4bf4a45bd47a/val/val_1_1361ec05-49d9-41d5-8e89-c7d5e14845e1_car_number_ocr_text_validation_bundle_dataset/images/6276_104_1_jpg.rf.1933058fdc3d62e8f985aa20cfc3f24f__0054.png",
+        "size_bytes": 35579
+      },
+      {
+        "relative_path": "images/6447_104_1_jpg.rf.b55880df9e298ac03b46c54b516a495d__0056.png",
+        "path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_943408ff-9908-4831-8a8e-4bf4a45bd47a/val/val_1_1361ec05-49d9-41d5-8e89-c7d5e14845e1_car_number_ocr_text_validation_bundle_dataset/images/6447_104_1_jpg.rf.b55880df9e298ac03b46c54b516a495d__0056.png",
+        "size_bytes": 40685
+      },
+      {
+        "relative_path": "images/6204_104_1_jpg.rf.d1da18a53ce5c6756415afcbf6f813c7__0057.png",
+        "path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_943408ff-9908-4831-8a8e-4bf4a45bd47a/val/val_1_1361ec05-49d9-41d5-8e89-c7d5e14845e1_car_number_ocr_text_validation_bundle_dataset/images/6204_104_1_jpg.rf.d1da18a53ce5c6756415afcbf6f813c7__0057.png",
+        "size_bytes": 41717
+      }
+    ],
+    "resource_count": 13,
+    "ignored_entry_count": 3,
+    "archive_preview_members": [
+      "images/6775_104_1_jpg.rf.3713dc1b980c226251f8e7c5810daeb2__0004.png",
+      "images/6472_104_0_jpg.rf.2bb2221c4b152125ac61ce2b2a105a30__0005.png",
+      "images/3542_104_0_jpg.rf.0df66ec9ab0f91510738e2c6090c1f8d__0008.png",
+      "images/6845_104_0_jpg.rf.13787b70faaa27363c21638f152db33d__0010.png",
+      "images/9670_104_1_jpg.rf.25bf7368b445aa4cb486d543e4c9ad84__0022.png",
+      "images/386_104_0_jpg.rf.52b5f99aa1b386d48686b26651f0ca53__0025.png",
+      "images/6185_104_1_jpg.rf.c21878560de9233e81ed85c7831ece00__0033.png",
+      "images/6361_104_0_jpg.rf.f626b801836972c69d1e6b75482cadb2__0042.png",
+      "images/6515_104_1_jpg.rf.75022ce71ac3ad440a8d933de5527298__0049.png",
+      "images/6319_104_0_jpg.rf.c9d7e08eabce9d12116e71663cfcc70e__0053.png",
+      "images/6276_104_1_jpg.rf.1933058fdc3d62e8f985aa20cfc3f24f__0054.png",
+      "images/6447_104_1_jpg.rf.b55880df9e298ac03b46c54b516a495d__0056.png",
+      "images/6204_104_1_jpg.rf.d1da18a53ce5c6756415afcbf6f813c7__0057.png"
+    ]
+  }
+]

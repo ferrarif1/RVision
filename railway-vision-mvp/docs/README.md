@@ -83,6 +83,8 @@
   用户视角目标态完整实现方案（V1）。
 - [product/platform_user_centric_execution_backlog_v1.md](./product/platform_user_centric_execution_backlog_v1.md)
   对应执行清单与阶段验收标准（V1）。
+- [product/current_execution_backlog_2026-03-10.md](./product/current_execution_backlog_2026-03-10.md)
+  当前真实执行清单：已完成、半完成、中断项与下一步顺序。
 - [product/vistral_positioning_and_role_onboarding.md](./product/vistral_positioning_and_role_onboarding.md)
   Vistral 的产品定位、核心价值和角色上手路径。
 - [project_organization.md](./project_organization.md)

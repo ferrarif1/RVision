@@ -16,6 +16,7 @@ from app.core.constants import MODEL_STATUS_APPROVED
 from app.core.constants import MODEL_STATUS_RELEASED
 from app.core.constants import MODEL_STATUS_SUBMITTED
 from app.core.config import get_settings
+from app.core.ui_errors import raise_ui_error
 from app.db.database import get_db
 from app.db.models import AuditLog, DataAsset, Device, InferenceResult, InferenceTask, ModelRecord, ModelRelease, Tenant, User
 from app.security.dependencies import AuthUser, require_roles
@@ -889,11 +890,22 @@ def approve_model(
 ):
     model = db.query(ModelRecord).filter(ModelRecord.id == payload.model_id).first()
     if not model:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "model_not_found",
+            "模型不存在，或当前账号看不到这版模型。",
+            next_step="请回到模型中心刷新列表，再重新选择一版模型。",
+        )
 
     validation_report = build_model_validation_report(db, model, override_validation_asset_ids=payload.validation_asset_ids)
     if not validation_report.get("can_approve"):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Model failed validation gate: {validation_report.get('summary')}")
+        raise_ui_error(
+            status.HTTP_409_CONFLICT,
+            "model_validation_gate_failed",
+            "当前模型还没有通过验证门禁，暂时不能审批通过。",
+            next_step="请先补充建议验证样本，修复阻断项后再重新审批。",
+            raw_detail={"summary": validation_report.get("summary")},
+        )
 
     resolved_validation_asset_ids = payload.validation_asset_ids or validation_report.get("validation_asset_ids") or []
     resolved_validation_summary = _clean_optional(payload.validation_summary) or validation_report.get("summary")
@@ -953,20 +965,42 @@ def release_model(
 ):
     model = db.query(ModelRecord).filter(ModelRecord.id == payload.model_id).first()
     if not model:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "model_not_found",
+            "模型不存在，或当前账号看不到这版模型。",
+            next_step="请回到模型中心刷新列表，再重新选择一版模型。",
+        )
     if model.status not in {MODEL_STATUS_APPROVED, MODEL_STATUS_RELEASED}:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Model must be APPROVED before release",
+        raise_ui_error(
+            status.HTTP_409_CONFLICT,
+            "model_not_approved_for_release",
+            "模型还没有审批通过，暂时不能发布。",
+            next_step="请先到审批工作台完成验证和审批，再继续发布。",
         )
     # 交付模式与授权模式必须匹配，避免“只能API交付却没有API授权”等错误组合。
     # Delivery mode must be compatible with authorization mode.
     if payload.delivery_mode == "api" and payload.authorization_mode == "device_key":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="API delivery requires api_token or hybrid authorization")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "release_delivery_authorization_mismatch",
+            "当前交付方式和授权方式不匹配。",
+            next_step="API 交付请改用 api_token 或 hybrid 授权。",
+        )
     if payload.delivery_mode == "local_key" and payload.authorization_mode == "api_token":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Local encrypted delivery requires device_key or hybrid authorization")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "release_delivery_authorization_mismatch",
+            "当前交付方式和授权方式不匹配。",
+            next_step="本地加密交付请改用 device_key 或 hybrid 授权。",
+        )
     if payload.delivery_mode == "hybrid" and payload.authorization_mode != "hybrid":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Hybrid delivery requires hybrid authorization_mode")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "release_delivery_authorization_mismatch",
+            "混合交付必须搭配混合授权方式。",
+            next_step="请把 authorization_mode 调整为 hybrid 后再发布。",
+        )
 
     validation_report = build_model_validation_report(db, model)
     release_risk_summary = build_model_release_risk_summary(
@@ -981,7 +1015,13 @@ def release_model(
         local_key_label=payload.local_key_label,
     )
     if not release_risk_summary.get("can_release"):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Release blocked: {release_risk_summary.get('summary')}")
+        raise_ui_error(
+            status.HTTP_409_CONFLICT,
+            "release_risk_gate_failed",
+            "当前模型还没有满足发布前风险门禁，暂时不能发布。",
+            next_step="请先处理工作台里的阻断项，再重新执行发布前评估。",
+            raw_detail={"summary": release_risk_summary.get("summary")},
+        )
 
     api_access_key_preview = None
     if payload.delivery_mode in {"api", "hybrid"}:

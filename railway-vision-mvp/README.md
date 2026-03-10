@@ -179,16 +179,23 @@ bash docker/scripts/api_regression.sh
 
 ```bash
 cd <repo-root>
-cp deploy/training-worker/worker.env.example deploy/training-worker/worker.env
-bash deploy/training-worker/run_worker.sh --once
+python3 deploy/training-worker/bootstrap_local_worker.py bootstrap --start --restart
 ```
 
 worker 独立部署物料已统一放到 `deploy/training-worker/`：
 
+- `bootstrap_local_worker.py`：本机一键注册 / 写入 `worker.env` / 启动 worker
 - `run_worker.sh`：worker 启动入口
 - `worker.env.example`：环境变量模板
 - `requirements.txt`：最小依赖
 - `build_bundle.py`：生成独立可下发 bundle
+
+如果只想手工启动已有配置：
+
+```bash
+cd <repo-root>
+bash deploy/training-worker/run_worker.sh --once
+```
 
 如果需要把 worker 下发到远端训练机：
 
@@ -330,7 +337,8 @@ python3 docker/scripts/db_migrate.py --apply
 - `db_migrate.py` 优先在 `vistral_backend` 容器内执行，用于手动查看 `schema_migrations` 状态或在离线维护时补跑迁移
 - 当前迁移文件目录为 `backend/app/db/migrations/versions/`
 - 当前采用 snapshot-at-tip 策略：最新迁移文件必须是 `*_schema.sql` 或 `*_snapshot.sql`，用于表达当前完整 schema
-- `backend/app/db/schema.sql` 不再手工散改；如更新了最新 snapshot migration，请执行 `python3 docker/scripts/schema_snapshot_guard.py --write`
+- `python3 docker/scripts/db_migrate.py --apply` 成功后会自动同步 `backend/app/db/schema.sql`
+- 如需只补跑迁移而不改写本地 schema 快照，可额外传 `--no-sync-schema`
 
 ## 默认账号
 
