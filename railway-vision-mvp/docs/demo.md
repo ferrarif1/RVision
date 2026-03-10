@@ -280,6 +280,7 @@ python3 docker/scripts/prepare_local_car_number_text_dataset.py \
 - “导出训练资产并直接创建训练作业”：会直接创建一条 `car_number_ocr` 训练作业
 - 训练作业成功后，训练中心可直接点击“直接验证候选模型”，只补单图/视频资产即可创建验证任务
 - 验证任务完成后，结果中心会显示“验证结论卡”，集中展示样本数、低置信度数、OCR 文本和建议动作
+- 如需把这批验证结果继续回灌训练，结果中心的“结果回灌工作台”可直接导出训练/验证数据集版本，并自动把 `dataset_version / asset_id / target_model_code` 预填回训练中心
 
 ## 1.6 创建任务
 

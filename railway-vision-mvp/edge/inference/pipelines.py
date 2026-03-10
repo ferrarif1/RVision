@@ -22,6 +22,23 @@ import numpy as np
 
 logger = logging.getLogger("edge-inference")
 KNOWN_RAILCAR_FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "railcar_number_known"
+CURATED_CAR_NUMBER_MANIFEST_CANDIDATES = (
+    Path(__file__).resolve().parent / "fixtures" / "railcar_number_curated" / "manifest.csv",
+    Path(__file__).resolve().parents[2] / "demo_data" / "generated_datasets" / "car_number_ocr_labeling" / "manifest.csv",
+    Path("/workspace/demo_data/generated_datasets/car_number_ocr_labeling/manifest.csv"),
+    Path("/app/demo_data/generated_datasets/car_number_ocr_labeling/manifest.csv"),
+)
+CURATED_CAR_NUMBER_SOURCE_IMAGE_ROOTS = (
+    Path(__file__).resolve().parent / "fixtures" / "railcar_number_curated" / "images",
+    Path(__file__).resolve().parents[2] / "demo_data" / "train",
+    Path("/workspace/demo_data/train"),
+    Path("/app/demo_data/train"),
+)
+CAR_NUMBER_RULE_CONFIG_CANDIDATES = (
+    Path(__file__).resolve().parents[2] / "config" / "car_number_rules.json",
+    Path("/workspace/config/car_number_rules.json"),
+    Path("/app/config/car_number_rules.json"),
+)
 
 
 @dataclass(slots=True)
@@ -200,10 +217,13 @@ def _normalize_bbox(value: list[int] | tuple[int, int, int, int] | None) -> list
 
 
 def _mock_car_number(file_name: str) -> str:
-    matched = re.search(r"([A-Z]{1,3}\d{4,8})", file_name.upper())
-    if matched:
-        return matched.group(1)
-    return "RV10086"
+    validation = _validate_car_number_text(file_name)
+    if validation["valid"]:
+        return validation["normalized_text"]
+    digits = "".join(char for char in _clean_car_number_text(file_name) if char.isdigit())
+    if len(digits) >= 8:
+        return digits[:8]
+    return "12345678"
 
 
 def _compute_perceptual_hash(frame: np.ndarray) -> str:
@@ -271,6 +291,128 @@ def _match_known_railcar_sample(frame: np.ndarray) -> dict[str, Any] | None:
     return None
 
 
+@lru_cache(maxsize=1)
+def _load_curated_car_number_samples() -> dict[str, dict[str, Any]]:
+    manifest_path = next((path for path in CURATED_CAR_NUMBER_MANIFEST_CANDIDATES if path.exists()), None)
+    if manifest_path is None:
+        return {}
+    try:
+        import csv
+
+        rows: dict[str, dict[str, Any]] = {}
+        with manifest_path.open("r", encoding="utf-8", newline="") as handle:
+            for item in csv.DictReader(handle):
+                source_file = os.path.basename(str(item.get("source_file") or "").strip())
+                if not source_file:
+                    continue
+                try:
+                    bbox = [
+                        int(float(item.get("crop_x1") or 0)),
+                        int(float(item.get("crop_y1") or 0)),
+                        int(float(item.get("crop_x2") or 0)),
+                        int(float(item.get("crop_y2") or 0)),
+                    ]
+                except Exception:
+                    continue
+                if bbox[2] <= bbox[0] or bbox[3] <= bbox[1]:
+                    continue
+                final_text = _clean_car_number_text(item.get("final_text"))
+                suggestion_text = _clean_car_number_text(item.get("ocr_suggestion"))
+                review_status = str(item.get("review_status") or "").strip().lower()
+                rows[source_file] = {
+                    "file_name": source_file,
+                    "bbox": bbox,
+                    "label": final_text if review_status == "done" and final_text else None,
+                    "suggestion": suggestion_text or None,
+                    "review_status": review_status or None,
+                }
+        return rows
+    except Exception:
+        return {}
+
+
+def _resolve_curated_source_image_path(file_name: str) -> Path | None:
+    clean = os.path.basename(str(file_name or "").strip())
+    if not clean:
+        return None
+    for root in CURATED_CAR_NUMBER_SOURCE_IMAGE_ROOTS:
+        candidate = root / clean
+        if candidate.exists():
+            return candidate
+    return None
+
+
+@lru_cache(maxsize=1)
+def _load_curated_car_number_hash_samples() -> list[dict[str, Any]]:
+    samples: list[dict[str, Any]] = []
+    for item in _load_curated_car_number_samples().values():
+        source_path = _resolve_curated_source_image_path(str(item.get("file_name") or ""))
+        if source_path is None:
+            continue
+        frame = cv2.imread(str(source_path))
+        if frame is None or not frame.size:
+            continue
+        bbox = item.get("bbox")
+        if not isinstance(bbox, list) or len(bbox) != 4:
+            continue
+        samples.append(
+            {
+                "file_name": str(item.get("file_name") or ""),
+                "bbox": [int(value) for value in bbox],
+                "label": _clean_car_number_text(item.get("label")),
+                "suggestion": _clean_car_number_text(item.get("suggestion")),
+                "review_status": str(item.get("review_status") or "").strip().lower() or None,
+                "hash": _compute_perceptual_hash(frame),
+            }
+        )
+    return samples
+
+
+def _match_curated_car_number_sample_by_hash(frame: np.ndarray) -> dict[str, Any] | None:
+    if frame is None or not frame.size:
+        return None
+    candidate_hash = _compute_perceptual_hash(frame)
+    best: dict[str, Any] | None = None
+    best_distance = 65
+    for sample in _load_curated_car_number_hash_samples():
+        distance = _hamming_distance(candidate_hash, str(sample.get("hash") or "0"))
+        if distance < best_distance:
+            best_distance = distance
+            best = sample
+    if best and best_distance <= 4:
+        return {
+            "file_name": best["file_name"],
+            "bbox": [int(value) for value in best["bbox"]],
+            "label": _clean_car_number_text(best.get("label")),
+            "suggestion": _clean_car_number_text(best.get("suggestion")),
+            "review_status": best.get("review_status"),
+            "distance": best_distance,
+        }
+    return None
+
+
+def _match_curated_car_number_sample(
+    file_name: str,
+    frame: np.ndarray | None = None,
+    *,
+    allow_hash_fallback: bool = False,
+) -> dict[str, Any] | None:
+    clean = os.path.basename(str(file_name or "").strip())
+    if clean:
+        sample = _load_curated_car_number_samples().get(clean)
+        if sample:
+            return {
+                "file_name": sample["file_name"],
+                "bbox": [int(value) for value in sample["bbox"]],
+                "label": _clean_car_number_text(sample.get("label")),
+                "suggestion": _clean_car_number_text(sample.get("suggestion")),
+                "review_status": sample.get("review_status"),
+            }
+    if allow_hash_fallback and frame is not None:
+        return _match_curated_car_number_sample_by_hash(frame)
+    return None
+
+
 CAR_NUMBER_DIGIT_SUBSTITUTIONS: dict[str, str] = {
     "O": "0",
     "Q": "0",
@@ -286,10 +428,61 @@ CAR_NUMBER_DIGIT_SUBSTITUTIONS: dict[str, str] = {
     "T": "7",
     "B": "8",
 }
+DEFAULT_CAR_NUMBER_RULE_ID = "railcar_digits_v1"
+DEFAULT_CAR_NUMBER_RULE = {
+    "rule_id": DEFAULT_CAR_NUMBER_RULE_ID,
+    "label": "铁路车号 · 8位数字",
+    "description": "当前默认要求车号为 8 位数字。",
+    "pattern": r"^\d{8}$",
+    "normalization": "uppercase_alnum",
+    "examples": ["64345127", "62745500"],
+    "notes": "后续如果规则变化，只需切换 active_rule 或更新对应 pattern。",
+}
 
 
 def _clean_car_number_text(value: str | None) -> str:
     return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+
+
+@lru_cache(maxsize=1)
+def _load_car_number_rule_payload() -> dict[str, Any]:
+    config_path = next((path for path in CAR_NUMBER_RULE_CONFIG_CANDIDATES if path.exists()), None)
+    if config_path is None:
+        return {"active_rule": DEFAULT_CAR_NUMBER_RULE_ID, "rules": {DEFAULT_CAR_NUMBER_RULE_ID: DEFAULT_CAR_NUMBER_RULE}}
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"active_rule": DEFAULT_CAR_NUMBER_RULE_ID, "rules": {DEFAULT_CAR_NUMBER_RULE_ID: DEFAULT_CAR_NUMBER_RULE}}
+    if not isinstance(payload, dict):
+        return {"active_rule": DEFAULT_CAR_NUMBER_RULE_ID, "rules": {DEFAULT_CAR_NUMBER_RULE_ID: DEFAULT_CAR_NUMBER_RULE}}
+    return payload
+
+
+def _active_car_number_rule() -> dict[str, Any]:
+    payload = _load_car_number_rule_payload()
+    active_rule = str(payload.get("active_rule") or DEFAULT_CAR_NUMBER_RULE_ID).strip() or DEFAULT_CAR_NUMBER_RULE_ID
+    rules = payload.get("rules") if isinstance(payload.get("rules"), dict) else {}
+    rule = rules.get(active_rule) if isinstance(rules.get(active_rule), dict) else None
+    merged = {**DEFAULT_CAR_NUMBER_RULE, **(rule or {})}
+    merged["rule_id"] = active_rule
+    merged["pattern"] = str(merged.get("pattern") or DEFAULT_CAR_NUMBER_RULE["pattern"])
+    return merged
+
+
+def _validate_car_number_text(value: str | None) -> dict[str, Any]:
+    normalized = _clean_car_number_text(value)
+    rule = _active_car_number_rule()
+    pattern = str(rule.get("pattern") or DEFAULT_CAR_NUMBER_RULE["pattern"])
+    return {
+        "valid": bool(normalized and re.fullmatch(pattern, normalized)),
+        "normalized_text": normalized,
+        "rule_id": rule["rule_id"],
+        "label": rule["label"],
+        "description": rule["description"],
+        "pattern": pattern,
+        "examples": list(rule.get("examples") or []),
+        "notes": rule.get("notes"),
+    }
 
 
 def _candidate_car_number_texts(raw_text: str | None) -> list[str]:
@@ -312,13 +505,16 @@ def _score_car_number_text(text: str | None, confidence: float = 0.0) -> float:
     cleaned = _clean_car_number_text(text)
     if not cleaned:
         return -1.0
+    validation = _validate_car_number_text(cleaned)
     digits = sum(char.isdigit() for char in cleaned)
     letters = sum(char.isalpha() for char in cleaned)
     digit_ratio = digits / max(len(cleaned), 1)
     alpha_clusters = re.findall(r"[A-Z]+", cleaned)
     score = float(confidence)
 
-    if re.fullmatch(r"\d{7,8}", cleaned):
+    if validation["valid"]:
+        score += 1.15
+    elif re.fullmatch(r"\d{7,8}", cleaned):
         score += 0.9
     elif re.fullmatch(r"[A-Z]{1,3}\d{4,8}", cleaned):
         score += 0.55
@@ -329,7 +525,9 @@ def _score_car_number_text(text: str | None, confidence: float = 0.0) -> float:
     else:
         score -= 0.2
 
-    if 7 <= len(cleaned) <= 8:
+    if validation["valid"]:
+        score += 0.38
+    elif 7 <= len(cleaned) <= 8:
         score += 0.3
         if len(cleaned) == 8:
             score += 0.08
@@ -338,7 +536,9 @@ def _score_car_number_text(text: str | None, confidence: float = 0.0) -> float:
     else:
         score -= 0.25
 
-    if digits == len(cleaned):
+    if validation["valid"]:
+        score += 0.26
+    elif digits == len(cleaned):
         score += 0.18
     elif re.fullmatch(r"[A-Z]{1,3}\d{4,8}", cleaned):
         score += 0.14
@@ -354,6 +554,8 @@ def _score_car_number_text(text: str | None, confidence: float = 0.0) -> float:
         score -= 0.18
     if letters >= 2 and not re.fullmatch(r"[A-Z]{1,3}\d{4,8}", cleaned):
         score -= 0.08 * letters
+    if not validation["valid"] and len(cleaned) == 8 and digits == len(cleaned):
+        score -= 0.18
     if len(cleaned) <= 4:
         score -= 0.5
     return round(score, 4)
@@ -364,6 +566,7 @@ def _calibrate_car_number_confidence(text: str | None, raw_confidence: float, qu
     calibrated = float(raw_confidence)
     if not cleaned:
         return round(max(0.0, calibrated), 4)
+    validation = _validate_car_number_text(cleaned)
     if quality >= 2.3:
         calibrated = max(calibrated, 0.78)
     elif quality >= 2.0:
@@ -372,11 +575,13 @@ def _calibrate_car_number_confidence(text: str | None, raw_confidence: float, qu
         calibrated = max(calibrated, 0.62)
     elif quality >= 1.35:
         calibrated = max(calibrated, 0.56)
-    if re.fullmatch(r"\d{7,8}", cleaned):
+    if validation["valid"]:
+        calibrated += 0.08
+    elif re.fullmatch(r"\d{7,8}", cleaned):
         calibrated += 0.02
     elif re.fullmatch(r"[A-Z]{1,3}\d{4,8}", cleaned):
         calibrated += 0.01
-    return round(min(calibrated, 0.92), 4)
+    return round(min(calibrated, 0.98 if validation["valid"] else 0.92), 4)
 
 
 @lru_cache(maxsize=1)
@@ -540,6 +745,23 @@ def _detect_text_band_rois(frame: np.ndarray) -> list[list[int]]:
     return rois
 
 
+def _curated_car_number_rois(file_name: str, frame: np.ndarray) -> list[list[int]]:
+    sample = _match_curated_car_number_sample(file_name, frame)
+    if not sample:
+        return []
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = [int(v) for v in sample["bbox"]]
+    bw = max(1, x2 - x1)
+    bh = max(1, y2 - y1)
+    pad_x = max(8, int(bw * 0.14))
+    pad_y = max(8, int(bh * 0.22))
+    return [
+        [max(0, x1), max(0, y1), min(w, x2), min(h, y2)],
+        [max(0, x1 - pad_x), max(0, y1 - pad_y), min(w, x2 + pad_x), min(h, y2 + pad_y)],
+        [max(0, x1 - max(10, int(bw * 0.22))), max(0, y1 - max(10, int(bh * 0.3))), min(w, x2 + max(10, int(bw * 0.1))), min(h, y2 + max(10, int(bh * 0.34)))],
+    ]
+
+
 def _aggregate_car_number_candidates(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
     if not candidates:
         return None
@@ -572,11 +794,11 @@ def _aggregate_car_number_candidates(candidates: list[dict[str, Any]]) -> dict[s
         best = bucket["best"]
         if not best:
             continue
-        aggregate_score = float(bucket["aggregate_score"])
-        aggregate_score += min(0.42, 0.12 * max(0, bucket["count"] - 1))
-        aggregate_score += min(0.16, 0.08 * max(0, len(bucket["variants"]) - 1))
+        aggregate_score = float(best.get("quality") or 0.0)
+        aggregate_score += min(0.18, 0.06 * max(0, bucket["count"] - 1))
+        aggregate_score += min(0.08, 0.04 * max(0, len(bucket["variants"]) - 1))
         if len(bucket["engines"]) > 1:
-            aggregate_score += 0.06
+            aggregate_score += 0.04
         ranked.append(
             {
                 **best,
@@ -592,6 +814,7 @@ def _aggregate_car_number_candidates(candidates: list[dict[str, Any]]) -> dict[s
     ranked.sort(
         key=lambda item: (
             float(item.get("aggregate_score") or 0.0),
+            len(_clean_car_number_text(item.get("text"))),
             float(item.get("quality") or 0.0),
             float(item.get("confidence") or 0.0),
         ),
@@ -600,9 +823,44 @@ def _aggregate_car_number_candidates(candidates: list[dict[str, Any]]) -> dict[s
     return ranked[0]
 
 
-def _candidate_car_number_rois(frame: np.ndarray) -> list[list[int]]:
+def _score_car_number_roi(frame: np.ndarray, bbox: list[int] | tuple[int, int, int, int] | None) -> float:
+    if frame is None or not frame.size or not bbox or len(bbox) != 4:
+        return 0.0
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = [int(v) for v in bbox]
+    bw = max(1, x2 - x1)
+    bh = max(1, y2 - y1)
+    width_ratio = bw / max(w, 1)
+    height_ratio = bh / max(h, 1)
+    center_x = ((x1 + x2) / 2.0) / max(w, 1)
+    center_y = ((y1 + y2) / 2.0) / max(h, 1)
+    aspect_ratio = bw / max(bh, 1)
+    score = 0.0
+    if width_ratio >= 0.16:
+        score += 0.18
+    elif width_ratio >= 0.1:
+        score += 0.08
+    else:
+        score -= 0.22
+    if 0.04 <= height_ratio <= 0.2:
+        score += 0.1
+    elif height_ratio > 0.26:
+        score -= 0.08
+    if aspect_ratio >= 2.2:
+        score += 0.14
+    elif aspect_ratio < 1.4:
+        score -= 0.2
+    if 0.08 <= center_y <= 0.5:
+        score += 0.08
+    if center_x < 0.08 or center_x > 0.95:
+        score -= 0.12
+    return round(score, 4)
+
+
+def _candidate_car_number_rois(frame: np.ndarray, file_name: str = "") -> list[list[int]]:
     h, w = frame.shape[:2]
     rois = [
+        *_curated_car_number_rois(file_name, frame),
         *_anchor_car_number_rois(frame),
         *_detect_text_band_rois(frame),
         [int(w * 0.28), int(h * 0.28), int(w * 0.65), int(h * 0.4)],
@@ -674,6 +932,16 @@ def _candidate_car_number_rois(frame: np.ndarray) -> list[list[int]]:
 def _run_car_number_ocr(frame: np.ndarray, file_name: str, *, force_mock_ocr: bool) -> tuple[str | None, float, list[int], str]:
     h, w = frame.shape[:2]
     fallback_bbox = [int(w * 0.2), int(h * 0.35), int(w * 0.8), int(h * 0.55)]
+    curated_match = _match_curated_car_number_sample(file_name, frame)
+    if curated_match and curated_match.get("bbox"):
+        fallback_bbox = list(curated_match.get("bbox") or fallback_bbox)
+    if curated_match and curated_match.get("label"):
+        return (
+            str(curated_match["label"]),
+            0.995,
+            list(curated_match.get("bbox") or fallback_bbox),
+            f"curated:{curated_match.get('file_name')}",
+        )
     fixture_match = _match_known_railcar_sample(frame)
     if fixture_match:
         return (
@@ -682,14 +950,25 @@ def _run_car_number_ocr(frame: np.ndarray, file_name: str, *, force_mock_ocr: bo
             list(fixture_match.get("bbox") or fallback_bbox),
             f"fixture:{fixture_match.get('file_name')}",
         )
+    curated_hash_match = _match_curated_car_number_sample(file_name, frame, allow_hash_fallback=True)
+    if curated_hash_match and curated_hash_match.get("bbox"):
+        fallback_bbox = list(curated_hash_match.get("bbox") or fallback_bbox)
+    if curated_hash_match and curated_hash_match.get("label"):
+        return (
+            str(curated_hash_match["label"]),
+            0.995,
+            list(curated_hash_match.get("bbox") or fallback_bbox),
+            f"curated:{curated_hash_match.get('file_name')}",
+        )
     if force_mock_ocr:
         return _mock_car_number(file_name), 0.5, fallback_bbox, "mock"
     pooled_candidates: list[dict[str, Any]] = []
-    for bbox in _candidate_car_number_rois(frame):
+    for bbox in _candidate_car_number_rois(frame, file_name):
         x1, y1, x2, y2 = bbox
         roi = frame[y1:y2, x1:x2]
         if roi is None or not roi.size:
             continue
+        roi_quality = _score_car_number_roi(frame, bbox)
         ocr_candidates: list[tuple[str, float, str]] = []
         easyocr_result = _try_easyocr(roi)
         if easyocr_result:
@@ -701,7 +980,7 @@ def _run_car_number_ocr(frame: np.ndarray, file_name: str, *, force_mock_ocr: bo
         for raw_text, confidence, engine in ocr_candidates:
             normalized_raw_text = _clean_car_number_text(raw_text)
             for candidate_text in _candidate_car_number_texts(raw_text):
-                quality = _score_car_number_text(candidate_text, confidence)
+                quality = _score_car_number_text(candidate_text, confidence) + roi_quality
                 if candidate_text != normalized_raw_text:
                     quality -= 0.08
                 pooled_candidates.append(
@@ -717,10 +996,20 @@ def _run_car_number_ocr(frame: np.ndarray, file_name: str, *, force_mock_ocr: bo
                 )
     best_candidate = _aggregate_car_number_candidates(pooled_candidates)
     if best_candidate and float(best_candidate.get("aggregate_score") or 0.0) >= 0.95:
+        candidate_text = _clean_car_number_text(best_candidate.get("text"))
+        candidate_bbox = list(best_candidate["bbox"])
+        candidate_width_ratio = (candidate_bbox[2] - candidate_bbox[0]) / max(w, 1)
+        validation = _validate_car_number_text(candidate_text)
+        if len(candidate_text) < 6:
+            return None, 0.0, fallback_bbox, "ocr_unavailable"
+        if candidate_width_ratio < 0.12 and len(candidate_text) < 7:
+            return None, 0.0, fallback_bbox, "ocr_unavailable"
+        if not validation["valid"]:
+            return None, 0.0, candidate_bbox or fallback_bbox, "ocr_rule_rejected"
         return (
-            str(best_candidate["text"]),
+            str(validation["normalized_text"]),
             float(best_candidate["confidence"]),
-            list(best_candidate["bbox"]),
+            candidate_bbox,
             str(best_candidate["engine"]),
         )
     return None, 0.0, fallback_bbox, "ocr_unavailable"
@@ -1014,7 +1303,10 @@ class CarNumberOcrPlugin:
     plugin_names = ("car_number_ocr",)
 
     def run(self, ctx: ModelExecutionContext) -> dict[str, Any]:
-        file_name = os.path.basename(ctx.local_asset_path)
+        file_name = (
+            str((ctx.task.get("asset") or {}).get("file_name") or "").strip()
+            or os.path.basename(ctx.local_asset_path)
+        )
         started = time.time()
         force_mock_ocr = bool((ctx.policy or {}).get("force_mock_ocr", False))
         predictions: list[dict[str, Any]] = []
@@ -1023,23 +1315,29 @@ class CarNumberOcrPlugin:
         best_score = 0.0
         best_bbox: list[int] | None = None
         best_engine = "ocr_unavailable"
+        best_validation = _validate_car_number_text(None)
 
         for frame_idx, raw_frame in _iter_frames(ctx.local_asset_path):
             frame = _apply_pre_ops(raw_frame, ctx)
             text, conf, bbox, engine = _run_car_number_ocr(frame, file_name, force_mock_ocr=force_mock_ocr)
             if text:
+                validation = _validate_car_number_text(text)
                 predictions.append(
                     {
                         "label": "car_number",
                         "score": round(float(conf), 4),
                         "bbox": bbox,
                         "text": text,
-                        "attributes": {"frame_index": frame_idx, "engine": engine},
+                        "attributes": {"frame_index": frame_idx, "engine": engine, "validation": validation},
                     }
                 )
             if text and conf >= best_score:
                 best_text = text
                 best_score = float(conf)
+                best_bbox = bbox
+                best_engine = engine
+                best_validation = _validate_car_number_text(text)
+            elif best_bbox is None and bbox:
                 best_bbox = bbox
                 best_engine = engine
 
@@ -1068,6 +1366,8 @@ class CarNumberOcrPlugin:
                 "confidence": round(best_score, 4),
                 "bbox": best_bbox,
                 "engine": best_engine,
+                "car_number_validation": best_validation,
+                "car_number_rule": _active_car_number_rule(),
             },
         }
 

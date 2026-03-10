@@ -82,6 +82,29 @@ function collectRecognizedTexts(predictions, summary = {}) {
   return [...new Set(values.filter(Boolean))];
 }
 
+function normalizeCarNumberText(value) {
+  return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function validateCarNumberByRule(value, rule) {
+  const normalized = normalizeCarNumberText(value);
+  const pattern = String(rule?.pattern || '^\\d{8}$');
+  let valid = false;
+  try {
+    valid = !!(normalized && new RegExp(pattern).test(normalized));
+  } catch {
+    valid = false;
+  }
+  return {
+    valid,
+    normalized,
+    ruleId: String(rule?.rule_id || 'railcar_digits_v1'),
+    label: String(rule?.label || '铁路车号 · 8位数字'),
+    description: String(rule?.description || '当前默认要求车号为 8 位数字。'),
+    pattern,
+  };
+}
+
 function splitCsv(value) {
   return String(value || '')
     .split(/[\n,，\s]+/)
@@ -496,10 +519,14 @@ function summarizeResultRow(row) {
   const ocrConfidence = Number.isFinite(ocrConfidenceRaw) ? ocrConfidenceRaw : null;
   const ocrEngine = String(resultJson.engine || summary.engine || primaryPrediction?.attributes?.engine || '').trim() || null;
   const ocrBBox = normalizeReviewBBox(resultJson.bbox || summary.bbox || primaryPrediction?.bbox);
+  const ocrValidation = resultJson.car_number_validation || summary.car_number_validation || primaryPrediction?.attributes?.validation || null;
+  const ocrRule = resultJson.car_number_rule || summary.car_number_rule || null;
   const ocrRisk = taskType !== 'car_number_ocr'
     ? null
     : !ocrText
       ? 'high'
+      : ocrValidation && ocrValidation.valid === false
+        ? 'high'
       : ocrConfidence == null
         ? 'warning'
         : ocrConfidence < 0.6
@@ -515,7 +542,9 @@ function summarizeResultRow(row) {
   const ocrRiskSummary = !ocrRisk
     ? ''
     : ocrRisk === 'high'
-      ? '当前没有稳定 OCR 文本，建议人工框选或重新复核。'
+      ? (ocrValidation && ocrValidation.valid === false
+        ? `当前文本不符合规则：${ocrValidation.description || '请人工复核。'}`
+        : '当前没有稳定 OCR 文本，建议人工框选或重新复核。')
       : ocrRisk === 'warning'
         ? '当前已识别出车号文本，但置信度偏低，建议人工复核后再用于训练或验收。'
         : '当前 OCR 文本和置信度均达到可直接浏览的水平。';
@@ -535,6 +564,8 @@ function summarizeResultRow(row) {
     ocrConfidence,
     ocrEngine,
     ocrBBox,
+    ocrValidation,
+    ocrRule,
     ocrRisk,
     ocrRiskLabel,
     ocrRiskSummary,
@@ -584,7 +615,10 @@ function renderResultOcrSignal(item) {
         <div><span>confidence</span><strong>${esc(formatMetricValue(item.ocrConfidence, { percent: true }))}</strong></div>
         <div><span>engine</span><strong>${esc(item.ocrEngine || '-')}</strong></div>
         <div><span>bbox</span><strong>${esc(item.ocrBBox?.join(', ') || '-')}</strong></div>
+        <div><span>合法校验</span><strong>${esc(item.ocrValidation ? (item.ocrValidation.valid ? '合法' : '不合法') : '-')}</strong></div>
+        <div><span>规则</span><strong>${esc(item.ocrRule?.label || item.ocrValidation?.label || '-')}</strong></div>
       </div>
+      ${(item.ocrRule?.description || item.ocrValidation?.description) ? `<div class="hint">${esc(item.ocrRule?.description || item.ocrValidation?.description || '')}</div>` : ''}
     </section>
   `;
 }
@@ -2561,6 +2595,7 @@ function pageTraining(route, rawCtx) {
                 </div>
                 <div id="trainingDatasetVersionLibrary">${renderLoading('加载数据集版本...')}</div>
                 <div id="trainingDatasetCompareWrap" class="selection-summary">${renderEmpty('选择某个数据集版本后，可在这里查看与上一版的差异，或设为推荐训练集。')}</div>
+                <div id="trainingDatasetRollbackWrap" class="selection-summary">${renderEmpty('需要回滚某个版本时，点对应卡片里的“回滚为新版本”，这里会出现确认区。')}</div>
                 <div id="trainingDatasetPreviewWrap" class="selection-summary">${renderEmpty('选择某个数据集版本后，可在这里查看样本摘要、标签和复核状态。')}</div>
               </section>
               <form id="trainingCreateForm" class="form-grid">
@@ -2581,17 +2616,31 @@ function pageTraining(route, rawCtx) {
                     <input name="target_model_code" placeholder="railway-defect-ft" required />
                     <label>target_version(目标版本)</label>
                     <input name="target_version" placeholder="v20260306.1" required />
+                    <label>training_preset(训练预设)</label>
+                    <select id="trainingPresetSelect" name="training_preset">
+                      <option value="car_number_balanced">车号 OCR · 标准微调</option>
+                      <option value="car_number_fast">车号 OCR · 快速验证</option>
+                      <option value="car_number_eval">车号 OCR · 验证评估</option>
+                      <option value="custom">自定义</option>
+                    </select>
+                    <div class="hint">默认按预设自动生成训练参数。只有确实需要覆盖时，再展开下面的高级 JSON。</div>
                   </div>
                   <div class="form-grid">
                     <label>base_model_id(供应商算法 / 基础模型 ID，可选)</label>
                     <input name="base_model_id" list="trainingModelsDatalist" placeholder="model-id" />
                     <div class="hint">建议先从上方“供应商算法库”选择，避免手工输入错误模型 ID。</div>
-                    <label>worker_code(训练机编码，可选)</label>
-                    <input name="worker_code" list="trainingWorkersCodeDatalist" placeholder="train-worker-01" />
-                    <label>worker_host(IP / 主机地址，可选)</label>
-                    <input name="worker_host" list="trainingWorkersHostDatalist" placeholder="10.0.0.31" />
-                    <label>spec(JSON 训练参数，可选)</label>
-                    <textarea name="spec" rows="4">{}</textarea>
+                    <details>
+                      <summary>高级参数与训练机（可选）</summary>
+                      <div class="form-grid">
+                        <label>worker_code(训练机编码，可选)</label>
+                        <input name="worker_code" list="trainingWorkersCodeDatalist" placeholder="默认自动选择活跃 Worker" />
+                        <label>worker_host(IP / 主机地址，可选)</label>
+                        <input name="worker_host" list="trainingWorkersHostDatalist" placeholder="可留空，由系统自动补活跃 Worker" />
+                        <label>spec(JSON 训练参数，可选)</label>
+                        <textarea name="spec" rows="4">{}</textarea>
+                        <div class="hint">留空时按上面的训练预设自动生成。只有你要覆盖 epochs / learning_rate / preprocessing 时才需要改。</div>
+                      </div>
+                    </details>
                   </div>
                 </div>
                 <datalist id="trainingAssetsDatalist"></datalist>
@@ -2604,6 +2653,7 @@ function pageTraining(route, rawCtx) {
                 </div>
                 <button class="primary" type="submit">创建训练作业</button>
                 <div id="trainingCreateMsg" class="hint"></div>
+                <div id="trainingCreateResultWrap">${renderEmpty('创建成功后，这里会直接给出下一步动作。')}</div>
               </form>
             </section>
           `
@@ -2619,6 +2669,7 @@ function pageTraining(route, rawCtx) {
       const registerWorkerMsg = root.querySelector('#registerWorkerMsg');
       const createForm = root.querySelector('#trainingCreateForm');
       const createMsg = root.querySelector('#trainingCreateMsg');
+      const createResultWrap = root.querySelector('#trainingCreateResultWrap');
       const trainingRuntimeAlertWrap = root.querySelector('#trainingRuntimeAlertWrap');
       const trainingRunSummaryWrap = root.querySelector('#trainingRunSummaryWrap');
       const assetsDatalist = root.querySelector('#trainingAssetsDatalist');
@@ -2639,6 +2690,7 @@ function pageTraining(route, rawCtx) {
       const trainingDatasetShowHistory = root.querySelector('#trainingDatasetShowHistory');
       const trainingDatasetMeta = root.querySelector('#trainingDatasetMeta');
       const datasetCompareWrap = root.querySelector('#trainingDatasetCompareWrap');
+      const datasetRollbackWrap = root.querySelector('#trainingDatasetRollbackWrap');
       const datasetPreviewWrap = root.querySelector('#trainingDatasetPreviewWrap');
       const selectionSummary = root.querySelector('#trainingSelectionSummary');
       const prefillTrainingAssetIds = localStorage.getItem(STORAGE_KEYS.prefillTrainingAssetIds);
@@ -2654,6 +2706,7 @@ function pageTraining(route, rawCtx) {
       const workerHostInput = createForm?.querySelector('input[name="worker_host"]');
       const targetModelCodeInput = createForm?.querySelector('input[name="target_model_code"]');
       const targetVersionInput = createForm?.querySelector('input[name="target_version"]');
+      const trainingPresetInput = createForm?.querySelector('#trainingPresetSelect');
       const specInput = createForm?.querySelector('textarea[name="spec"]');
       let assistAssets = [];
       let assistModels = [];
@@ -2661,12 +2714,14 @@ function pageTraining(route, rawCtx) {
       let assistDatasetVersions = [];
       let activeDatasetCompare = null;
       let activeDatasetCompareVersionId = '';
+      let activeDatasetRollback = null;
       let datasetCompareFilters = defaultDatasetCompareFilters();
       let activeDatasetPreview = null;
       let datasetCompareBlobUrls = [];
       let datasetPreviewBlobUrls = [];
       let cachedTrainingJobs = [];
       let activeTrainingJobId = '';
+      let lastAutoSpecSerialized = '{}';
       const trainingLibraryFilters = {
         modelQuery: '',
         workerQuery: '',
@@ -2675,6 +2730,32 @@ function pageTraining(route, rawCtx) {
         datasetPurpose: '',
         datasetRecommendedOnly: false,
         datasetShowHistory: false,
+      };
+
+      const TRAINING_SPEC_PRESETS = {
+        car_number_balanced: {
+          trainer: 'car_number_ocr_local',
+          epochs: 3,
+          learning_rate: 0.0005,
+          batch_size: 16,
+          preprocessing: { resize: [320, 96] },
+          augmentations: { grayscale_jitter: 0.08, contrast_jitter: 0.1 },
+        },
+        car_number_fast: {
+          trainer: 'car_number_ocr_local',
+          epochs: 1,
+          learning_rate: 0.001,
+          batch_size: 16,
+          preprocessing: { resize: [320, 96] },
+        },
+        car_number_eval: {
+          trainer: 'car_number_ocr_local',
+          mode: 'evaluate',
+          epochs: 1,
+          learning_rate: 0.0001,
+          batch_size: 8,
+          preprocessing: { resize: [320, 96] },
+        },
       };
 
       async function waitForTaskTerminal(taskId, { timeoutMs = 90_000 } = {}) {
@@ -2728,6 +2809,69 @@ function pageTraining(route, rawCtx) {
           return keys.length ? keys.map((key) => `${key}=${value[key]}`).join(' · ') : '未声明';
         }
         return String(value);
+      }
+
+      function pickSuggestedValidationAsset(candidates = []) {
+        const rows = Array.isArray(candidates) ? candidates : [];
+        return rows[0]?.id || '';
+      }
+
+      function renderDatasetRollbackWorkbench() {
+        if (!datasetRollbackWrap) return;
+        if (!activeDatasetRollback) {
+          datasetRollbackWrap.innerHTML = renderEmpty('需要回滚某个版本时，点对应卡片里的“回滚为新版本”，这里会出现确认区。');
+          return;
+        }
+        datasetRollbackWrap.innerHTML = `
+          <div class="result-dataset-workbench">
+            <div class="result-panel-head">
+              <div>
+                <strong>回滚为新版本</strong>
+                <p>${esc(`将基于 ${activeDatasetRollback.dataset_label || '-'}:${activeDatasetRollback.version || '-'} 复制出一个新的 ${activeDatasetRollback.asset_purpose || 'training'} 版本，旧版本不会被覆盖。`)}</p>
+              </div>
+              <span class="badge">${esc(activeDatasetRollback.asset_purpose || 'training')}</span>
+            </div>
+            <div class="form-grid result-dataset-form">
+              <label>
+                <span>回滚说明</span>
+                <input id="datasetRollbackNote" value="training_page_rollback" placeholder="training_page_rollback" />
+              </label>
+            </div>
+            <div class="row-actions">
+              <button class="primary" type="button" data-confirm-dataset-rollback>确认回滚</button>
+              <button class="ghost" type="button" data-cancel-dataset-rollback>取消</button>
+            </div>
+          </div>
+        `;
+        datasetRollbackWrap.querySelector('[data-cancel-dataset-rollback]')?.addEventListener('click', () => {
+          activeDatasetRollback = null;
+          renderDatasetRollbackWorkbench();
+        });
+        datasetRollbackWrap.querySelector('[data-confirm-dataset-rollback]')?.addEventListener('click', async (event) => {
+          const button = event.currentTarget;
+          const note = String(datasetRollbackWrap.querySelector('#datasetRollbackNote')?.value || '').trim();
+          button.disabled = true;
+          try {
+            const result = await ctx.post(`/assets/dataset-versions/${activeDatasetRollback.id}/rollback`, {
+              asset_purpose: activeDatasetRollback.asset_purpose || 'training',
+              note: note || null,
+            });
+            const newVersionId = result.dataset_version?.id || '';
+            if (newVersionId) prefillTrainingDatasetVersionId = newVersionId;
+            ctx.toast(`已生成回滚版本：${result.dataset_version?.version || '-'}`);
+            activeDatasetRollback = null;
+            renderDatasetRollbackWorkbench();
+            await loadFormAssistData();
+            if (newVersionId) {
+              await compareWithPreviousDatasetVersion(newVersionId);
+              await previewDatasetVersion(newVersionId);
+            }
+          } catch (error) {
+            ctx.toast(error.message || '回滚失败', 'error');
+          } finally {
+            button.disabled = false;
+          }
+        });
       }
 
       function buildTrainingAssetRefs(assetIds) {
@@ -3026,9 +3170,9 @@ function pageTraining(route, rawCtx) {
                 ? `
                     <section class="selection-summary training-inline-validation">
                       <strong>直接验证候选模型</strong>
-                      <span>不必先跳任务中心。选一张单图/视频资产，直接创建验证任务；也可以一键等待完成后打开结果页。</span>
+                      <span>不必先跳任务中心。系统会优先帮你带一张合适的单图/视频资产；你也可以手动改成别的资产，再直接创建验证任务。</span>
                       <div class="training-inline-validation-grid">
-                        <input id="trainingValidationAssetInput" list="trainingValidationAssetsDatalist" placeholder="选择一张单图/视频资产" />
+                        <input id="trainingValidationAssetInput" list="trainingValidationAssetsDatalist" placeholder="优先使用推荐资产；也可手动改成别的单图/视频 asset_id" value="${esc(pickSuggestedValidationAsset(validationSampleCandidates))}" />
                         <datalist id="trainingValidationAssetsDatalist">
                           ${assistAssets.filter((row) => row.asset_type !== 'archive').map((row) => `<option value="${esc(row.id)}">${esc(row.file_name)}</option>`).join('')}
                         </datalist>
@@ -3102,7 +3246,8 @@ function pageTraining(route, rawCtx) {
           if (!candidateModel?.id) return;
           const assetInput = trainingRunSummaryWrap.querySelector('#trainingValidationAssetInput');
           const launchMsg = trainingRunSummaryWrap.querySelector('#trainingValidationLaunchMsg');
-          const assetId = String(assetInput?.value || '').trim();
+          const assetId = String(assetInput?.value || '').trim() || pickSuggestedValidationAsset(validationSampleCandidates);
+          if (assetInput && assetId && !String(assetInput.value || '').trim()) assetInput.value = assetId;
           if (!assetId) {
             ctx.toast('先选择一张单图或视频资产', 'error');
             return;
@@ -3281,6 +3426,7 @@ function pageTraining(route, rawCtx) {
           const visibleRows = trainingLibraryFilters.workerShowHistory ? rows : activeRows;
           workersWrap.innerHTML = `
             <div class="hint">默认仅展示活跃 Worker。历史异常/失联记录 ${archivedRows.length} 条，可在训练机池里勾选“显示历史异常”查看。</div>
+            ${canManageWorkers && archivedRows.length ? '<div class="row-actions"><button class="ghost" type="button" data-cleanup-workers>清理历史异常</button></div>' : ''}
             <div class="table-wrap">
               <table class="table">
                 <thead><tr><th>worker_code(Worker 编码)</th><th>alert(告警)</th><th>status(状态)</th><th>host(主机)</th><th>outstanding(待处理)</th><th>last_seen(最近心跳)</th><th>resources(资源)</th><th>操作</th></tr></thead>
@@ -3311,10 +3457,28 @@ function pageTraining(route, rawCtx) {
               .map((row) => `<option value="${esc(row.host)}">${esc(row.worker_code)}</option>`)
               .join('');
           }
+          ensureDefaultWorkerSelection();
           renderWorkerPool();
+          refreshSelectionSummary();
           renderTrainingRuntimeAlerts();
           workersWrap.querySelectorAll('[data-pick-worker]').forEach((button) => {
             button.addEventListener('click', () => fillWorkerSelection(button.getAttribute('data-pick-worker') || ''));
+          });
+          workersWrap.querySelector('[data-cleanup-workers]')?.addEventListener('click', async (event) => {
+            const button = event.currentTarget;
+            button.disabled = true;
+            try {
+              const result = await ctx.post('/training/workers/cleanup', {
+                stale_hours: 24,
+                note: 'training_page_cleanup_archived_workers',
+              });
+              ctx.toast(`已清理 ${result.removed_count || 0} 条历史异常 worker`);
+              await Promise.all([loadWorkers(), loadJobTable()]);
+            } catch (error) {
+              ctx.toast(error.message || '训练机清理失败', 'error');
+            } finally {
+              button.disabled = false;
+            }
           });
         } catch (error) {
           if (String(error.message || '').includes('403')) {
@@ -3344,10 +3508,43 @@ function pageTraining(route, rawCtx) {
         );
       }
 
+      function preferredActiveWorker() {
+        const activeRows = assistWorkers.filter((row) => row.status === 'ACTIVE');
+        return activeRows.find((row) => row.worker_code === 'local-train-worker')
+          || activeRows[0]
+          || null;
+      }
+
+      function selectedPresetName() {
+        return String(trainingPresetInput?.value || 'car_number_balanced').trim() || 'car_number_balanced';
+      }
+
+      function presetSpecValue() {
+        return TRAINING_SPEC_PRESETS[selectedPresetName()] || {};
+      }
+
+      function applyTrainingPreset({ force = false } = {}) {
+        if (!specInput) return;
+        const current = String(specInput.value || '').trim() || '{}';
+        if (!force && current && current !== '{}' && current !== lastAutoSpecSerialized) return;
+        const next = presetSpecValue();
+        const serialized = safeJson(next);
+        lastAutoSpecSerialized = serialized;
+        specInput.value = serialized;
+      }
+
+      function ensureDefaultWorkerSelection() {
+        if (!createForm || selectedWorker()) return;
+        const preferred = preferredActiveWorker();
+        if (!preferred) return;
+        if (workerCodeInput) workerCodeInput.value = preferred.worker_code;
+        if (workerHostInput) workerHostInput.value = preferred.host || '';
+      }
+
       function refreshSelectionSummary() {
         if (!selectionSummary) return;
         const model = selectedModel();
-        const worker = selectedWorker();
+        const worker = selectedWorker() || preferredActiveWorker();
         const trainAssetIds = splitCsv(assetIdsInput?.value || '');
         const validationAssetIds = splitCsv(validationAssetIdsInput?.value || '');
         const selectedTrainVersions = assistDatasetVersions.filter((row) => trainAssetIds.includes(row.asset_id));
@@ -3355,10 +3552,48 @@ function pageTraining(route, rawCtx) {
         selectionSummary.innerHTML = `
           <strong>当前选择</strong>
           <span>供应商算法：${esc(model ? `${model.model_code}:${model.version} · ${model.owner_tenant_name || model.owner_tenant_code || '供应商'}` : '未选择')}</span>
+          <span>训练预设：${esc(trainingPresetInput?.selectedOptions?.[0]?.textContent?.trim() || '未选择')}</span>
           <span>训练机：${esc(worker ? `${worker.worker_code}${worker.host ? ` · ${worker.host}` : ''}` : '未选择')}</span>
           <span>训练集版本：${esc(selectedTrainVersions.length ? selectedTrainVersions.map((row) => `${row.dataset_label}:${row.version}`).join(' / ') : `${trainAssetIds.length} 个资产`)}</span>
           <span>验证集版本：${esc(selectedValidationVersions.length ? selectedValidationVersions.map((row) => `${row.dataset_label}:${row.version}`).join(' / ') : `${validationAssetIds.length} 个资产`)}</span>
         `;
+      }
+
+      function renderTrainingCreateResult(job = null) {
+        if (!createResultWrap) return;
+        if (!job) {
+          createResultWrap.innerHTML = renderEmpty('创建成功后，这里会直接给出下一步动作。');
+          return;
+        }
+        const workerHint = job.assigned_worker_code || selectedWorker()?.worker_code || preferredActiveWorker()?.worker_code || '待调度';
+        const nextHint = job.target_model_code === 'car_number_ocr'
+          ? '建议下一步继续关注这条作业，等候候选模型回收后直接在训练摘要里发起验证。'
+          : '建议先关注训练摘要和候选模型回收，再决定是否进入审批/发布。';
+        createResultWrap.innerHTML = `
+          <div class="selection-summary training-create-next">
+            <strong>训练作业已创建</strong>
+            <span>job_code：${esc(job.job_code || '-')}</span>
+            <span>目标模型：${esc(`${job.target_model_code || '-'}:${job.target_version || '-'}`)}</span>
+            <span>训练机：${esc(workerHint)}</span>
+            <span>${esc(nextHint)}</span>
+            <div class="row-actions">
+              <button class="primary" type="button" data-focus-created-job="${esc(job.id || '')}">聚焦这条作业</button>
+              <button class="ghost" type="button" data-scroll-training-summary>查看训练摘要</button>
+              ${job.target_model_code === 'car_number_ocr' ? '<button class="ghost" type="button" data-open-car-number-review>回车号文本复核</button>' : ''}
+            </div>
+          </div>
+        `;
+        createResultWrap.querySelector('[data-focus-created-job]')?.addEventListener('click', async () => {
+          activeTrainingJobId = job.id || activeTrainingJobId;
+          await loadJobTable();
+          trainingRunSummaryWrap?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+        createResultWrap.querySelector('[data-scroll-training-summary]')?.addEventListener('click', () => {
+          trainingRunSummaryWrap?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+        createResultWrap.querySelector('[data-open-car-number-review]')?.addEventListener('click', () => {
+          ctx.navigate('training/car-number-labeling');
+        });
       }
 
       async function performTrainingJobAction(jobId, action, payload, successMessage) {
@@ -3376,12 +3611,13 @@ function pageTraining(route, rawCtx) {
         if (!model || !baseModelInput) return;
         baseModelInput.value = model.id;
         if (targetModelCodeInput && !String(targetModelCodeInput.value || '').trim()) {
-          targetModelCodeInput.value = `${model.model_code}-ft`;
+          targetModelCodeInput.value = model.model_code === 'car_number_ocr' ? 'car_number_ocr' : `${model.model_code}-ft`;
         }
         if (targetVersionInput && !String(targetVersionInput.value || '').trim()) {
           const stamp = new Date().toISOString().slice(0, 10).replaceAll('-', '');
           targetVersionInput.value = `v${stamp}.1`;
         }
+        applyTrainingPreset({ force: String(specInput?.value || '').trim() === '{}' });
         refreshSelectionSummary();
         renderModelLibrary();
       }
@@ -3668,28 +3904,13 @@ function pageTraining(route, rawCtx) {
         datasetVersionLibrary.querySelectorAll('[data-rollback-dataset-version]').forEach((button) => {
           button.addEventListener('click', async () => {
             const versionId = button.getAttribute('data-rollback-dataset-version') || '';
-            const note = window.prompt('回滚说明（可空）', 'training_page_rollback');
-            button.disabled = true;
-            try {
-              const result = await ctx.post(`/assets/dataset-versions/${versionId}/rollback`, { asset_purpose: 'training', note: note || null });
-              const newVersionId = result.dataset_version?.id || '';
-              if (newVersionId) {
-                prefillTrainingDatasetVersionId = newVersionId;
-              }
-              ctx.toast(`已生成回滚版本：${result.dataset_version?.version || '-'}`);
-              await loadFormAssistData();
-              if (newVersionId) {
-                await compareWithPreviousDatasetVersion(newVersionId);
-                await previewDatasetVersion(newVersionId);
-              }
-            } catch (error) {
-              ctx.toast(error.message || '回滚失败', 'error');
-            } finally {
-              button.disabled = false;
-            }
+            activeDatasetRollback = filteredVersions.find((row) => row.id === versionId) || null;
+            renderDatasetRollbackWorkbench();
+            datasetRollbackWrap?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
           });
         });
         renderDatasetCompare();
+        renderDatasetRollbackWorkbench();
         renderDatasetPreview();
       }
 
@@ -4063,12 +4284,20 @@ function pageTraining(route, rawCtx) {
         try {
           const fd = new FormData(createForm);
           const baseModelId = String(fd.get('base_model_id') || '').trim() || null;
-          const workerCode = String(fd.get('worker_code') || '').trim();
-          const workerHost = String(fd.get('worker_host') || '').trim();
+          const fallbackWorker = selectedWorker() || preferredActiveWorker();
+          const workerCode = String(fd.get('worker_code') || '').trim() || String(fallbackWorker?.worker_code || '').trim();
+          const workerHost = String(fd.get('worker_host') || '').trim() || String(fallbackWorker?.host || '').trim();
           const model = assistModels.find((row) => row.id === baseModelId) || null;
           const workerSelector = {};
           if (workerCode) workerSelector.worker_codes = [workerCode];
           if (workerHost) workerSelector.hosts = [workerHost];
+          let parsedSpec = {};
+          const rawSpec = String(fd.get('spec') || '').trim();
+          if (!rawSpec || rawSpec === '{}' || rawSpec === lastAutoSpecSerialized) {
+            parsedSpec = presetSpecValue();
+          } else {
+            parsedSpec = JSON.parse(rawSpec || '{}');
+          }
           const payload = {
             training_kind: String(fd.get('training_kind') || 'finetune'),
             asset_ids: splitCsv(fd.get('asset_ids')),
@@ -4078,14 +4307,18 @@ function pageTraining(route, rawCtx) {
             target_model_code: String(fd.get('target_model_code') || '').trim(),
             target_version: String(fd.get('target_version') || '').trim(),
             worker_selector: workerSelector,
-            spec: JSON.parse(String(fd.get('spec') || '{}') || '{}'),
+            spec: parsedSpec,
           };
           const result = await ctx.post('/training/jobs', payload);
+          activeTrainingJobId = result.id || activeTrainingJobId;
           createMsg.textContent = `创建成功：${result.job_code}${result.assigned_worker_code ? ` · ${result.assigned_worker_code}` : workerHost ? ` · ${workerHost}` : ''}`;
+          renderTrainingCreateResult(result);
           ctx.toast('训练作业创建成功');
           await loadJobTable();
+          trainingRunSummaryWrap?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         } catch (error) {
           createMsg.textContent = error.message || '创建失败';
+          renderTrainingCreateResult(null);
         } finally {
           submitBtn.disabled = false;
         }
@@ -4103,6 +4336,10 @@ function pageTraining(route, rawCtx) {
         refreshSelectionSummary();
         renderWorkerPool();
       });
+      trainingPresetInput?.addEventListener('change', () => {
+        applyTrainingPreset();
+        refreshSelectionSummary();
+      });
       assetIdsInput?.addEventListener('change', () => {
         refreshSelectionSummary();
         renderDatasetVersionLibrary();
@@ -4112,7 +4349,10 @@ function pageTraining(route, rawCtx) {
         renderDatasetVersionLibrary();
       });
       specInput?.addEventListener('blur', () => {
-        if (!String(specInput.value || '').trim()) specInput.value = '{}';
+        if (!String(specInput.value || '').trim()) {
+          specInput.value = '{}';
+          applyTrainingPreset({ force: true });
+        }
       });
       trainingModelSearch?.addEventListener('input', () => {
         trainingLibraryFilters.modelQuery = trainingModelSearch.value || '';
@@ -4145,6 +4385,10 @@ function pageTraining(route, rawCtx) {
       });
 
       await Promise.all([loadJobTable(), loadWorkers(), loadFormAssistData()]);
+      ensureDefaultWorkerSelection();
+      applyTrainingPreset({ force: String(specInput?.value || '').trim() === '{}' });
+      refreshSelectionSummary();
+      renderTrainingCreateResult(null);
     },
   };
 }
@@ -4221,6 +4465,7 @@ function pageCarNumberLabeling(route, rawCtx) {
       let currentItems = [];
       let currentPreviewUrl = '';
       let activeSaveRequest = null;
+      let currentCarNumberRule = null;
 
       function revokePreviewUrl() {
         if (currentPreviewUrl) URL.revokeObjectURL(currentPreviewUrl);
@@ -4239,6 +4484,7 @@ function pageCarNumberLabeling(route, rawCtx) {
       }
 
       function renderSummary(summary) {
+        currentCarNumberRule = summary?.car_number_rule || currentCarNumberRule;
         const reviewCounts = summary?.review_status_counts || {};
         const latestExport = summary?.latest_export || null;
         const latestTrainCount = latestExport?.bundles?.train?.sample_count ?? 0;
@@ -4264,6 +4510,11 @@ function pageCarNumberLabeling(route, rawCtx) {
               <span>${esc(summary?.final_text_ratio != null ? `${Math.round(Number(summary.final_text_ratio) * 100)}%` : '-')}</span>
             </article>
             <article class="metric-card">
+              <h4>合法真值</h4>
+              <p class="metric">${esc(summary?.valid_final_text_rows ?? '-')}</p>
+              <span>${esc(summary?.car_number_rule?.label || '当前规则')}</span>
+            </article>
+            <article class="metric-card">
               <h4>复核状态</h4>
               <p class="metric">${esc(reviewCounts.done ?? 0)}</p>
               <span>${esc(`pending ${reviewCounts.pending ?? 0} / needs_check ${reviewCounts.needs_check ?? 0}`)}</span>
@@ -4279,6 +4530,7 @@ function pageCarNumberLabeling(route, rawCtx) {
               ? `<div class="hint">最近导出：${esc(formatDateTime(latestExport.generated_at) || '-')} · ${esc(latestSourceLabel || '无来源拆分统计')} · 输出 ${esc(latestExport.output_dir || '-')}</div>`
               : ''
           }
+          ${summary?.car_number_rule?.description ? `<div class="hint">当前车号规则：${esc(summary.car_number_rule.label || '')} · ${esc(summary.car_number_rule.description || '')}</div>` : ''}
         `;
       }
 
@@ -4335,6 +4587,8 @@ function pageCarNumberLabeling(route, rawCtx) {
               <div class="hint">confidence=${esc(item.ocr_suggestion_confidence || '-')} · quality=${esc(item.ocr_suggestion_quality || '-')}</div>
               <label>final_text(人工确认文本)</label>
               <input id="carNumberFinalText" name="final_text" value="${esc(item.final_text || '')}" placeholder="输入最终车号文本" />
+              <div class="hint">${esc(item.car_number_rule?.description || currentCarNumberRule?.description || '当前默认要求车号符合激活规则')}</div>
+              ${item.final_text_validation ? `<div class="hint">当前 final_text 校验：${esc(item.final_text_validation.valid ? '合法' : '不合法')}</div>` : ''}
               <label>review_status(复核状态)</label>
               <select name="review_status">
                 <option value="pending" ${item.review_status === 'pending' ? 'selected' : ''}>pending</option>
@@ -4477,6 +4731,11 @@ function pageCarNumberLabeling(route, rawCtx) {
           reviewer: String(formData.get('reviewer') || '').trim(),
           notes: String(formData.get('notes') || '').trim(),
         };
+        const validation = validateCarNumberByRule(payload.final_text, currentCarNumberRule);
+        if (payload.final_text && !validation.valid) {
+          if (msg) msg.textContent = `当前文本不符合规则：${validation.description}`;
+          throw new Error(`当前文本不符合规则：${validation.description}`);
+        }
         if (msg) msg.textContent = '保存中...';
         try {
           activeSaveRequest = ctx.post(`/training/car-number-labeling/items/${selectedSampleId}/review`, payload);
@@ -4926,6 +5185,7 @@ function pageTasks(route, rawCtx) {
           </div>
           <div id="quickDetectIntentOptions" class="quick-intent-grid"></div>
           <div class="hint">系统会先按你的描述归一化意图并选模。输入“车号 / 车厢号 / 车皮号 / 编号”都会优先走车号 OCR，并直接输出文本。</div>
+          <div id="quickDetectModelOptions">${renderEmpty('明确输入“车号”等目标后，这里会直接显示可用模型，不再要求先走一遍目标预检。')}</div>
           <label>device_code(设备编码)</label>
           <input name="device_code" id="quickDetectDeviceCode" value="edge-01" />
           <div class="row-actions">
@@ -4993,6 +5253,7 @@ function pageTasks(route, rawCtx) {
       const quickDetectAssetInput = root.querySelector('#quickDetectAssetInput');
       const quickDetectPrompt = root.querySelector('#quickDetectPrompt');
       const quickDetectIntentOptions = root.querySelector('#quickDetectIntentOptions');
+      const quickDetectModelOptions = root.querySelector('#quickDetectModelOptions');
       const quickDetectDeviceCode = root.querySelector('#quickDetectDeviceCode');
       const quickDetectPreflightBtn = root.querySelector('#quickDetectPreflightBtn');
       const quickDetectMsg = root.querySelector('#quickDetectMsg');
@@ -5015,6 +5276,7 @@ function pageTasks(route, rawCtx) {
       let quickBatchTaskIds = [];
       let quickDatasetExport = null;
       let quickPreflightOutcomes = [];
+      let quickSelectedModelId = '';
       let assistAssets = [];
       let assistModels = [];
       let taskModelQuery = '';
@@ -5103,6 +5365,103 @@ function pageTasks(route, rawCtx) {
           button.addEventListener('click', () => {
             if (quickDetectPrompt) quickDetectPrompt.value = button.getAttribute('data-quick-intent-prompt') || '';
             renderQuickIntentOptions();
+            renderQuickDetectModelOptions();
+          });
+        });
+      }
+
+      function resolveQuickDetectIntent(prompt) {
+        const normalized = normalizeQuickPrompt(prompt);
+        const primary = quickIntentOptions(prompt)[0] || null;
+        const explicit = !!(normalized && primary && Number(primary.matchScore || 0) > 0);
+        return {
+          explicit,
+          option: primary,
+          taskType: primary?.taskType || 'object_detect',
+        };
+      }
+
+      function quickDetectModelCandidates(prompt) {
+        const intent = resolveQuickDetectIntent(prompt);
+        if (!intent.explicit) return [];
+        return assistModels
+          .filter((row) => row.status === 'RELEASED')
+          .filter((row) => !row.task_type || row.task_type === intent.taskType)
+          .sort((left, right) => {
+            const leftExact = left.model_code === intent.taskType ? 1 : 0;
+            const rightExact = right.model_code === intent.taskType ? 1 : 0;
+            if (leftExact !== rightExact) return rightExact - leftExact;
+            return String(right.version || '').localeCompare(String(left.version || ''));
+          });
+      }
+
+      function serializeQuickDetectModel(row) {
+        if (!row) return null;
+        return {
+          model_id: row.id,
+          model_code: row.model_code,
+          version: row.version,
+          model_hash: row.model_hash,
+          task_type: row.task_type || row.plugin_name || null,
+          task_type_label: enumText('task_type', row.task_type || row.plugin_name || '-'),
+          score: row.status === 'RELEASED' ? 100 : 10,
+          reasons: [`显式选择模型 ${row.model_code}:${row.version}`],
+          target_devices: row.target_devices || [],
+          target_buyers: row.target_buyers || [],
+          created_at: row.created_at || null,
+        };
+      }
+
+      function renderQuickDetectModelOptions() {
+        if (!quickDetectModelOptions) return;
+        const prompt = String(quickDetectPrompt?.value || '').trim();
+        const intent = resolveQuickDetectIntent(prompt);
+        if (!prompt) {
+          quickDetectModelOptions.innerHTML = renderEmpty('明确输入“车号”等目标后，这里会直接显示可用模型。');
+          return;
+        }
+        if (!intent.explicit) {
+          quickDetectModelOptions.innerHTML = `
+            <div class="hint">当前描述还比较泛，建议点“先扫一遍给建议”；如果你已经知道就是车号、人员或螺栓缺失，直接把目标写明确即可。</div>
+          `;
+          return;
+        }
+        const models = quickDetectModelCandidates(prompt);
+        if (!models.length) {
+          quickDetectModelOptions.innerHTML = renderEmpty(`当前没有可直接用于 ${enumText('task_type', intent.taskType)} 的已发布模型`);
+          return;
+        }
+        if (!models.some((row) => row.id === quickSelectedModelId)) {
+          quickSelectedModelId = models[0].id;
+        }
+        quickDetectModelOptions.innerHTML = `
+          <div class="section-toolbar compact">
+            <div class="hint">已明确选择 <strong>${esc(intent.option?.title || enumText('task_type', intent.taskType))}</strong>，可直接选模型并开始识别；不会再强制你先做目标预检。</div>
+          </div>
+          <div class="selection-grid">
+            ${models.map((row) => `
+              <article class="selection-card ${quickSelectedModelId === row.id ? 'selected' : ''}">
+                <div class="selection-card-head">
+                  <strong>${esc(row.model_code)}:${esc(row.version)}</strong>
+                  <span class="badge">${esc(row.model_code === intent.taskType ? '推荐' : enumText('model_status', row.status || '-'))}</span>
+                </div>
+                <div class="selection-card-meta">
+                  <span>task_type</span><strong>${esc(row.task_type || row.plugin_name || '-')}</strong>
+                  <span>plugin</span><strong>${esc(row.plugin_name || '-')}</strong>
+                  <span>来源</span><strong>${esc(enumText('model_source_type', (row.platform_meta || {}).model_source_type || '-'))}</strong>
+                  <span>model_id</span><strong class="mono">${esc(truncateMiddle(row.id, 8, 6))}</strong>
+                </div>
+                <div class="row-actions">
+                  <button class="${quickSelectedModelId === row.id ? 'primary' : 'ghost'}" type="button" data-pick-quick-model="${esc(row.id)}">${quickSelectedModelId === row.id ? '当前将使用这版' : '选这版模型'}</button>
+                </div>
+              </article>
+            `).join('')}
+          </div>
+        `;
+        quickDetectModelOptions.querySelectorAll('[data-pick-quick-model]').forEach((button) => {
+          button.addEventListener('click', () => {
+            quickSelectedModelId = button.getAttribute('data-pick-quick-model') || '';
+            renderQuickDetectModelOptions();
           });
         });
       }
@@ -5364,6 +5723,7 @@ function pageTasks(route, rawCtx) {
       }
       renderQuickPreview();
       renderQuickIntentOptions();
+      renderQuickDetectModelOptions();
 
       async function loadAssistData() {
         try {
@@ -5379,6 +5739,7 @@ function pageTasks(route, rawCtx) {
           pipelinesDatalist.innerHTML = (pipelines || []).map((row) => `<option value="${esc(row.id)}">${esc(row.pipeline_code)}:${esc(row.version)}</option>`).join('');
           modelsDatalist.innerHTML = visibleModels.map((row) => `<option value="${esc(row.id)}">${esc(row.model_code)}:${esc(row.version)}</option>`).join('');
           renderTaskModelLibrary();
+          renderQuickDetectModelOptions();
         } catch {
           // Ignore suggestion loading failure.
         }
@@ -5795,6 +6156,20 @@ function pageTasks(route, rawCtx) {
       async function saveQuickDetectReview(outcomes, outcomeIndex) {
         const outcome = outcomes[outcomeIndex];
         if (!outcome?.focus?.id) throw new Error('当前结果不可修订');
+        const activeRule = outcome?.focus?.result_json?.car_number_rule
+          || outcome?.focus?.result_json?.summary?.car_number_rule
+          || null;
+        if (String(outcome?.taskType || '') === 'car_number_ocr') {
+          const invalidPrediction = (outcome.predictions || []).find((prediction) => {
+            if (String(prediction?.label || '').trim() !== 'car_number') return false;
+            const validation = validateCarNumberByRule(extractPredictionText(prediction), activeRule);
+            return !!validation.normalized && !validation.valid;
+          });
+          if (invalidPrediction) {
+            const validation = validateCarNumberByRule(extractPredictionText(invalidPrediction), activeRule);
+            throw new Error(`当前车号文本不符合规则：${validation.description}`);
+          }
+        }
         const payload = {
           predictions: (outcome.predictions || []).map((prediction) => serializeReviewPrediction(prediction)),
           note: 'quick_detect_lite_review',
@@ -6240,7 +6615,7 @@ function pageTasks(route, rawCtx) {
         });
       }
 
-      async function runQuickDetectItem({ file, existingAssetId, prompt, deviceCode, index, total, uploadedAsset = null, forcedTaskType = null }) {
+      async function runQuickDetectItem({ file, existingAssetId, prompt, deviceCode, index, total, uploadedAsset = null, forcedTaskType = null, forcedModel = null, alternatives = [] }) {
         let assetId = existingAssetId;
         const requestedTaskType = forcedTaskType || inferQuickDetectTaskType(prompt);
         if (file) {
@@ -6256,16 +6631,31 @@ function pageTasks(route, rawCtx) {
           assetId = uploadedAsset.id;
         }
 
-        quickDetectResult.innerHTML = renderLoading(`正在自动选模 ${index + 1}/${total} ...`);
-        const recommendation = await ctx.post('/tasks/recommend-model', {
-          asset_id: assetId,
-          task_type: requestedTaskType,
-          device_code: deviceCode,
-          intent_text: prompt,
-          limit: 3,
-        });
-        if (!recommendation?.selected_model?.model_id) {
-          throw new Error('当前没有可用于快速识别的已发布模型');
+        let recommendation = null;
+        let selectedModel = forcedModel;
+        if (selectedModel?.id) {
+          quickDetectResult.innerHTML = renderLoading(`正在使用指定模型 ${index + 1}/${total} ...`);
+          recommendation = {
+            engine: 'manual-selection',
+            requested_task_type: requestedTaskType,
+            inferred_task_type: selectedModel.task_type || requestedTaskType,
+            confidence: 'manual',
+            summary: `已显式选择模型 ${selectedModel.model_code}:${selectedModel.version}`,
+            selected_model: serializeQuickDetectModel(selectedModel),
+            alternatives: alternatives.map((row) => serializeQuickDetectModel(row)).filter(Boolean),
+          };
+        } else {
+          quickDetectResult.innerHTML = renderLoading(`正在自动选模 ${index + 1}/${total} ...`);
+          recommendation = await ctx.post('/tasks/recommend-model', {
+            asset_id: assetId,
+            task_type: requestedTaskType,
+            device_code: deviceCode,
+            intent_text: prompt,
+            limit: 3,
+          });
+          if (!recommendation?.selected_model?.model_id) {
+            throw new Error('当前没有可用于快速识别的已发布模型');
+          }
         }
         const resolvedTaskType = recommendation?.inferred_task_type || recommendation?.selected_model?.task_type || requestedTaskType || 'object_detect';
         const quickContext = resolvedTaskType === 'object_detect' ? { object_prompt: prompt } : {};
@@ -6346,10 +6736,12 @@ function pageTasks(route, rawCtx) {
       quickDetectFile?.addEventListener('change', () => {
         quickPreflightOutcomes = [];
         revokeQuickUrls();
+        renderQuickDetectModelOptions();
       });
       quickDetectAssetInput?.addEventListener('input', () => {
         quickPreflightOutcomes = [];
         revokeQuickUrls();
+        renderQuickDetectModelOptions();
         if (!quickDetectFile?.files?.length) renderQuickPreview();
       });
       quickDetectDeviceCode?.addEventListener('input', () => {
@@ -6360,11 +6752,13 @@ function pageTasks(route, rawCtx) {
         quickPreflightOutcomes = [];
         revokeQuickUrls();
         renderQuickIntentOptions();
+        renderQuickDetectModelOptions();
       });
       root.querySelectorAll('[data-quick-prompt]').forEach((btn) => {
         btn.addEventListener('click', () => {
           if (quickDetectPrompt) quickDetectPrompt.value = btn.getAttribute('data-quick-prompt') || '';
           renderQuickIntentOptions();
+          renderQuickDetectModelOptions();
         });
       });
 
@@ -6415,6 +6809,36 @@ function pageTasks(route, rawCtx) {
           const { prompt, items, files, existingAssetIds } = currentQuickWorkItems();
           if (!prompt) throw new Error('请输入要识别的对象');
           if (!items.length) throw new Error('请上传图片/视频，或填写已有 asset_id');
+
+          const quickIntent = resolveQuickDetectIntent(prompt);
+          const directModels = quickDetectModelCandidates(prompt);
+          const directModel = directModels.find((row) => row.id === quickSelectedModelId) || directModels[0] || null;
+
+          if (quickIntent.explicit && directModel) {
+            quickPreflightOutcomes = [];
+            const outcomes = [];
+            for (let index = 0; index < items.length; index += 1) {
+              outcomes.push(await runQuickDetectItem({
+                ...items[index],
+                prompt,
+                index,
+                total: items.length,
+                forcedTaskType: quickIntent.taskType,
+                forcedModel: directModel,
+                alternatives: directModels,
+              }));
+            }
+
+            if (quickDetectAssetInput && files.length && !existingAssetIds.length && outcomes.length === 1) {
+              quickDetectAssetInput.value = outcomes[0]?.uploadedAsset?.id || quickDetectAssetInput.value;
+            }
+
+            renderQuickDetectBatchOutcome(outcomes);
+            quickDetectMsg.textContent = `已按 ${directModel.model_code}:${directModel.version} 完成 ${outcomes.length} 条快速识别`;
+            ctx.toast('快速识别完成');
+            await Promise.all([loadTasks(), loadAssistData()]);
+            return;
+          }
 
           if (!quickPreflightOutcomes.length) {
             await performQuickPreflight();
@@ -6741,6 +7165,10 @@ function pageResults(route, rawCtx) {
         <div id="resultMeta" class="hint">${esc(defaultTaskId ? '' : '训练后验证时，可从训练页点击“去任务中心验证候选模型”，再在任务创建成功后点击“等待执行并打开结果页”。')}</div>
       </section>
       <section class="card">
+        <h3>结果回灌工作台</h3>
+        <div id="resultDatasetWorkbench">${defaultTaskId ? renderLoading('正在准备结果回灌工作台...') : renderEmpty('先查询一条 task 结果，再把当前复核结果导出成训练/验证数据集版本。')}</div>
+      </section>
+      <section class="card">
         <div id="resultListWrap">${defaultTaskId ? renderLoading('加载结果...') : renderEmpty('请输入 task_id 查询，或先在任务中心创建并执行任务')}</div>
       </section>
     `,
@@ -6748,9 +7176,108 @@ function pageResults(route, rawCtx) {
       const queryForm = root.querySelector('#resultQueryForm');
       const taskInput = root.querySelector('#resultTaskId');
       const resultMeta = root.querySelector('#resultMeta');
+      const datasetWorkbench = root.querySelector('#resultDatasetWorkbench');
       const listWrap = root.querySelector('#resultListWrap');
       const exportBtn = root.querySelector('#resultExportBtn');
       let resultBlobUrls = [];
+      let currentRows = [];
+      let currentSummaries = [];
+      let currentDatasetExport = null;
+
+      function dominantTaskType(summaries) {
+        const counts = new Map();
+        (Array.isArray(summaries) ? summaries : []).forEach((item) => {
+          const key = String(item?.taskType || '').trim();
+          if (!key) return;
+          counts.set(key, (counts.get(key) || 0) + 1);
+        });
+        return [...counts.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] || '';
+      }
+
+      function buildResultDatasetLabel(taskId, summaries) {
+        const dominant = dominantTaskType(summaries) || 'result-review';
+        const shortTask = String(taskId || '').trim().slice(0, 8) || 'task';
+        return `${dominant}-review-${shortTask}`;
+      }
+
+      function prefillTrainingFromResultExport(exported, assetPurpose, taskType) {
+        if (!exported?.asset?.id) return;
+        if (assetPurpose === 'validation') {
+          localStorage.setItem(STORAGE_KEYS.prefillTrainingValidationAssetIds, exported.asset.id);
+        } else {
+          localStorage.setItem(STORAGE_KEYS.prefillTrainingAssetIds, exported.asset.id);
+        }
+        if (exported.dataset_version?.id) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetVersionId, exported.dataset_version.id);
+        if (exported.dataset_version?.dataset_label) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetLabel, exported.dataset_version.dataset_label);
+        if (taskType) localStorage.setItem(STORAGE_KEYS.prefillTrainingTargetModelCode, taskType);
+      }
+
+      function renderResultDatasetWorkbench(taskId, summaries, exported = null) {
+        if (!taskId) {
+          return renderEmpty('先查询一条 task 结果，再把当前复核结果导出成训练/验证数据集版本。');
+        }
+        if (!Array.isArray(summaries) || !summaries.length) {
+          return renderEmpty('当前 task 还没有可导出的结果。先等待任务完成，或回到任务中心确认执行状态。');
+        }
+        const taskType = dominantTaskType(summaries) || 'object_detect';
+        const lowConfidenceCount = summaries.filter((item) => item?.taskType === 'car_number_ocr' && (!Number.isFinite(item.ocrConfidence) || item.ocrConfidence < 0.8 || item.ocrRisk !== 'stable')).length;
+        const suggestedPurpose = taskType === 'car_number_ocr' && lowConfidenceCount === 0 ? 'training' : 'validation';
+        const defaultLabel = exported?.dataset_version?.dataset_label || buildResultDatasetLabel(taskId, summaries);
+        return `
+          <div class="result-dataset-workbench">
+            <div class="result-panel-head">
+              <div>
+                <strong>把当前结果回灌成数据集版本</strong>
+                <p>${esc(taskType === 'car_number_ocr'
+                  ? (lowConfidenceCount
+                    ? `当前有 ${lowConfidenceCount} 条低置信度 OCR 结果，建议先导出为 validation，再继续复核。`
+                    : '当前 OCR 结果已经比较稳定，可优先导出为 training 数据集版本。')
+                  : '当前结果适合导出为结构化样本包，再在训练中心继续筛选或复用。')}</p>
+              </div>
+              <span class="badge">${esc(taskType)}</span>
+            </div>
+            <div class="form-grid result-dataset-form">
+              <label>
+                <span>dataset_label(数据集标签)</span>
+                <input id="resultDatasetLabel" value="${esc(defaultLabel)}" placeholder="result-review-dataset" />
+              </label>
+              <label>
+                <span>asset_purpose(用途)</span>
+                <select id="resultDatasetPurpose">
+                  <option value="training" ${suggestedPurpose === 'training' ? 'selected' : ''}>训练</option>
+                  <option value="validation" ${suggestedPurpose === 'validation' ? 'selected' : ''}>验证</option>
+                  <option value="finetune">微调</option>
+                </select>
+              </label>
+              <label class="checkbox-row">
+                <input id="resultDatasetIncludeScreenshots" type="checkbox" checked />
+                携带标注截图一起导出
+              </label>
+            </div>
+            <div class="row-actions">
+              <button class="primary" type="button" data-result-export-dataset>导出并送训练中心</button>
+              <button class="ghost" type="button" data-result-export-assets>只导出数据集版本</button>
+              ${exported?.asset?.id ? '<button class="ghost" type="button" data-open-result-training>打开训练页</button>' : ''}
+            </div>
+            ${
+              exported?.asset?.id
+                ? `
+                    <div class="keyvals compact">
+                      <div><span>dataset_asset_id</span><strong class="mono">${esc(exported.asset.id)}</strong></div>
+                      <div><span>dataset_version</span><strong>${esc(`${exported.dataset_version?.dataset_label || '-'}:${exported.dataset_version?.version || '-'}`)}</strong></div>
+                      <div><span>task_type</span><strong>${esc(taskType)}</strong></div>
+                      <div><span>样本数</span><strong>${esc(formatMetricValue(exported.summary?.task_count))}</strong></div>
+                    </div>
+                  `
+                : `
+                    <div class="hint">
+                      当前会直接按 task_id=${esc(taskId)} 导出。导出完成后会自动预填训练中心需要的 dataset version 和 asset_id。
+                    </div>
+                  `
+            }
+          </div>
+        `;
+      }
 
       function revokeResultBlobUrls() {
         resultBlobUrls.forEach((url) => URL.revokeObjectURL(url));
@@ -6787,6 +7314,69 @@ function pageResults(route, rawCtx) {
         });
       }
 
+      function bindResultDatasetWorkbench(taskId) {
+        if (!datasetWorkbench || !taskId) return;
+        datasetWorkbench.querySelector('[data-open-result-training]')?.addEventListener('click', () => ctx.navigate('training'));
+        datasetWorkbench.querySelector('[data-result-export-assets]')?.addEventListener('click', async (event) => {
+          const button = event.currentTarget;
+          const labelInput = datasetWorkbench.querySelector('#resultDatasetLabel');
+          const purposeInput = datasetWorkbench.querySelector('#resultDatasetPurpose');
+          const screenshotInput = datasetWorkbench.querySelector('#resultDatasetIncludeScreenshots');
+          const datasetLabel = String(labelInput?.value || '').trim();
+          if (!datasetLabel) {
+            ctx.toast('请先填写 dataset_label', 'error');
+            return;
+          }
+          button.disabled = true;
+          try {
+            currentDatasetExport = await ctx.post('/results/export-dataset', {
+              task_ids: [taskId],
+              dataset_label: datasetLabel,
+              asset_purpose: String(purposeInput?.value || 'training'),
+              include_screenshots: screenshotInput?.checked !== false,
+            });
+            datasetWorkbench.innerHTML = renderResultDatasetWorkbench(taskId, currentSummaries, currentDatasetExport);
+            bindResultDatasetWorkbench(taskId);
+            resultMeta.textContent = `已导出数据集版本：${currentDatasetExport.dataset_version?.dataset_label || '-'}:${currentDatasetExport.dataset_version?.version || '-'} · asset ${currentDatasetExport.asset?.id || '-'}`;
+            ctx.toast('结果数据集版本已导出');
+          } catch (error) {
+            ctx.toast(error.message || '结果数据集导出失败', 'error');
+          } finally {
+            button.disabled = false;
+          }
+        });
+        datasetWorkbench.querySelector('[data-result-export-dataset]')?.addEventListener('click', async (event) => {
+          const button = event.currentTarget;
+          const labelInput = datasetWorkbench.querySelector('#resultDatasetLabel');
+          const purposeInput = datasetWorkbench.querySelector('#resultDatasetPurpose');
+          const screenshotInput = datasetWorkbench.querySelector('#resultDatasetIncludeScreenshots');
+          const datasetLabel = String(labelInput?.value || '').trim();
+          if (!datasetLabel) {
+            ctx.toast('请先填写 dataset_label', 'error');
+            return;
+          }
+          button.disabled = true;
+          try {
+            currentDatasetExport = await ctx.post('/results/export-dataset', {
+              task_ids: [taskId],
+              dataset_label: datasetLabel,
+              asset_purpose: String(purposeInput?.value || 'training'),
+              include_screenshots: screenshotInput?.checked !== false,
+            });
+            const taskType = dominantTaskType(currentSummaries) || 'object_detect';
+            prefillTrainingFromResultExport(currentDatasetExport, String(purposeInput?.value || 'training'), taskType);
+            datasetWorkbench.innerHTML = renderResultDatasetWorkbench(taskId, currentSummaries, currentDatasetExport);
+            bindResultDatasetWorkbench(taskId);
+            ctx.toast('已导出并预填训练中心');
+            ctx.navigate('training');
+          } catch (error) {
+            ctx.toast(error.message || '结果数据集导出失败', 'error');
+          } finally {
+            button.disabled = false;
+          }
+        });
+      }
+
       async function loadModelInsights(rows) {
         const modelIds = [...new Set((rows || []).map((row) => String(row.model_id || '').trim()).filter(Boolean))];
         const entries = await Promise.all(modelIds.map(async (modelId) => {
@@ -6820,21 +7410,34 @@ function pageResults(route, rawCtx) {
           revokeResultBlobUrls();
           listWrap.innerHTML = renderEmpty('请输入 task_id，或先在任务中心创建并执行任务');
           resultMeta.textContent = '';
+          if (datasetWorkbench) datasetWorkbench.innerHTML = renderEmpty('先查询一条 task 结果，再把当前复核结果导出成训练/验证数据集版本。');
+          currentRows = [];
+          currentSummaries = [];
+          currentDatasetExport = null;
           return;
         }
         listWrap.innerHTML = renderLoading('加载结果...');
+        if (datasetWorkbench) datasetWorkbench.innerHTML = renderLoading('正在准备结果回灌工作台...');
         resultMeta.textContent = '';
         try {
           const rows = await ctx.get(`/results${toQuery({ task_id: clean })}`);
           const enrichedRows = await enrichRowsWithScreenshots(rows || []);
           const modelInsights = await loadModelInsights(enrichedRows || []);
+          currentRows = enrichedRows || [];
+          currentSummaries = currentRows.map(summarizeResultRow);
+          currentDatasetExport = null;
           listWrap.innerHTML = buildResultListHtml(enrichedRows || [], modelInsights);
+          if (datasetWorkbench) {
+            datasetWorkbench.innerHTML = renderResultDatasetWorkbench(clean, currentSummaries, currentDatasetExport);
+            bindResultDatasetWorkbench(clean);
+          }
           const modelCount = [...new Set((enrichedRows || []).map((row) => String(row.model_id || '').trim()).filter(Boolean))].length;
           resultMeta.textContent = `task_id=${clean} · 结果条数=${enrichedRows.length} · 关联模型=${modelCount}`;
           localStorage.setItem(STORAGE_KEYS.lastTaskId, clean);
           await bindScreenshotButtons();
         } catch (error) {
           listWrap.innerHTML = renderError(error.message);
+          if (datasetWorkbench) datasetWorkbench.innerHTML = renderError(error.message);
         }
       }
 

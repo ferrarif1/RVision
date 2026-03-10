@@ -7,6 +7,44 @@ from backend.tests.api_regression.helpers import ApiRegressionHelper, REPO_ROOT
 
 
 class TrainingRegressionTest(ApiRegressionHelper):
+    def test_training_worker_cleanup_contract(self) -> None:
+        worker_code = self.unique_name("api-cleanup-worker")
+        worker = self.request_json(
+            "POST",
+            "/training/workers/register",
+            token=self.platform_token,
+            json={
+                "worker_code": worker_code,
+                "name": "API Cleanup Worker",
+                "host": f"{worker_code}.local",
+                "status": "UNHEALTHY",
+                "labels": {"suite": "api-regression"},
+                "resources": {"gpu_mem_mb": 4096},
+            },
+        )
+        self.assertEqual(worker["worker_code"], worker_code)
+
+        preview = self.request_json(
+            "POST",
+            "/training/workers/cleanup",
+            token=self.platform_token,
+            json={"stale_hours": 24, "worker_codes": [worker_code], "dry_run": True, "note": "api regression preview"},
+        )
+        self.assertGreaterEqual(preview["removed_count"], 1, preview)
+        self.assertTrue(any(item["worker_code"] == worker_code for item in preview["removed_workers"]), preview)
+
+        cleaned = self.request_json(
+            "POST",
+            "/training/workers/cleanup",
+            token=self.platform_token,
+            json={"stale_hours": 24, "worker_codes": [worker_code], "note": "api regression cleanup"},
+        )
+        self.assertGreaterEqual(cleaned["removed_count"], 1, cleaned)
+        self.assertTrue(any(item["worker_code"] == worker_code for item in cleaned["removed_workers"]), cleaned)
+
+        visible_workers = self.request_json("GET", "/training/workers", token=self.platform_token)
+        self.assertFalse(any(row["worker_code"] == worker_code for row in visible_workers), visible_workers)
+
     def test_car_number_labeling_review_contract(self) -> None:
         summary = self.request_json("GET", "/training/car-number-labeling/summary", token=self.buyer_token)
         self.assertGreater(summary["annotated_rows"], 0)
@@ -35,18 +73,33 @@ class TrainingRegressionTest(ApiRegressionHelper):
                 f"/training/car-number-labeling/items/{sample_id}/review",
                 token=self.buyer_token,
                 json={
-                    "final_text": "RV123456",
+                    "final_text": "64345127",
                     "review_status": "done",
                     "reviewer": "api-regression",
                     "notes": "reviewed in api regression",
                 },
             )
-            self.assertEqual(updated["item"]["final_text"], "RV123456")
+            self.assertEqual(updated["item"]["final_text"], "64345127")
             self.assertEqual(updated["item"]["review_status"], "done")
+            self.assertTrue(updated["item"]["final_text_validation"]["valid"])
 
             refreshed = self.request_json("GET", f"/training/car-number-labeling/items?q={sample_id}&limit=1", token=self.buyer_token)
-            self.assertEqual(refreshed["items"][0]["final_text"], "RV123456")
+            self.assertEqual(refreshed["items"][0]["final_text"], "64345127")
             self.assertEqual(refreshed["items"][0]["reviewer"], "api-regression")
+            self.assertEqual(refreshed["items"][0]["car_number_rule"]["rule_id"], "railcar_digits_v1")
+
+            invalid = self.client.post(
+                f"/training/car-number-labeling/items/{sample_id}/review",
+                headers=self.auth_headers(self.buyer_token),
+                json={
+                    "final_text": "RV123456",
+                    "review_status": "done",
+                    "reviewer": "api-regression",
+                    "notes": "invalid text should be rejected",
+                },
+            )
+            self.assertEqual(invalid.status_code, 400, invalid.text)
+            self.assertIn("active rule", invalid.json()["detail"])
 
             export_result = self.request_json(
                 "POST",

@@ -19,6 +19,8 @@ from inference.pipelines import list_registered_plugins
 from inference.pipelines import run_inference
 
 KNOWN_FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "railcar_number_known"
+CURATED_FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "railcar_number_curated"
+CURATED_FIXTURE_IMAGE_DIR = CURATED_FIXTURE_DIR / "images"
 
 
 def _assert(condition: bool, message: str) -> None:
@@ -27,12 +29,12 @@ def _assert(condition: bool, message: str) -> None:
 
 
 def _build_fixture_assets(tmp_dir: str) -> tuple[str, str]:
-    car_path = os.path.join(tmp_dir, "CAR123456_fixture.png")
+    car_path = os.path.join(tmp_dir, "12345678_fixture.png")
     bolt_path = os.path.join(tmp_dir, "BOLT_EMPTY_fixture.png")
 
     car = np.full((360, 720, 3), 245, dtype=np.uint8)
     cv2.rectangle(car, (120, 120), (600, 220), (20, 20, 20), 2)
-    cv2.putText(car, "CAR123456", (170, 190), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (20, 20, 20), 3)
+    cv2.putText(car, "12345678", (190, 190), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (20, 20, 20), 3)
     cv2.imwrite(car_path, car)
 
     bolt = np.full((360, 640, 3), 0, dtype=np.uint8)
@@ -81,7 +83,7 @@ def run_golden_checks() -> dict:
         _assert(len(car_items) >= 2, "car task produced no orchestrator result")
         car_result = next(item["result_json"] for item in car_items if item["result_json"].get("stage") == "expert")
         _assert(car_result["task_type"] == "car_number_ocr", "car task type mismatch")
-        _assert(car_result["car_number"] == "CAR123456", "car number golden mismatch")
+        _assert(car_result["car_number"] == "12345678", "car number golden mismatch")
         _assert(car_result["engine"] == "mock", "car ocr engine should be mock in golden check")
 
         object_task = {
@@ -159,6 +161,28 @@ def run_golden_checks() -> dict:
             "bolt detector should be fallback in golden check",
         )
 
+        curated_image = CURATED_FIXTURE_IMAGE_DIR / "3542_104_0_jpg.rf.0df66ec9ab0f91510738e2c6090c1f8d.jpg"
+        if curated_image.exists():
+            renamed_path = os.path.join(tmp_dir, "renamed_curated_probe.jpg")
+            cv2.imwrite(renamed_path, cv2.imread(str(curated_image)))
+            renamed_bundle = run_inference(
+                car_task | {"policy": {"upload_frames": False}},
+                renamed_path,
+                model_artifacts={
+                    "car-model": {
+                        "manifest": {"task_type": "car_number_ocr", "version": "v-curated-fixture", "plugin_name": "car_number_ocr"},
+                        "decrypted_path": "",
+                        "model_hash": "golden-car-hash",
+                    }
+                },
+            )
+            renamed_expert = next(item["result_json"] for item in renamed_bundle["items"] if item["result_json"].get("stage") == "expert")
+            _assert(renamed_expert["car_number"] == "61172052", "renamed curated image should still match reviewed railcar text")
+            _assert(
+                renamed_expert["bbox"] == [51, 164, 197, 250],
+                f"renamed curated image bbox drifted: {renamed_expert['bbox']}",
+            )
+
     fixture_results = {}
     manifest_path = KNOWN_FIXTURE_DIR / "manifest.json"
     if manifest_path.exists():
@@ -211,6 +235,7 @@ def run_golden_checks() -> dict:
             "object_detect": "passed",
             "car_number_ocr": "passed",
             "bolt_missing_detect": "passed",
+            "curated_railcar_hash_match": "passed" if CURATED_FIXTURE_IMAGE_DIR.exists() else "skipped",
             "known_railcar_fixtures": f"{len(fixture_results)} passed" if fixture_results else "skipped",
         },
     }

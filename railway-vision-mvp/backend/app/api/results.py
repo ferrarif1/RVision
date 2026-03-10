@@ -14,6 +14,9 @@ from app.security.roles import ASSET_UPLOAD_ROLES
 from app.security.roles import RESULT_READ_ROLES
 from app.security.roles import is_buyer_user
 from app.services.audit_service import record_audit
+from app.services.car_number_rule_service import ensure_valid_car_number_text
+from app.services.car_number_rule_service import get_active_car_number_rule
+from app.services.car_number_rule_service import validate_car_number_text
 from app.services.dataset_version_service import create_dataset_version_record
 from app.services.result_dataset_service import DATASET_EXPORT_ALLOWED_PURPOSES
 from app.services.result_dataset_service import export_tasks_to_dataset_asset
@@ -215,18 +218,30 @@ def save_result_review(
     summary = result_json.get("summary") if isinstance(result_json.get("summary"), dict) else {}
     task_type = str(result_json.get("task_type") or summary.get("task_type") or "").strip()
     if task_type == "car_number_ocr":
+        for index, item in enumerate(normalized_predictions):
+            if str(item.get("label") or "").strip() != "car_number":
+                continue
+            validation = ensure_valid_car_number_text(item.get("text"), field_name=f"predictions[{index}].text")
+            item["text"] = validation["normalized_text"] or None
         best_prediction = max(
             normalized_predictions,
             key=lambda item: float(item.get("score") if item.get("score") is not None else 0),
             default=None,
         )
+        best_text = str((best_prediction or {}).get("text") or "").strip() or None
+        validation = validate_car_number_text(best_text)
         result_json["summary"] = {
             **summary,
             "task_type": "car_number_ocr",
-            "car_number": str((best_prediction or {}).get("text") or "").strip() or None,
+            "car_number": validation["normalized_text"] or None,
             "confidence": (best_prediction or {}).get("score"),
             "bbox": (best_prediction or {}).get("bbox"),
+            "car_number_validation": validation,
+            "car_number_rule": get_active_car_number_rule(),
         }
+        result_json["car_number"] = validation["normalized_text"] or None
+        result_json["car_number_validation"] = validation
+        result_json["car_number_rule"] = get_active_car_number_rule()
     result.result_json = result_json
     db.add(result)
 

@@ -1,0 +1,13 @@
+{
+  "active_rule": "railcar_digits_v1",
+  "rules": {
+    "railcar_digits_v1": {
+      "label": "铁路车号 · 8位数字",
+      "description": "当前默认要求车号为 8 位数字。",
+      "pattern": "^\\d{8}$",
+      "normalization": "uppercase_alnum",
+      "examples": ["64345127", "62745500"],
+      "notes": "后续如果规则变化，只需切换 active_rule 或更新对应 pattern。"
+    }
+  }
+}

@@ -88,10 +88,10 @@ class TasksResultsEdgeRegressionTest(ApiRegressionHelper):
                         "alert_level": "INFO",
                         "result_json": {
                             "task_type": "car_number_ocr",
-                            "predictions": [{"label": "car_number", "text": "RV10086", "score": 0.98, "bbox": [20, 24, 180, 86]}],
+                            "predictions": [{"label": "car_number", "text": "64345127", "score": 0.98, "bbox": [20, 24, 180, 86]}],
                             "matched_labels": ["car_number"],
                             "object_count": 1,
-                            "summary": {"task_type": "car_number_ocr", "car_number": "RV10086", "confidence": 0.98, "bbox": [20, 24, 180, 86]},
+                            "summary": {"task_type": "car_number_ocr", "car_number": "64345127", "confidence": 0.98, "bbox": [20, 24, 180, 86]},
                         },
                         "duration_ms": 31,
                         "screenshot_b64": self.screenshot_b64("car-number-text"),
@@ -104,7 +104,7 @@ class TasksResultsEdgeRegressionTest(ApiRegressionHelper):
                     "input_hash": self.unique_name("hash"),
                     "models_versions": [{"model_id": task["model_id"], "version": selected["version"]}],
                     "timings": {"total_ms": 31},
-                    "result_summary": {"car_number": "RV10086"},
+                    "result_summary": {"car_number": "64345127"},
                 },
             },
         )
@@ -112,20 +112,21 @@ class TasksResultsEdgeRegressionTest(ApiRegressionHelper):
 
         results = self.request_json("GET", f"/results?task_id={task['id']}", token=self.buyer_token)
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["result_json"]["summary"]["car_number"], "RV10086")
+        self.assertEqual(results[0]["result_json"]["summary"]["car_number"], "64345127")
 
         reviewed = self.request_json(
             "POST",
             f"/results/{results[0]['id']}/review",
             token=self.buyer_token,
             json={
-                "predictions": [{"label": "car_number", "text": "RV10087", "score": 0.99, "bbox": [20, 24, 180, 86]}],
+                "predictions": [{"label": "car_number", "text": "64345128", "score": 0.99, "bbox": [20, 24, 180, 86]}],
                 "note": "corrected ocr text",
             },
         )
         reviewed_json = reviewed["result"]["result_json"]
-        self.assertEqual(reviewed_json["predictions"][0]["text"], "RV10087")
-        self.assertEqual(reviewed_json["summary"]["car_number"], "RV10087")
+        self.assertEqual(reviewed_json["predictions"][0]["text"], "64345128")
+        self.assertEqual(reviewed_json["summary"]["car_number"], "64345128")
+        self.assertTrue(reviewed_json["car_number_validation"]["valid"])
 
     def test_task_edge_result_dataset_flow(self) -> None:
         image_name = self.unique_name("api-regression-task", ".jpg")

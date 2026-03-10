@@ -1375,6 +1375,12 @@ label {
 .selection-summary span {
   color: var(--muted);
   font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.training-create-next .row-actions {
+  margin-top: 8px;
+  flex-wrap: wrap;
 }
 
 .training-run-summary {
@@ -1968,6 +1974,20 @@ label {
 .result-validation-notes {
   display: grid;
   gap: 6px;
+}
+
+.result-dataset-workbench {
+  display: grid;
+  gap: 14px;
+}
+
+.result-dataset-form {
+  align-items: end;
+}
+
+.result-dataset-form .checkbox-row {
+  min-height: 48px;
+  align-self: center;
 }
 
 .training-inline-validation {

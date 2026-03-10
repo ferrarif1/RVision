@@ -42,6 +42,9 @@ from app.security.roles import (
     is_supplier_user,
 )
 from app.services.audit_service import record_audit
+from app.services.car_number_rule_service import ensure_valid_car_number_text
+from app.services.car_number_rule_service import get_active_car_number_rule
+from app.services.car_number_rule_service import validate_car_number_text
 from app.services.data_hygiene_service import is_synthetic_training_job
 from app.services.dataset_version_service import create_dataset_version_record
 from app.services.model_package_service import ModelPackageError, load_model_blobs, parse_and_validate_model_package, persist_model_package
@@ -117,6 +120,14 @@ class TrainingRuntimeReconcileRequest(BaseModel):
     worker_stale_seconds: int | None = Field(default=None, ge=1, description="本次 reconcile 的 worker stale 秒数覆盖 / Optional worker stale seconds override")
     dispatch_timeout_seconds: int | None = Field(default=None, ge=1, description="本次 reconcile 的 dispatch timeout 秒数覆盖 / Optional dispatch timeout override")
     running_timeout_seconds: int | None = Field(default=None, ge=1, description="本次 reconcile 的 running timeout 秒数覆盖 / Optional running timeout override")
+
+
+class TrainingWorkerCleanupRequest(BaseModel):
+    stale_hours: int = Field(default=24, ge=1, le=24 * 365, description="清理阈值（小时） / Delete only workers stale for at least this many hours")
+    worker_codes: list[str] = Field(default_factory=list, description="可选，精确指定要清理的 worker_code 列表 / Optional explicit worker codes to prune")
+    dry_run: bool = Field(default=False, description="仅预览，不执行删除 / Preview only")
+    limit: int = Field(default=200, ge=1, le=1000, description="单次最多处理多少条 / Max rows per cleanup")
+    note: str | None = Field(default=None, description="清理说明 / Optional operator note")
 
 
 class CarNumberLabelingReviewRequest(BaseModel):
@@ -338,6 +349,8 @@ def _rewrite_car_number_labeling_files(rows: list[dict[str, str]]) -> None:
 def _labeling_item_summary(row: dict[str, str]) -> dict[str, Any]:
     final_text = str(row.get("final_text") or "").strip()
     suggestion = str(row.get("ocr_suggestion") or "").strip()
+    final_validation = validate_car_number_text(final_text)
+    suggestion_validation = validate_car_number_text(suggestion)
     return {
         "sample_id": str(row.get("sample_id") or "").strip(),
         "split_hint": str(row.get("split_hint") or "").strip(),
@@ -360,17 +373,20 @@ def _labeling_item_summary(row: dict[str, str]) -> dict[str, Any]:
         ],
         "has_final_text": bool(final_text),
         "has_suggestion": bool(suggestion),
+        "final_text_validation": final_validation,
+        "ocr_suggestion_validation": suggestion_validation,
+        "car_number_rule": get_active_car_number_rule(),
     }
 
 
 def _resolve_car_number_text(row: dict[str, str], *, allow_suggestions: bool) -> tuple[str, str]:
     final_text = str(row.get("final_text") or "").strip().upper()
-    if final_text:
-        return final_text, "final_text"
+    if final_text and validate_car_number_text(final_text)["valid"]:
+        return validate_car_number_text(final_text)["normalized_text"], "final_text"
     if allow_suggestions:
         suggestion = str(row.get("ocr_suggestion") or "").strip().upper()
-        if suggestion:
-            return suggestion, "ocr_suggestion"
+        if suggestion and validate_car_number_text(suggestion)["valid"]:
+            return validate_car_number_text(suggestion)["normalized_text"], "ocr_suggestion"
     return "", ""
 
 
@@ -1198,22 +1214,31 @@ def get_car_number_labeling_summary(
             summary_payload = {}
     review_status_counts: dict[str, int] = {}
     final_text_rows = 0
+    valid_final_text_rows = 0
     suggestion_rows = 0
+    valid_suggestion_rows = 0
     for row in rows:
         status_key = str(row.get("review_status") or "pending").strip() or "pending"
         review_status_counts[status_key] = review_status_counts.get(status_key, 0) + 1
         if str(row.get("final_text") or "").strip():
             final_text_rows += 1
+            if validate_car_number_text(row.get("final_text"))["valid"]:
+                valid_final_text_rows += 1
         if str(row.get("ocr_suggestion") or "").strip():
             suggestion_rows += 1
+            if validate_car_number_text(row.get("ocr_suggestion"))["valid"]:
+                valid_suggestion_rows += 1
     summary_payload.update(
         {
             "annotated_rows": len(rows),
             "review_status_counts": review_status_counts,
             "final_text_rows": final_text_rows,
             "final_text_ratio": round((final_text_rows / len(rows)), 4) if rows else 0.0,
+            "valid_final_text_rows": valid_final_text_rows,
             "suggestion_rows": suggestion_rows,
             "suggestion_ratio": round((suggestion_rows / len(rows)), 4) if rows else 0.0,
+            "valid_suggestion_rows": valid_suggestion_rows,
+            "car_number_rule": get_active_car_number_rule(),
         }
     )
     export_summary_path = _car_number_text_dataset_summary_path()
@@ -1307,7 +1332,12 @@ def update_car_number_labeling_review(
     if matched_index is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Labeling sample not found")
     row = dict(rows[matched_index])
-    row["final_text"] = str(payload.final_text or "").strip().upper()
+    final_text = str(payload.final_text or "").strip().upper()
+    if final_text:
+        validation = ensure_valid_car_number_text(final_text, field_name="final_text")
+        row["final_text"] = validation["normalized_text"]
+    else:
+        row["final_text"] = ""
     row["review_status"] = payload.review_status
     row["reviewer"] = str(payload.reviewer or "").strip()
     row["notes"] = str(payload.notes or "").strip()
@@ -1630,6 +1660,81 @@ def reconcile_training_runtime(
     summary["requested_by"] = current_user.username
     summary["note"] = _control_note(payload.note)
     return summary
+
+
+@router.post("/workers/cleanup")
+def cleanup_training_workers(
+    payload: TrainingWorkerCleanupRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*TRAINING_WORKER_ADMIN_ROLES)),
+):
+    reconcile_training_runtime_health(db)
+    threshold_seconds = int(payload.stale_hours) * 3600
+    now = datetime.utcnow()
+    requested_worker_codes = {str(code or "").strip() for code in payload.worker_codes if str(code or "").strip()}
+    active_worker_codes = {
+        str(row.assigned_worker_code or "").strip()
+        for row in db.query(TrainingJob).filter(~TrainingJob.status.in_(TRAINING_JOB_TERMINAL_STATUSES)).all()
+        if str(row.assigned_worker_code or "").strip()
+    }
+    candidates: list[TrainingWorker] = []
+    for worker in db.query(TrainingWorker).order_by(TrainingWorker.created_at.asc()).all():
+        if worker.status == "ACTIVE":
+            continue
+        if worker.worker_code in active_worker_codes:
+            continue
+        if requested_worker_codes and worker.worker_code not in requested_worker_codes:
+            continue
+        reference_time = worker.last_seen_at or worker.created_at
+        age_seconds = int((now - reference_time).total_seconds()) if reference_time else threshold_seconds + 1
+        if not requested_worker_codes and age_seconds < threshold_seconds:
+            continue
+        candidates.append(worker)
+        if len(candidates) >= int(payload.limit):
+            break
+
+    removed_rows = [
+        {
+            "id": worker.id,
+            "worker_code": worker.worker_code,
+            "status": worker.status,
+            "host": worker.host,
+            "last_seen_at": worker.last_seen_at,
+            "created_at": worker.created_at,
+        }
+        for worker in candidates
+    ]
+    if not payload.dry_run:
+        for worker in candidates:
+            db.delete(worker)
+        db.flush()
+
+    record_audit(
+        db,
+        action=actions.TRAINING_WORKER_CLEANUP,
+        resource_type="training_worker",
+        resource_id=str(len(removed_rows)),
+        detail={
+            "stale_hours": payload.stale_hours,
+            "worker_codes_requested": sorted(requested_worker_codes),
+            "dry_run": payload.dry_run,
+            "removed_count": len(removed_rows),
+            "worker_codes": [row["worker_code"] for row in removed_rows],
+            "note": _control_note(payload.note),
+        },
+        request=request,
+        actor=current_user,
+    )
+    db.commit()
+    return {
+        "status": "ok",
+        "dry_run": payload.dry_run,
+        "stale_hours": payload.stale_hours,
+        "worker_codes_requested": sorted(requested_worker_codes),
+        "removed_count": len(removed_rows),
+        "removed_workers": removed_rows,
+    }
 
 
 @router.post("/workers/heartbeat")
