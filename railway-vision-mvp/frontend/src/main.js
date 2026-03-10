@@ -12,6 +12,7 @@ migrateLegacyStorageKeys();
 const routes = [
   { name: 'login', pattern: 'login', requiresAuth: false, label: '登录', navPage: null },
   { name: 'dashboard', pattern: 'dashboard', requiresAuth: true, permission: 'dashboard.view', label: '工作台', navPage: 'dashboard' },
+  { name: 'guide', pattern: 'guide', requiresAuth: true, permission: 'dashboard.view', label: '接入与使用指南', navPage: 'guide', parentPath: 'dashboard' },
   { name: 'assets', pattern: 'assets', requiresAuth: true, permission: 'asset.upload', label: '资产', navPage: 'assets' },
   { name: 'models', pattern: 'models', requiresAuth: true, permission: 'model.view', label: '模型', navPage: 'models' },
   { name: 'training', pattern: 'training', requiresAuth: true, permission: 'training.job.view', label: '训练', navPage: 'training' },
@@ -30,6 +31,7 @@ const routes = [
 
 const NAV_COMMANDS = [
   { path: 'dashboard', title: '工作台', description: '查看四条主线的整体状态', keywords: 'dashboard home 总览 主线' },
+  { path: 'guide', title: '接入与使用指南', description: '查看平台接入步骤、角色上手和功能使用说明', keywords: 'guide docs onboarding 接入 文档 使用 指南' },
   { path: 'assets', title: '资产中心', description: '上传和筛选图片/视频资产', keywords: 'asset upload 资产 上传' },
   { path: 'models', title: '模型中心', description: '提交模型、审批、发布时间线', keywords: 'model release approve 模型 审批 发布' },
   { path: 'training', title: '训练管理', description: '训练作业与 worker 资源', keywords: 'training worker 训练 作业' },
@@ -132,6 +134,15 @@ function buildRouteView(route) {
       showBack: true,
       backPath: 'training',
       breadcrumb: [{ label: '训练', path: 'training' }, { label: '车号文本复核' }],
+    };
+  }
+  if (route.name === 'guide') {
+    return {
+      label: '接入与使用指南',
+      navPage: 'guide',
+      showBack: true,
+      backPath: 'dashboard',
+      breadcrumb: [{ label: '工作台', path: 'dashboard' }, { label: '接入与使用指南' }],
     };
   }
   if (route.name === '403') {

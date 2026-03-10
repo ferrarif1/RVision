@@ -22,6 +22,71 @@ function renderError(text) {
   return `<div class="state error">${esc(text || '加载失败')}</div>`;
 }
 
+function renderPageHero({ eyebrow = '', title = '', summary = '', highlights = [], actions = [] } = {}) {
+  const safeHighlights = Array.isArray(highlights) ? highlights.filter(Boolean) : [];
+  const safeActions = Array.isArray(actions) ? actions.filter((item) => item?.path && item?.label) : [];
+  return `
+    <section class="card page-hero">
+      <div class="page-hero-copy">
+        ${eyebrow ? `<span class="hero-eyebrow">${esc(eyebrow)}</span>` : ''}
+        <h2>${esc(title)}</h2>
+        ${summary ? `<p>${esc(summary)}</p>` : ''}
+        ${safeHighlights.length ? `
+          <div class="page-hero-highlights">
+            ${safeHighlights.map((item) => `<span class="page-hero-pill">${esc(item)}</span>`).join('')}
+          </div>
+        ` : ''}
+      </div>
+      ${safeActions.length ? `
+        <div class="page-hero-actions">
+          ${safeActions.map((item) => `<button class="${item.primary ? 'primary' : 'ghost'}" type="button" data-page-nav="${esc(item.path)}">${esc(item.label)}</button>`).join('')}
+        </div>
+      ` : ''}
+    </section>
+  `;
+}
+
+function renderWorkbenchOverview({ title = '', summary = '', status = '', metrics = [], actions = [] } = {}) {
+  const metricRows = Array.isArray(metrics) ? metrics.filter((item) => item && (item.label || item.value || item.note)) : [];
+  const actionRows = Array.isArray(actions) ? actions.filter((item) => item && item.label) : [];
+  return `
+    <div class="workbench-overview">
+      <div class="workbench-overview-main">
+        <div>
+          <strong>${esc(title || '当前工作台')}</strong>
+          ${status ? `<span class="badge">${esc(status)}</span>` : ''}
+        </div>
+        <p>${esc(summary || '选择一项后，这里会显示当前状态和推荐下一步动作。')}</p>
+      </div>
+      ${metricRows.length ? `
+        <div class="workbench-overview-grid">
+          ${metricRows.map((item) => `
+            <article class="metric-card compact">
+              <h4>${esc(item.label || '-')}</h4>
+              <p class="metric">${esc(item.value ?? '-')}</p>
+              <span>${esc(item.note || '')}</span>
+            </article>
+          `).join('')}
+        </div>
+      ` : ''}
+      ${actionRows.length ? `
+        <div class="workbench-overview-actions">
+          ${actionRows.map((item) => `<button class="${item.primary ? 'primary' : 'ghost'}" type="button" data-workbench-action="${esc(item.id || '')}">${esc(item.label)}</button>`).join('')}
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function bindPageNavButtons(root, ctx) {
+  root.querySelectorAll('[data-page-nav]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const path = button.getAttribute('data-page-nav');
+      if (path) ctx.navigate(path);
+    });
+  });
+}
+
 function safeJson(value) {
   try {
     return JSON.stringify(value ?? {}, null, 2);
@@ -598,6 +663,91 @@ function renderResultConfidenceBars(predictions) {
   `;
 }
 
+function resultLabelDisplayText(taskType, label) {
+  const normalized = String(label || '').trim();
+  if (!normalized) return '未命名标签';
+  if (taskType === 'car_number_ocr' && normalized === 'car_number') return '车号文本';
+  if (taskType === 'car_number_ocr' && normalized === 'ocr') return 'OCR 文本';
+  return enumText('task_type', normalized) !== normalized ? enumText('task_type', normalized) : normalized;
+}
+
+function renderResultLabelCloud(item) {
+  const labels = Object.entries(item?.labelCounts || {})
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 6);
+  if (!labels.length) {
+    return {
+      headerLabel: '暂无',
+      title: '命中标签',
+      html: '<div class="training-history-empty">当前结果没有结构化标签命中。</div>',
+    };
+  }
+  if (item?.taskType === 'car_number_ocr') {
+    const primaryLabel = resultLabelDisplayText(item.taskType, labels[0][0]);
+    const totalCount = labels.reduce((sum, [, count]) => sum + Number(count || 0), 0);
+    return {
+      headerLabel: '文本输出',
+      title: '识别类型',
+      html: `
+        <div class="result-label-cloud result-label-cloud-ocr">
+          <span class="badge">${esc(primaryLabel)}</span>
+          <span class="badge subtle">${esc(`命中 ${totalCount} 条`)}</span>
+          ${item.ocrValidation ? `<span class="badge ${item.ocrValidation.valid ? 'ok' : 'warn'}">${esc(item.ocrValidation.valid ? '规则通过' : '规则待复核')}</span>` : ''}
+        </div>
+      `,
+    };
+  }
+  return {
+    headerLabel: `${labels.length} 类`,
+    title: '命中标签',
+    html: `<div class="result-label-cloud">${labels.map(([label, count]) => `<span class="badge">${esc(`${resultLabelDisplayText(item?.taskType, label)} · ${count}`)}</span>`).join('')}</div>`,
+  };
+}
+
+function resultStageLabel(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized || normalized === '-') return '结果';
+  if (normalized === 'final') return '最终结果';
+  if (normalized === 'expert') return '专家结果';
+  if (normalized === 'router') return '路由结果';
+  return normalized;
+}
+
+function renderResultCardTitle(item) {
+  const taskLabel = enumText('task_type', item?.taskType || '-');
+  if (item?.taskType === 'car_number_ocr') {
+    return item?.ocrText ? `车号结果 · ${item.ocrText}` : '车号结果';
+  }
+  if (item?.recognizedTexts?.length) {
+    return `${taskLabel} · ${item.recognizedTexts[0]}`;
+  }
+  return `${taskLabel}结果`;
+}
+
+function renderResultSummaryStats(item, validationMetrics = {}) {
+  if (item?.taskType === 'car_number_ocr') {
+    const validityText = item.ocrValidation
+      ? (item.ocrValidation.valid ? '规则通过' : '规则待复核')
+      : '待确认';
+    return `
+      <div class="keyvals compact result-summary-keyvals">
+        <div><span>车号文本</span><strong>${esc(item.ocrText || '-')}</strong></div>
+        <div><span>规则状态</span><strong>${esc(validityText)}</strong></div>
+        <div><span>识别置信度</span><strong>${esc(formatMetricValue(item.ocrConfidence, { percent: true }))}</strong></div>
+        <div><span>执行耗时</span><strong>${esc(item.durationMs != null ? `${formatMetricValue(item.durationMs)} ms` : '-')}</strong></div>
+      </div>
+    `;
+  }
+  return `
+    <div class="keyvals compact result-summary-keyvals">
+      <div><span>命中结果</span><strong>${esc(formatMetricValue(item.objectCount))}</strong></div>
+      <div><span>平均置信度</span><strong>${esc(formatMetricValue(item.avgScore, { percent: true }))}</strong></div>
+      <div><span>执行耗时</span><strong>${esc(item.durationMs != null ? `${formatMetricValue(item.durationMs)} ms` : '-')}</strong></div>
+      <div><span>模型验证准确率</span><strong>${esc(formatMetricValue(validationMetrics.val_accuracy, { percent: true }))}</strong></div>
+    </div>
+  `;
+}
+
 function renderResultOcrSignal(item) {
   if (item?.taskType !== 'car_number_ocr') return '';
   const riskClass = item.ocrRisk || 'warning';
@@ -633,50 +783,58 @@ function renderModelInsightBlock(modelId, readiness) {
     <section class="result-model-insight">
       <div class="result-model-insight-head">
         <div>
-          <strong>${esc(`关联模型 · ${modelId}`)}</strong>
-          <p>${esc(validationReport.summary || '当前结果使用的模型验证信息')}</p>
+          <strong>关联模型表现</strong>
+          <p>${esc(validationReport.summary || '当前结果使用的模型验证摘要')}</p>
         </div>
         <div class="quick-review-statuses">
           <span class="badge">${esc(validationReport.decision || '-')}</span>
-          ${trainingJob?.job_code ? `<span class="badge">${esc(trainingJob.job_code)}</span>` : ''}
+          ${trainingJob?.job_code ? `<span class="badge">${esc(`训练作业 ${trainingJob.job_code}`)}</span>` : ''}
         </div>
       </div>
-      <div class="keyvals compact">
-        <div><span>val_score</span><strong>${esc(formatMetricValue(metrics.val_score, { percent: true }))}</strong></div>
-        <div><span>val_accuracy</span><strong>${esc(formatMetricValue(metrics.val_accuracy, { percent: true }))}</strong></div>
-        <div><span>val_loss</span><strong>${esc(formatMetricValue(metrics.val_loss))}</strong></div>
-        <div><span>history</span><strong>${esc(formatMetricValue(metrics.history_count ?? history.length))}</strong></div>
-        <div><span>latency_ms</span><strong>${esc(formatMetricValue(metrics.latency_ms))}</strong></div>
-        <div><span>gpu_mem_mb</span><strong>${esc(formatMetricValue(metrics.gpu_mem_mb))}</strong></div>
+      <div class="keyvals compact result-summary-keyvals">
+        <div><span>验证得分</span><strong>${esc(formatMetricValue(metrics.val_score, { percent: true }))}</strong></div>
+        <div><span>验证准确率</span><strong>${esc(formatMetricValue(metrics.val_accuracy, { percent: true }))}</strong></div>
+        <div><span>平均延迟</span><strong>${esc(metrics.latency_ms != null ? `${formatMetricValue(metrics.latency_ms)} ms` : '-')}</strong></div>
+        <div><span>显存占用</span><strong>${esc(metrics.gpu_mem_mb != null ? `${formatMetricValue(metrics.gpu_mem_mb)} MB` : '-')}</strong></div>
       </div>
-      ${
-        history.length
-          ? `
-              <div class="grid-two training-history-grid-wrap result-model-history-grid">
-                ${renderTrainingHistoryChart({
-                  title: 'Accuracy Curve',
-                  description: '复用训练作业回写的 epoch 历史，快速判断该识别结果背后的模型泛化水平。',
-                  history,
-                  percent: true,
-                  lines: [
-                    { key: 'train_accuracy', label: 'train_accuracy', className: 'train-line' },
-                    { key: 'val_accuracy', label: 'val_accuracy', className: 'validation-line' },
-                  ],
-                })}
-                ${renderTrainingHistoryChart({
-                  title: 'Loss Curve',
-                  description: '对比 train / val loss，观察训练是否收敛以及是否存在过拟合迹象。',
-                  history,
-                  lowerIsBetter: true,
-                  lines: [
-                    { key: 'train_loss', label: 'train_loss', className: 'train-line' },
-                    { key: 'val_loss', label: 'val_loss', className: 'validation-line' },
-                  ],
-                })}
-              </div>
-            `
-          : '<div class="training-history-empty">当前模型已记录验证指标，但还没有可展示的 epoch 历史曲线。</div>'
-      }
+      <details class="inline-details">
+        <summary>查看训练曲线与技术指标</summary>
+        <div class="details-panel">
+          <div class="keyvals compact result-tech-keyvals">
+            <div><span>model_id</span><strong class="mono">${esc(truncateMiddle(modelId, 12, 10))}</strong></div>
+            <div><span>val_loss</span><strong>${esc(formatMetricValue(metrics.val_loss))}</strong></div>
+            <div><span>history_count</span><strong>${esc(formatMetricValue(metrics.history_count ?? history.length))}</strong></div>
+          </div>
+          ${
+            history.length
+              ? `
+                  <div class="grid-two training-history-grid-wrap result-model-history-grid">
+                    ${renderTrainingHistoryChart({
+                      title: 'Accuracy Curve',
+                      description: '复用训练作业回写的 epoch 历史，快速判断该识别结果背后的模型泛化水平。',
+                      history,
+                      percent: true,
+                      lines: [
+                        { key: 'train_accuracy', label: 'train_accuracy', className: 'train-line' },
+                        { key: 'val_accuracy', label: 'val_accuracy', className: 'validation-line' },
+                      ],
+                    })}
+                    ${renderTrainingHistoryChart({
+                      title: 'Loss Curve',
+                      description: '对比 train / val loss，观察训练是否收敛以及是否存在过拟合迹象。',
+                      history,
+                      lowerIsBetter: true,
+                      lines: [
+                        { key: 'train_loss', label: 'train_loss', className: 'train-line' },
+                        { key: 'val_loss', label: 'val_loss', className: 'validation-line' },
+                      ],
+                    })}
+                  </div>
+                `
+              : '<div class="training-history-empty">当前模型已记录验证指标，但还没有可展示的 epoch 历史曲线。</div>'
+          }
+        </div>
+      </details>
     </section>
   `;
 }
@@ -721,6 +879,98 @@ function renderResultValidationConclusion(rows, summaries, modelInsights = {}) {
         ${recognizedTexts.length ? `<span>${esc(`示例文本：${recognizedTexts.slice(0, 3).join(' / ')}`)}</span>` : ''}
       </div>
     </section>
+  `;
+}
+
+function renderResultActionWorkbench(taskId, summaries, exported = null) {
+  if (!taskId || !Array.isArray(summaries) || !summaries.length) {
+    return renderEmpty('查询到结果后，这里会根据当前状态给出下一步建议。');
+  }
+  const ocrRows = summaries.filter((item) => item.taskType === 'car_number_ocr');
+  const lowConfidenceCount = ocrRows.filter((item) => !Number.isFinite(item.ocrConfidence) || item.ocrConfidence < 0.8 || item.ocrRisk !== 'stable').length;
+  const stableTexts = [...new Set(ocrRows.flatMap((item) => item.recognizedTexts || []).filter(Boolean))];
+  const recommendation = exported?.asset?.id
+    ? '结果样本已经导出到训练中心，可直接继续训练或验证。'
+    : lowConfidenceCount > 0
+      ? `当前仍有 ${lowConfidenceCount} 条待复核结果，建议先核对文本和截图，再决定是否回灌训练。`
+      : stableTexts.length
+        ? '当前结果已经较稳定，可以直接导出到训练中心或继续查看任务详情。'
+        : '建议先查看任务详情和截图，确认结果是否符合预期。';
+  return `
+    <div class="result-action-workbench">
+      <div class="result-panel-head">
+        <div>
+          <strong>下一步动作</strong>
+          <p>${esc(recommendation)}</p>
+        </div>
+        <span class="badge">${esc(exported?.asset?.id ? '已回灌' : (lowConfidenceCount > 0 ? '建议复核' : '可继续推进'))}</span>
+      </div>
+      <div class="result-action-grid">
+        <button class="primary" type="button" data-result-action="open-training">${esc(exported?.asset?.id ? '打开训练中心' : '导出并送训练中心')}</button>
+        <button class="ghost" type="button" data-result-action="open-task-detail">打开任务详情</button>
+        <button class="ghost" type="button" data-result-action="back-tasks">返回任务中心</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderResultOverviewCards(rows, summaries) {
+  const total = Array.isArray(rows) ? rows.length : 0;
+  const totalObjects = summaries.reduce((sum, item) => sum + item.objectCount, 0);
+  const durations = summaries.map((item) => item.durationMs).filter((value) => Number.isFinite(value));
+  const avgDuration = durations.length ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : null;
+  const allTexts = [...new Set(summaries.flatMap((item) => item.recognizedTexts))].filter(Boolean);
+  const ocrRows = summaries.filter((item) => item.taskType === 'car_number_ocr');
+  const lowConfidenceCount = ocrRows.filter((item) => !Number.isFinite(item.ocrConfidence) || item.ocrConfidence < 0.8 || item.ocrRisk !== 'stable').length;
+  if (ocrRows.length) {
+    return `
+      <div class="result-overview-grid">
+        <article class="metric-card">
+          <h4>车号结果</h4>
+          <p class="metric">${esc(total)}</p>
+          <span>当前任务回查到的车号结果条数</span>
+        </article>
+        <article class="metric-card">
+          <h4>稳定文本</h4>
+          <p class="metric">${esc(allTexts.length)}</p>
+          <span>${esc(allTexts.slice(0, 3).join(' / ') || '当前还没有稳定车号文本')}</span>
+        </article>
+        <article class="metric-card">
+          <h4>待复核</h4>
+          <p class="metric">${esc(lowConfidenceCount)}</p>
+          <span>${esc(lowConfidenceCount ? '仍有低置信度或规则未通过结果' : '当前结果已基本稳定')}</span>
+        </article>
+        <article class="metric-card">
+          <h4>平均执行耗时</h4>
+          <p class="metric">${esc(avgDuration ?? '-')}</p>
+          <span>${esc(avgDuration != null ? '毫秒' : '当前结果未回写耗时')}</span>
+        </article>
+      </div>
+    `;
+  }
+  return `
+    <div class="result-overview-grid">
+      <article class="metric-card">
+        <h4>结果条数</h4>
+        <p class="metric">${esc(total)}</p>
+        <span>当前 task_id 下已回查到的结果记录</span>
+      </article>
+      <article class="metric-card">
+        <h4>识别对象</h4>
+        <p class="metric">${esc(totalObjects)}</p>
+        <span>累计命中的框 / 文本结果数量</span>
+      </article>
+      <article class="metric-card">
+        <h4>平均执行耗时</h4>
+        <p class="metric">${esc(avgDuration ?? '-')}</p>
+        <span>${esc(avgDuration != null ? '毫秒' : '当前结果未回写耗时')}</span>
+      </article>
+      <article class="metric-card">
+        <h4>识别文本</h4>
+        <p class="metric">${esc(allTexts.length)}</p>
+        <span>${esc(allTexts.slice(0, 3).join(' / ') || '暂无 OCR 文本')}</span>
+      </article>
+    </div>
   `;
 }
 
@@ -1281,20 +1531,289 @@ function pageDashboard(route, rawCtx) {
   };
 }
 
+function pageGuide(route, rawCtx) {
+  const ctx = makeContext(route, rawCtx);
+  const flowSteps = [
+    '真实资产上传',
+    '在线任务验证',
+    '结果复核',
+    '数据集回灌',
+    '训练作业',
+    '候选模型审批',
+    '发布到设备',
+  ];
+  const quickLinks = [
+    { path: 'assets', label: '上传真实资产', hint: '先准备训练 / 验证 / 推理用的图片、视频或数据集包。' },
+    { path: 'tasks', label: '创建在线验证任务', hint: '用现有模型先跑一轮真实样本验证。' },
+    { path: 'training/car-number-labeling', label: '车号文本复核', hint: '逐条确认 OCR 真值，再回灌训练。' },
+    { path: 'training', label: '创建训练作业', hint: '让本机或指定 worker 执行训练 / 微调。' },
+    { path: 'models', label: '审批与发布模型', hint: '在审批工作台和发布工作台完成晋级。' },
+    { path: 'results', label: '结果回灌训练', hint: '把复核后的结果导出成训练 / 验证数据集版本。' },
+  ];
+  const roleCards = [
+    {
+      title: '客户操作员',
+      summary: '负责上传现场资产、创建任务、查看结果、复核 OCR 文本。',
+      steps: ['先上传真实资产', '再创建任务验证现有模型', '结果确认后再进入训练或验收'],
+    },
+    {
+      title: '供应商工程师',
+      summary: '负责组织训练数据、创建训练作业、产出候选模型并提交审批。',
+      steps: ['先确认 worker 为 ACTIVE', '创建训练作业', '训练成功后去模型中心走审批验证'],
+    },
+    {
+      title: '平台管理员',
+      summary: '负责挑样本验证候选模型、审批通过、配置发布范围与交付方式。',
+      steps: ['先看审批工作台', '再看发布工作台', '最后用已发布模型做任务回归验证'],
+    },
+  ];
+  const featureCards = [
+    ['工作台', '只用于看全局状态与推荐动作，不建议在这里做复杂编辑。'],
+    ['资产', '上传和筛选图片 / 视频 / ZIP 数据集，建议按 training / validation / inference 分用途管理。'],
+    ['训练', '创建训练作业、查看 worker 和候选模型；车号 OCR 建议先走“车号文本复核”。'],
+    ['模型', '统一查看模型状态、审批工作台、发布工作台和 readiness。'],
+    ['任务', '创建在线推理任务；明确目标后优先直接选模型，不明确时再做预检。'],
+    ['结果', '查看文本、框、截图和验证结论；确认后可回灌训练。'],
+    ['设备 / 审计', '核对设备授权、在线状态与关键操作证据。'],
+  ];
+  const screenCards = [
+    {
+      path: 'assets',
+      title: '资产页',
+      eyebrow: '真实输入',
+      bullets: ['上传图片 / 视频 / ZIP', '按用途管理 training / validation / inference', '上传后可直达任务或训练'],
+    },
+    {
+      path: 'tasks',
+      title: '任务页',
+      eyebrow: '在线验证',
+      bullets: ['明确目标后直接选模型', '等待任务完成并打开结果页', '多图场景支持批量快速识别'],
+    },
+    {
+      path: 'training',
+      title: '训练页',
+      eyebrow: '训练闭环',
+      bullets: ['查看 worker 是否 ACTIVE', '创建训练作业', '训练成功后直达候选模型验证'],
+    },
+    {
+      path: 'models',
+      title: '模型页',
+      eyebrow: '审批发布',
+      bullets: ['审批工作台挑样本验证', '发布工作台配置设备 / 买家', '统一看 readiness 与状态'],
+    },
+    {
+      path: 'results',
+      title: '结果页',
+      eyebrow: '复核回灌',
+      bullets: ['查看文本 / 框 / 截图', '确认验证结论', '导出训练 / 验证数据集版本'],
+    },
+  ];
+  const faqCards = [
+    ['为什么不建议一上来就训练？', '先验证现有模型和在线链路是否正常，能显著减少后面把问题误判成训练问题的概率。'],
+    ['在线验证该用什么输入？', '优先用单图或短视频资产。训练 ZIP / 数据集包不适合直接拿来做在线任务输入。'],
+    ['OCR 结果出来了就能直接相信吗？', '不能。应结合合法规则、置信度和人工复核一起判断，尤其是低清车号图。'],
+    ['审批和发布有什么区别？', '审批是在确认模型能力是否达标；发布是在确认给谁、给哪些设备、以什么方式交付。'],
+  ];
+  const scenarioFlows = [
+    {
+      title: '客户快速验证',
+      path: ['上传资产', '创建任务', '查看结果'],
+      hint: '适合先验证平台和现有模型是否跑得通。',
+    },
+    {
+      title: '车号 OCR 提精度',
+      path: ['车号文本复核', '创建训练', '审批模型', '发布上线'],
+      hint: '适合把 OCR 结果补成真值，再推进微调。',
+    },
+    {
+      title: '平台审批发布',
+      path: ['挑样本验证', '审批通过', '发布工作台', '设备回归验证'],
+      hint: '适合控制候选模型到正式上线的过程。',
+    },
+  ];
+  return {
+    html: `
+      <section class="card guide-hero">
+        <div>
+          <span class="hero-eyebrow">商业交付说明</span>
+          <h2>平台接入与使用指南</h2>
+          <p>这份指南面向真实业务交付，重点回答“谁先做什么、在哪个页面做、做完怎么判断是否成功”。它不是源码说明，而是平台上手、验证、训练、审批和发布的统一操作口径。</p>
+        </div>
+        <div class="row-actions">
+          <button class="primary" type="button" data-guide-nav="dashboard">返回工作台</button>
+          <button class="ghost" type="button" data-guide-nav="assets">先上传真实资产</button>
+          <button class="ghost" type="button" data-guide-nav="tasks">先验证现有模型</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>一图看懂平台闭环</h3>
+        <div class="guide-flow">
+          ${flowSteps.map((step, index) => `
+            <div class="guide-flow-step">
+              <strong>${esc(step)}</strong>
+              ${index < flowSteps.length - 1 ? '<span class="guide-flow-arrow">→</span>' : ''}
+            </div>
+          `).join('')}
+        </div>
+        <div class="hint">先用真实资产验证现有模型，再把结果沉淀成训练数据，训练出候选模型后进入审批与发布。</div>
+      </section>
+
+      <section class="guide-grid">
+        <article class="card">
+          <h3>平台接入五步法</h3>
+          <div class="guide-step-list">
+            <div><strong>1. 确认账号、租户、角色</strong><span>先确认自己属于客户、供应商还是平台侧，并核对租户和权限是否正确。</span></div>
+            <div><strong>2. 准备真实资产</strong><span>按 training / validation / inference 分用途整理样本，避免测试文件混入正式资产。</span></div>
+            <div><strong>3. 明确目标与验收标准</strong><span>先定义任务是检测还是 OCR，以及什么输出才算达标。</span></div>
+            <div><strong>4. 先跑小闭环</strong><span>上传 1 张真实图片，创建 1 条任务，确认结果页输出正常后再进入训练和审批。</span></div>
+            <div><strong>5. 再做训练与发布</strong><span>结果真值确认后回灌数据集，创建训练作业，验证候选模型并进入审批发布。</span></div>
+          </div>
+        </article>
+
+        <article class="card">
+          <h3>推荐最短路径</h3>
+          <div class="compact-list">
+            <li><strong>客户快速验证</strong><span>资产 -> 任务 -> 结果</span></li>
+            <li><strong>车号 OCR 真值闭环</strong><span>车号文本复核 -> 训练 -> 模型审批 -> 发布</span></li>
+            <li><strong>平台审批发布</strong><span>审批工作台 -> 发布工作台 -> 已发布模型验证</span></li>
+          </div>
+          <div class="hint">建议不要一上来就训练。先确认现有模型和在线执行链路是通的，再决定是否进入微调。</div>
+        </article>
+      </section>
+
+      <section class="card">
+        <h3>角色上手路径</h3>
+        <div class="guide-role-grid">
+          ${roleCards.map((card) => `
+            <article class="selection-card guide-role-card">
+              <div class="selection-card-head"><strong>${esc(card.title)}</strong></div>
+              <div class="selection-summary">
+                <span>${esc(card.summary)}</span>
+                ${card.steps.map((step) => `<span>${esc(step)}</span>`).join('')}
+              </div>
+            </article>
+          `).join('')}
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>按场景直接走</h3>
+        <div class="guide-scenario-grid">
+          ${scenarioFlows.map((item) => `
+            <article class="selection-card">
+              <div class="selection-card-head"><strong>${esc(item.title)}</strong></div>
+              <div class="guide-mini-flow">
+                ${item.path.map((step, index) => `
+                  <span class="badge">${esc(step)}</span>${index < item.path.length - 1 ? '<span class="guide-mini-arrow">→</span>' : ''}
+                `).join('')}
+              </div>
+              <div class="selection-summary"><span>${esc(item.hint)}</span></div>
+            </article>
+          `).join('')}
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>功能地图</h3>
+        <div class="guide-feature-grid">
+          ${featureCards.map(([title, summary]) => `
+            <article class="selection-card">
+              <div class="selection-card-head"><strong>${esc(title)}</strong></div>
+              <div class="selection-summary"><span>${esc(summary)}</span></div>
+            </article>
+          `).join('')}
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>关键页面导览</h3>
+        <div class="guide-screen-grid">
+          ${screenCards.map((item) => `
+            <button class="selection-card guide-screen-card" type="button" data-guide-nav="${esc(item.path)}">
+              <div class="guide-screen-preview">
+                <span class="guide-screen-preview-bar"></span>
+                <span class="guide-screen-preview-bar short"></span>
+                <span class="guide-screen-preview-panel"></span>
+                <span class="guide-screen-preview-panel small"></span>
+              </div>
+              <div class="selection-card-head">
+                <div class="selection-card-title">
+                  <span class="selection-card-subtitle">${esc(item.eyebrow)}</span>
+                  <strong>${esc(item.title)}</strong>
+                </div>
+              </div>
+              <div class="selection-summary">
+                ${item.bullets.map((line) => `<span>${esc(line)}</span>`).join('')}
+              </div>
+            </button>
+          `).join('')}
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>直接开始</h3>
+        <div class="guide-link-grid">
+          ${quickLinks.map((item) => `
+            <button class="selection-card guide-link-card" type="button" data-guide-nav="${esc(item.path)}">
+              <div class="selection-card-head"><strong>${esc(item.label)}</strong></div>
+              <div class="selection-summary"><span>${esc(item.hint)}</span></div>
+            </button>
+          `).join('')}
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>成熟交付建议</h3>
+        <div class="selection-summary">
+          <strong>统一操作原则</strong>
+          <span>在线验证使用单图 / 视频资产；训练使用数据集包；两类输入不要混用。</span>
+          <span>结果出来后不要默认可信，尤其 OCR 要结合合法规则、置信度和人工复核一起判断。</span>
+          <span>审批和发布是两个阶段：先确认模型能力，再配置发布对象、设备范围和交付方式。</span>
+          <span>仓库内正式说明文档见 <span class="mono">docs/platform_access_and_feature_guide.md</span>。</span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h3>常见问题</h3>
+        <div class="guide-faq-grid">
+          ${faqCards.map(([q, a]) => `
+            <article class="selection-card guide-faq-card">
+              <div class="selection-card-head"><strong>${esc(q)}</strong></div>
+              <div class="selection-summary"><span>${esc(a)}</span></div>
+            </article>
+          `).join('')}
+        </div>
+      </section>
+    `,
+    async mount(root) {
+      root.querySelectorAll('[data-guide-nav]').forEach((btn) => {
+        btn.addEventListener('click', () => ctx.navigate(btn.getAttribute('data-guide-nav')));
+      });
+    },
+  };
+}
+
 function pageAssets(route, rawCtx) {
   const ctx = makeContext(route, rawCtx);
   const role = primaryRole(ctx.state.user);
-  const introText = role.startsWith('buyer_')
-    ? '上传图片、视频或 ZIP 数据集包，形成可直接用于训练、验证、微调和推理的受控资产记录。'
+  const heroSummary = role.startsWith('buyer_')
+    ? '把现场图片、视频和 ZIP 数据集包收成受控资产，后续任务、训练、验证都直接复用 asset_id。'
     : role.startsWith('platform_')
-      ? '统一收口客户资产、用途标记和敏感等级，为训练、验证、推理和审批提供可信输入。'
+      ? '统一管理客户资产、用途标记和敏感等级，保证训练、验证和审批都基于同一份可信输入。'
       : '查看资产输入、用途标记和数据集包摘要。';
   return {
     html: `
-      <section class="card">
-        <h2>资产中心</h2>
-        <p>${esc(introText)}</p>
-      </section>
+      ${renderPageHero({
+        eyebrow: '真实资产输入',
+        title: '资产中心',
+        summary: heroSummary,
+        highlights: ['单图 / 视频用于任务', 'ZIP 数据集包用于训练', 'asset_id 全流程复用'],
+        actions: [
+          { path: 'tasks', label: '去任务中心', primary: true },
+          { path: 'training', label: '去训练中心' },
+        ],
+      })}
       <section class="grid-two">
         <form id="assetUploadForm" class="card form-grid">
           <h3>上传资产</h3>
@@ -1354,6 +1873,7 @@ function pageAssets(route, rawCtx) {
       </section>
     `,
     async mount(root) {
+      bindPageNavButtons(root, ctx);
       const uploadForm = root.querySelector('#assetUploadForm');
       const uploadMsg = root.querySelector('#assetUploadMsg');
       const uploadResult = root.querySelector('#assetUploadResult');
@@ -1538,17 +2058,27 @@ function pageModels(route, rawCtx) {
   const canCreateTrainingJob = hasPermission(ctx.state, 'training.job.create');
   const canViewTrainingJob = hasPermission(ctx.state, 'training.job.view');
   const canCreateTask = hasPermission(ctx.state, 'task.create');
-  const introText = role.startsWith('supplier')
-    ? '提交初始算法或候选模型，持续跟踪审批反馈与训练协作进度。'
+  const heroSummary = role.startsWith('supplier')
+    ? '提交基础算法和候选模型，持续看审批反馈、验证表现和训练协作状态。'
     : role.startsWith('platform_')
-      ? '审批候选模型、发布授权范围，并把成果模型收敛到受控交付链路。'
+      ? '统一完成候选模型验证、审批和发布，把成果模型收进受控交付链路。'
       : '查看已授权模型、候选状态与交付进度。';
 
   return {
     html: `
+      ${renderPageHero({
+        eyebrow: '模型交付与审批',
+        title: '模型中心',
+        summary: heroSummary,
+        highlights: ['模型提交', '审批工作台', '发布工作台'],
+        actions: [
+          { path: 'training', label: '去训练中心' },
+          { path: 'tasks', label: '去任务中心验证', primary: true },
+        ],
+      })}
       <section class="card">
-        <h2>模型中心</h2>
-        <p>${esc(introText)}</p>
+        <h3>模型工作台概览</h3>
+        <div id="modelWorkbenchOverviewWrap">${renderEmpty('先从模型列表选择一版候选模型，这里会汇总当前状态和推荐下一步动作。')}</div>
       </section>
       <section class="grid-two">
         <form id="modelRegisterForm" class="card form-grid">
@@ -1567,14 +2097,19 @@ function pageModels(route, rawCtx) {
             <option value="expert">${enumText('model_type', 'expert')}</option>
             <option value="router">${enumText('model_type', 'router')}</option>
           </select>
-          <label>plugin_name(插件名称)</label>
-          <input name="plugin_name" placeholder="scene_router" />
-          <label>training_round(训练轮次)</label>
-          <input name="training_round" placeholder="round-1" />
-          <label>dataset_label(数据集标签)</label>
-          <input name="dataset_label" placeholder="buyer-demo-v1" />
-          <label>training_summary(训练摘要)</label>
-          <textarea name="training_summary" rows="2" placeholder="微调摘要"></textarea>
+          <details>
+            <summary>高级元信息（可选）</summary>
+            <div class="details-panel form-grid">
+              <label>plugin_name(插件名称)</label>
+              <input name="plugin_name" placeholder="scene_router" />
+              <label>training_round(训练轮次)</label>
+              <input name="training_round" placeholder="round-1" />
+              <label>dataset_label(数据集标签)</label>
+              <input name="dataset_label" placeholder="buyer-demo-v1" />
+              <label>training_summary(训练摘要)</label>
+              <textarea name="training_summary" rows="2" placeholder="微调摘要"></textarea>
+            </div>
+          </details>
           <button class="primary" type="submit">提交模型</button>
           <div id="modelRegisterMsg" class="hint"></div>
           <div id="modelRegisterResult">${renderEmpty('提交模型后会在这里显示 model_id、版本和下一步动作')}</div>
@@ -1655,10 +2190,12 @@ function pageModels(route, rawCtx) {
       </section>
     `,
     async mount(root) {
+      bindPageNavButtons(root, ctx);
       const modelsWrap = root.querySelector('#modelsTableWrap');
       const registerForm = root.querySelector('#modelRegisterForm');
       const registerMsg = root.querySelector('#modelRegisterMsg');
       const registerResult = root.querySelector('#modelRegisterResult');
+      const modelWorkbenchOverviewWrap = root.querySelector('#modelWorkbenchOverviewWrap');
       const timelineWrap = root.querySelector('#modelTimelineWrap');
       const readinessWrap = root.querySelector('#modelReadinessWrap');
       const approvalWorkbenchWrap = root.querySelector('#modelApprovalWorkbenchWrap');
@@ -1677,6 +2214,98 @@ function pageModels(route, rawCtx) {
       const requestedOpenModelTimeline = localStorage.getItem(STORAGE_KEYS.focusModelTimeline) === '1';
       let activeModelId = requestedFocusModelId || '';
       const modelListFilters = { q: '', status: '', source: '' };
+
+      function selectedModelRecord() {
+        return cachedModels.find((row) => row.id === activeModelId) || null;
+      }
+
+      function renderModelWorkbenchOverview() {
+        if (!modelWorkbenchOverviewWrap) return;
+        const model = selectedModelRecord();
+        if (!model) {
+          modelWorkbenchOverviewWrap.innerHTML = renderWorkbenchOverview({
+            title: '还没有选中模型',
+            summary: '先从下方模型列表选一版候选模型。系统会把时间线、门禁、审批和发布动作聚合到同一屏。',
+            metrics: [
+              { label: '候选模型', value: filteredModels(cachedModels).filter((row) => row.status === 'SUBMITTED').length, note: '待审批' },
+              { label: '已审批', value: filteredModels(cachedModels).filter((row) => row.status === 'APPROVED').length, note: '可进入发布工作台' },
+              { label: '已发布', value: filteredModels(cachedModels).filter((row) => row.status === 'RELEASED').length, note: '可直接授权使用' },
+            ],
+            actions: [
+              { id: 'model-open-list', label: '查看模型列表', primary: true },
+              { id: 'model-open-training', label: '去训练中心' },
+            ],
+          });
+        } else {
+          const sourceType = (model.platform_meta || {}).model_source_type || '-';
+          const validationDecision = model.validation_report?.decision || '待验证';
+          const latestRisk = model.latest_release_risk_summary?.decision || '待评估';
+          const actions = [
+            { id: 'model-open-readiness', label: '查看评估', primary: true },
+            { id: 'model-open-timeline', label: '查看时间线' },
+          ];
+          if (canApprove && model.status === 'SUBMITTED') {
+            actions.push({ id: 'model-open-approval', label: '进入审批工作台' });
+          }
+          if (canRelease && ['APPROVED', 'RELEASED'].includes(model.status)) {
+            actions.push({ id: 'model-open-release', label: '进入发布工作台' });
+          }
+          modelWorkbenchOverviewWrap.innerHTML = renderWorkbenchOverview({
+            title: `${model.model_code}:${model.version}`,
+            status: enumText('model_status', model.status),
+            summary: model.status === 'SUBMITTED'
+              ? '这版候选模型还在审批前验证阶段。建议先检查门禁，再批量创建验证任务。'
+              : model.status === 'APPROVED'
+                ? '模型已审批通过，下一步进入发布工作台，确认设备范围、买家范围和交付方式。'
+                : '模型已进入正式交付链路，可回看发布前评估和最近风险摘要。',
+            metrics: [
+              { label: '验证门禁', value: validationDecision, note: model.validation_report?.summary || '待生成验证摘要' },
+              { label: '发布风险', value: latestRisk, note: model.latest_release_risk_summary?.summary || '待做发布评估' },
+              { label: '来源', value: enumText('model_source_type', sourceType), note: model.owner_tenant_name || model.owner_tenant_code || '当前租户' },
+            ],
+            actions,
+          });
+        }
+        modelWorkbenchOverviewWrap.querySelector('[data-workbench-action="model-open-list"]')?.addEventListener('click', () => {
+          modelsWrap?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+        modelWorkbenchOverviewWrap.querySelector('[data-workbench-action="model-open-training"]')?.addEventListener('click', () => {
+          ctx.navigate('training');
+        });
+        modelWorkbenchOverviewWrap.querySelector('[data-workbench-action="model-open-readiness"]')?.addEventListener('click', async () => {
+          if (!activeModelId) return;
+          try {
+            await openModelReadiness(activeModelId);
+            readinessWrap?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          } catch (error) {
+            ctx.toast(error.message || '模型评估失败', 'error');
+          }
+        });
+        modelWorkbenchOverviewWrap.querySelector('[data-workbench-action="model-open-timeline"]')?.addEventListener('click', async () => {
+          if (!activeModelId) return;
+          await openModelTimeline(activeModelId);
+          timelineWrap?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        });
+        modelWorkbenchOverviewWrap.querySelector('[data-workbench-action="model-open-approval"]')?.addEventListener('click', async () => {
+          if (!activeModelId) return;
+          try {
+            await openModelReadiness(activeModelId);
+            await openModelApprovalWorkbench(activeModelId);
+            approvalWorkbenchWrap?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          } catch (error) {
+            ctx.toast(error.message || '审批工作台加载失败', 'error');
+          }
+        });
+        modelWorkbenchOverviewWrap.querySelector('[data-workbench-action="model-open-release"]')?.addEventListener('click', async () => {
+          if (!activeModelId) return;
+          try {
+            await openModelReleaseWorkbench(activeModelId);
+            releaseWorkbenchWrap?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          } catch (error) {
+            ctx.toast(error.message || '发布工作台加载失败', 'error');
+          }
+        });
+      }
 
       function renderReadinessChecks(title, report) {
         const checks = Array.isArray(report?.checks) ? report.checks : [];
@@ -1964,6 +2593,8 @@ function pageModels(route, rawCtx) {
 
       async function openModelTimeline(modelId) {
         activeModelId = modelId;
+        renderModelsTable(cachedModels);
+        renderModelWorkbenchOverview();
         timelineWrap.innerHTML = renderLoading('加载模型时间线...');
         try {
           const data = await ctx.get(`/models/${modelId}/timeline`);
@@ -1989,6 +2620,8 @@ function pageModels(route, rawCtx) {
 
       async function openModelReadiness(modelId, releasePayload = null) {
         activeModelId = modelId;
+        renderModelsTable(cachedModels);
+        renderModelWorkbenchOverview();
         readinessWrap.innerHTML = renderLoading('加载模型评估...');
         try {
           const baseReadiness = await ctx.get(`/models/${modelId}/readiness`);
@@ -2014,6 +2647,9 @@ function pageModels(route, rawCtx) {
       async function openModelApprovalWorkbench(modelId) {
         if (!approvalWorkbenchWrap) return null;
         activeApprovalModelId = modelId;
+        activeModelId = modelId;
+        renderModelsTable(cachedModels);
+        renderModelWorkbenchOverview();
         approvalWorkbenchWrap.innerHTML = renderLoading('加载审批工作台...');
         try {
           const workbench = await ctx.get(`/models/${modelId}/approval-workbench`);
@@ -2122,6 +2758,9 @@ function pageModels(route, rawCtx) {
       async function openModelReleaseWorkbench(modelId, releasePayload = null) {
         if (!releaseWorkbenchWrap) return null;
         activeReleaseModelId = modelId;
+        activeModelId = modelId;
+        renderModelsTable(cachedModels);
+        renderModelWorkbenchOverview();
         releaseWorkbenchWrap.innerHTML = renderLoading('加载发布工作台...');
         try {
           const workbench = await ctx.get(`/models/${modelId}/release-workbench`);
@@ -2245,44 +2884,60 @@ function pageModels(route, rawCtx) {
           return;
         }
         modelsWrap.innerHTML = `
-          <div class="table-wrap">
-            <table class="table">
-              <thead>
-                <tr>
-                  <th>model_code(模型编码)</th><th>version(版本)</th><th>status(状态)</th><th>validation(验证)</th><th>risk(最近风险)</th><th>source(来源)</th><th>hash(摘要)</th><th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${filtered.map((row) => `
-                  <tr data-model-row="${esc(row.id)}" class="${requestedFocusModelId === row.id ? 'active-row' : ''}">
-                    <td>${esc(row.model_code)}</td>
-                    <td>${esc(row.version)}</td>
-                    <td>${esc(enumText('model_status', row.status))}</td>
-                    <td>${row.validation_report?.decision ? `<span class="badge">${esc(row.validation_report.decision)}</span>` : '-'}</td>
-                    <td>${row.latest_release_risk_summary?.decision ? `<span class="badge">${esc(row.latest_release_risk_summary.decision)}</span>` : '-'}</td>
-                    <td>${esc(enumText('model_source_type', (row.platform_meta || {}).model_source_type || '-'))}</td>
-                    <td class="mono">${esc((row.model_hash || '').slice(0, 16))}...</td>
-                    <td>
-                      <div class="row-actions">
-                        <button class="ghost" data-model-timeline="${esc(row.id)}">时间线</button>
-                        <button class="ghost" data-model-readiness="${esc(row.id)}">评估</button>
-                        ${(canApprove && row.status === 'SUBMITTED') || (canRelease && ['APPROVED', 'RELEASED'].includes(row.status))
-                          ? `
-                              <details class="inline-details">
-                                <summary>更多操作</summary>
-                                <div class="details-panel action-panel">
-                                  ${canApprove && row.status === 'SUBMITTED' ? `<button class="ghost" data-model-approve="${esc(row.id)}">审批工作台</button>` : ''}
-                                  ${canRelease && ['APPROVED', 'RELEASED'].includes(row.status) ? `<button class="ghost" data-model-release="${esc(row.id)}">发布工作台</button>` : ''}
-                                </div>
-                              </details>
-                            `
-                          : ''}
+          <div class="selection-grid">
+            ${filtered.map((row) => {
+              const isActive = (activeModelId || requestedFocusModelId) === row.id;
+              const sourceType = enumText('model_source_type', (row.platform_meta || {}).model_source_type || '-');
+              const validationDecision = row.validation_report?.decision || '待验证';
+              const riskDecision = row.latest_release_risk_summary?.decision || '待评估';
+              return `
+                <article data-model-row="${esc(row.id)}" class="selection-card ${isActive ? 'selected active-row' : ''}">
+                  <div class="selection-card-head selection-card-head--stack">
+                    <div class="selection-card-title">
+                      <strong>${esc(row.model_code)}</strong>
+                      <span class="selection-card-subtitle">${esc(row.version)}</span>
+                    </div>
+                    <div class="quick-review-statuses">
+                      <span class="badge">${esc(enumText('model_status', row.status))}</span>
+                      ${row.validation_report?.decision ? `<span class="badge">${esc(validationDecision)}</span>` : ''}
+                    </div>
+                  </div>
+                  <div class="selection-card-meta selection-card-meta--compact">
+                    <span>来源</span><strong>${esc(sourceType)}</strong>
+                    <span>风险</span><strong>${esc(riskDecision)}</strong>
+                    <span>任务</span><strong>${esc(row.task_type || row.plugin_name || '-')}</strong>
+                    <span>租户</span><strong>${esc(row.owner_tenant_name || row.owner_tenant_code || '-')}</strong>
+                    <span>摘要</span><strong class="mono">${esc(truncateMiddle(row.model_hash || '-', 8, 6))}</strong>
+                  </div>
+                  <div class="row-actions">
+                    <button class="ghost" data-model-timeline="${esc(row.id)}">时间线</button>
+                    <button class="primary" data-model-readiness="${esc(row.id)}">${isActive ? '当前查看评估' : '查看评估'}</button>
+                    ${(canApprove && row.status === 'SUBMITTED') || (canRelease && ['APPROVED', 'RELEASED'].includes(row.status))
+                      ? `
+                          <details class="inline-details">
+                            <summary>更多操作</summary>
+                            <div class="details-panel action-panel">
+                              ${canApprove && row.status === 'SUBMITTED' ? `<button class="ghost" data-model-approve="${esc(row.id)}">审批工作台</button>` : ''}
+                              ${canRelease && ['APPROVED', 'RELEASED'].includes(row.status) ? `<button class="ghost" data-model-release="${esc(row.id)}">发布工作台</button>` : ''}
+                            </div>
+                          </details>
+                        `
+                      : ''}
+                  </div>
+                  <details class="inline-details">
+                    <summary>技术详情</summary>
+                    <div class="details-panel">
+                      <div class="selection-card-meta selection-card-meta--compact">
+                        <span>model_id</span><strong class="mono">${esc(row.id)}</strong>
+                        <span>plugin</span><strong>${esc(row.plugin_name || '-')}</strong>
+                        <span>task_type</span><strong>${esc(row.task_type || '-')}</strong>
+                        <span>hash</span><strong class="mono">${esc(row.model_hash || '-')}</strong>
                       </div>
-                    </td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
+                    </div>
+                  </details>
+                </article>
+              `;
+            }).join('')}
           </div>
         `;
 
@@ -2328,6 +2983,7 @@ function pageModels(route, rawCtx) {
             }
           });
         });
+        renderModelWorkbenchOverview();
       }
 
       async function loadModels() {
@@ -2338,7 +2994,14 @@ function pageModels(route, rawCtx) {
           cachedModels = visibleRows;
           if (!visibleRows.length) {
             modelsWrap.innerHTML = renderEmpty((rows || []).length ? '当前只有测试/占位模型，已自动隐藏' : '暂无模型，可先提交一个模型包，或等待供应商交付候选模型');
+            activeModelId = '';
+            renderModelWorkbenchOverview();
             return;
+          }
+          if (!activeModelId || !visibleRows.some((row) => row.id === activeModelId)) {
+            activeModelId = requestedFocusModelId && visibleRows.some((row) => row.id === requestedFocusModelId)
+              ? requestedFocusModelId
+              : visibleRows[0].id;
           }
           renderModelsTable(visibleRows);
 
@@ -2481,21 +3144,28 @@ function pageTraining(route, rawCtx) {
   const canCreateTrainingJob = hasPermission(ctx.state, 'training.job.create');
   const canManageWorkers = hasPermission(ctx.state, 'training.worker.manage');
   const canCreateTask = hasPermission(ctx.state, 'task.create');
-  const introText = role.startsWith('platform_')
-    ? '统一查看训练作业、Worker 健康和候选模型回收状态，确保训练链路始终处于平台控制面内。'
-    : '查看受控训练作业、候选模型回收状态和 Worker 运行情况。';
+  const heroSummary = role.startsWith('platform_')
+    ? '统一查看训练作业、Worker 健康和候选模型回收状态，保证训练链路始终处于平台控制面内。'
+    : '创建训练作业、查看 Worker 健康，并把训练成功的候选模型继续送入验证和审批。';
   return {
     html: `
-      <section class="card">
-        <h2>训练中心</h2>
-        <p>${esc(introText)}</p>
-        <div class="row-actions">
-          <button id="openCarNumberLabeling" class="ghost" type="button">打开车号文本复核</button>
-        </div>
-      </section>
+      ${renderPageHero({
+        eyebrow: '训练与微调',
+        title: '训练中心',
+        summary: heroSummary,
+        highlights: ['先确认 Worker ACTIVE', '预设驱动创建训练', '训练成功后直达验证'],
+        actions: [
+          { path: 'training/car-number-labeling', label: '打开车号文本复核', primary: true },
+          { path: 'models', label: '查看模型审批' },
+        ],
+      })}
       <section class="card">
         <h3>运行告警</h3>
         <div id="trainingRuntimeAlertWrap">${renderLoading('加载训练运行健康状态...')}</div>
+      </section>
+      <section class="card">
+        <h3>训练工作台概览</h3>
+        <div id="trainingWorkbenchOverviewWrap">${renderEmpty('选择一条训练作业后，这里会汇总当前状态、Worker 健康和推荐下一步动作。')}</div>
       </section>
       <section class="grid-two">
         <section class="card">
@@ -2526,22 +3196,24 @@ function pageTraining(route, rawCtx) {
           ${
             canManageWorkers
               ? `
-                <form id="registerWorkerForm" class="form-grid">
-                  <h4>注册/刷新 Worker</h4>
-                  <label>worker_code(Worker 编码)</label><input name="worker_code" placeholder="train-worker-01" required />
-                  <label>name(名称)</label><input name="name" placeholder="GPU Worker 01" required />
-                  <label>host(主机地址)</label><input name="host" placeholder="10.0.0.31" />
-                  <label>status(状态)</label>
-                  <select name="status">
-                    <option value="ACTIVE">${enumText('worker_status', 'ACTIVE')}</option>
-                    <option value="INACTIVE">${enumText('worker_status', 'INACTIVE')}</option>
-                    <option value="UNHEALTHY">${enumText('worker_status', 'UNHEALTHY')}</option>
-                  </select>
-                  <label>labels(JSON 标签)</label><textarea name="labels" rows="2">{}</textarea>
-                  <label>resources(JSON 资源)</label><textarea name="resources" rows="2">{}</textarea>
-                  <button class="primary" type="submit">注册 Worker</button>
-                  <div id="registerWorkerMsg" class="hint"></div>
-                </form>
+                <details class="inline-details training-worker-register">
+                  <summary>注册 / 刷新 Worker</summary>
+                  <form id="registerWorkerForm" class="details-panel form-grid">
+                    <label>worker_code(Worker 编码)</label><input name="worker_code" placeholder="train-worker-01" required />
+                    <label>name(名称)</label><input name="name" placeholder="GPU Worker 01" required />
+                    <label>host(主机地址)</label><input name="host" placeholder="10.0.0.31" />
+                    <label>status(状态)</label>
+                    <select name="status">
+                      <option value="ACTIVE">${enumText('worker_status', 'ACTIVE')}</option>
+                      <option value="INACTIVE">${enumText('worker_status', 'INACTIVE')}</option>
+                      <option value="UNHEALTHY">${enumText('worker_status', 'UNHEALTHY')}</option>
+                    </select>
+                    <label>labels(JSON 标签)</label><textarea name="labels" rows="2">{}</textarea>
+                    <label>resources(JSON 资源)</label><textarea name="resources" rows="2">{}</textarea>
+                    <button class="primary" type="submit">注册 Worker</button>
+                    <div id="registerWorkerMsg" class="hint"></div>
+                  </form>
+                </details>
               `
               : renderEmpty('当前角色无 worker 管理权限')
           }
@@ -2661,7 +3333,7 @@ function pageTraining(route, rawCtx) {
       }
     `,
     async mount(root) {
-      root.querySelector('#openCarNumberLabeling')?.addEventListener('click', () => ctx.navigate('training/car-number-labeling'));
+      bindPageNavButtons(root, ctx);
       const jobsWrap = root.querySelector('#trainingJobsTableWrap');
       const workersWrap = root.querySelector('#trainingWorkersWrap');
       const filterForm = root.querySelector('#trainingFilterForm');
@@ -2671,6 +3343,7 @@ function pageTraining(route, rawCtx) {
       const createMsg = root.querySelector('#trainingCreateMsg');
       const createResultWrap = root.querySelector('#trainingCreateResultWrap');
       const trainingRuntimeAlertWrap = root.querySelector('#trainingRuntimeAlertWrap');
+      const trainingWorkbenchOverviewWrap = root.querySelector('#trainingWorkbenchOverviewWrap');
       const trainingRunSummaryWrap = root.querySelector('#trainingRunSummaryWrap');
       const assetsDatalist = root.querySelector('#trainingAssetsDatalist');
       const modelsDatalist = root.querySelector('#trainingModelsDatalist');
@@ -2799,6 +3472,73 @@ function pageTraining(route, rawCtx) {
 
       function getSelectedTrainingJob() {
         return cachedTrainingJobs.find((row) => row.id === activeTrainingJobId) || null;
+      }
+
+      function renderTrainingWorkbenchOverview() {
+        if (!trainingWorkbenchOverviewWrap) return;
+        const job = getSelectedTrainingJob();
+        const activeWorkerCount = assistWorkers.filter((row) => row.status === 'ACTIVE').length;
+        const unhealthyWorkerCount = assistWorkers.filter((row) => row.status === 'UNHEALTHY').length;
+        if (!job) {
+          trainingWorkbenchOverviewWrap.innerHTML = renderWorkbenchOverview({
+            title: '等待选择训练作业',
+            summary: '先从左侧训练作业列表选择一条运行中的、成功的或刚创建的作业，再决定是否验证候选模型或继续迭代数据。',
+            metrics: [
+              { label: '活跃 Worker', value: activeWorkerCount, note: unhealthyWorkerCount ? `异常 ${unhealthyWorkerCount}` : '心跳正常' },
+              { label: '训练作业', value: cachedTrainingJobs.length, note: '当前筛选结果' },
+              { label: '推荐下一步', value: '创建训练', note: '也可先打开车号文本复核' },
+            ],
+            actions: [
+              { id: 'training-open-create', label: '去创建训练作业', primary: true },
+              { id: 'training-open-review', label: '打开车号文本复核' },
+            ],
+          });
+        } else {
+          const actions = [
+            { id: 'training-open-summary', label: '查看训练摘要', primary: true },
+            { id: 'training-open-review', label: '打开车号文本复核' },
+          ];
+          if (job.candidate_model?.id) {
+            actions.push({ id: 'training-open-candidate-model', label: '查看候选模型' });
+          }
+          if (canCreateTask && job.candidate_model?.id) {
+            actions.push({ id: 'training-open-validation', label: '直接验证候选模型' });
+          }
+          trainingWorkbenchOverviewWrap.innerHTML = renderWorkbenchOverview({
+            title: job.job_code || '训练作业',
+            status: enumText('training_status', job.status),
+            summary: job.status === 'SUCCEEDED'
+              ? '这轮训练已经完成。优先看候选模型和验证入口，再决定是否进入审批。'
+              : job.status === 'RUNNING'
+                ? '训练正在进行中。先看 Worker 健康和训练曲线，避免长时间空跑。'
+                : '当前作业仍在排队或等待调度，可继续检查 Worker 和数据集配置。',
+            metrics: [
+              { label: '候选模型', value: job.candidate_model ? `${job.candidate_model.model_code}:${job.candidate_model.version}` : '等待回收', note: job.target_model_code || '目标模型' },
+              { label: '执行节点', value: job.assigned_worker_code || '待派发', note: activeWorkerCount ? `活跃 Worker ${activeWorkerCount}` : '暂无活跃 Worker' },
+              { label: '训练 / 验证', value: `${job.asset_count ?? 0}/${job.validation_asset_count ?? 0}`, note: '资产数量' },
+            ],
+            actions,
+          });
+        }
+        trainingWorkbenchOverviewWrap.querySelector('[data-workbench-action="training-open-create"]')?.addEventListener('click', () => {
+          createForm?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+        trainingWorkbenchOverviewWrap.querySelector('[data-workbench-action="training-open-review"]')?.addEventListener('click', () => {
+          ctx.navigate('training/car-number-labeling');
+        });
+        trainingWorkbenchOverviewWrap.querySelector('[data-workbench-action="training-open-summary"]')?.addEventListener('click', () => {
+          trainingRunSummaryWrap?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+        trainingWorkbenchOverviewWrap.querySelector('[data-workbench-action="training-open-candidate-model"]')?.addEventListener('click', () => {
+          if (!job?.candidate_model?.id) return;
+          localStorage.setItem(STORAGE_KEYS.focusModelId, job.candidate_model.id);
+          localStorage.setItem(STORAGE_KEYS.focusModelTimeline, '1');
+          ctx.navigate('models');
+        });
+        trainingWorkbenchOverviewWrap.querySelector('[data-workbench-action="training-open-validation"]')?.addEventListener('click', () => {
+          if (!job?.candidate_model?.id) return;
+          trainingRunSummaryWrap?.querySelector('[data-launch-candidate-validation-open]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        });
       }
 
       function compactValue(value) {
@@ -2935,6 +3675,7 @@ function pageTraining(route, rawCtx) {
             button.disabled = false;
           }
         });
+        renderTrainingWorkbenchOverview();
       }
 
       function defaultDatasetCompareFilters() {
@@ -3294,40 +4035,53 @@ function pageTraining(route, rawCtx) {
         if (!rows.length) {
           jobsWrap.innerHTML = renderEmpty('暂无训练作业，可从模型中心或本页下方创建一条训练 / 微调作业');
           renderTrainingRunSummary();
+          renderTrainingWorkbenchOverview();
           return;
         }
         jobsWrap.innerHTML = `
-          <div class="table-wrap">
-            <table class="table">
-              <thead>
-                <tr>
-                  <th>job_code(作业编码)</th><th>alert(告警)</th><th>status(状态)</th><th>kind(类型)</th><th>train/val(资产数)</th><th>base_model(基础模型)</th><th>candidate_model(候选模型)</th><th>worker(执行节点)</th><th>创建时间</th><th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${rows.map((row) => `
-                  <tr class="${activeTrainingJobId === row.id ? 'active-row' : ''}">
-                    <td class="mono">${esc(row.job_code)}</td>
-                    <td>${row.alert_level ? `<span class="badge">${esc(row.alert_level)}</span>` : '-'}</td>
-                    <td>${esc(enumText('training_status', row.status))}</td>
-                    <td>${esc(enumText('training_kind', row.training_kind))}</td>
-                    <td>${esc(`${row.asset_count ?? 0}/${row.validation_asset_count ?? 0}`)}</td>
-                    <td class="mono">${esc(row.base_model ? `${row.base_model.model_code}:${row.base_model.version}` : '-')}</td>
-                    <td class="mono">${esc(row.candidate_model ? `${row.candidate_model.model_code}:${row.candidate_model.version}` : '-')}</td>
-                    <td>${esc(row.assigned_worker_code || row.worker_selector?.host || row.worker_selector?.hosts?.[0] || '-')}</td>
-                    <td>${formatDateTime(row.created_at)}</td>
-                    <td>
-                      <div class="row-actions">
-                        <button class="ghost" type="button" data-training-open-summary="${esc(row.id)}">摘要</button>
-                        ${row.can_cancel ? `<button class="ghost" type="button" data-training-cancel="${esc(row.id)}">取消</button>` : ''}
-                        ${row.can_retry ? `<button class="ghost" type="button" data-training-retry="${esc(row.id)}">重试</button>` : ''}
-                        ${row.can_reassign ? `<button class="ghost" type="button" data-training-reassign="${esc(row.id)}">改派到当前训练机</button>` : ''}
+          <div class="selection-grid">
+            ${rows.map((row) => {
+              const isActive = activeTrainingJobId === row.id;
+              const workerLabel = row.assigned_worker_code || row.worker_selector?.host || row.worker_selector?.hosts?.[0] || '待派发';
+              return `
+                <article class="selection-card ${isActive ? 'selected active-row' : ''}">
+                  <div class="selection-card-head selection-card-head--stack">
+                    <div class="selection-card-title">
+                      <strong>${esc(row.job_code)}</strong>
+                      <span class="selection-card-subtitle">${esc(formatDateTime(row.created_at))}</span>
+                    </div>
+                    <div class="quick-review-statuses">
+                      ${row.alert_level ? `<span class="badge">${esc(row.alert_level)}</span>` : ''}
+                      <span class="badge">${esc(enumText('training_status', row.status))}</span>
+                      <span class="badge">${esc(enumText('training_kind', row.training_kind))}</span>
+                    </div>
+                  </div>
+                  <div class="selection-card-meta selection-card-meta--compact">
+                    <span>训练/验证</span><strong>${esc(`${row.asset_count ?? 0}/${row.validation_asset_count ?? 0}`)}</strong>
+                    <span>基础模型</span><strong>${esc(row.base_model ? `${row.base_model.model_code}:${row.base_model.version}` : '未指定')}</strong>
+                    <span>候选模型</span><strong>${esc(row.candidate_model ? `${row.candidate_model.model_code}:${row.candidate_model.version}` : '等待回收')}</strong>
+                    <span>执行节点</span><strong>${esc(workerLabel)}</strong>
+                  </div>
+                  <div class="row-actions">
+                    <button class="primary" type="button" data-training-open-summary="${esc(row.id)}">${isActive ? '当前摘要' : '查看摘要'}</button>
+                    ${row.can_cancel ? `<button class="ghost" type="button" data-training-cancel="${esc(row.id)}">取消</button>` : ''}
+                    ${row.can_retry ? `<button class="ghost" type="button" data-training-retry="${esc(row.id)}">重试</button>` : ''}
+                    ${row.can_reassign ? `<button class="ghost" type="button" data-training-reassign="${esc(row.id)}">改派到当前训练机</button>` : ''}
+                  </div>
+                  <details class="inline-details">
+                    <summary>技术详情</summary>
+                    <div class="details-panel">
+                      <div class="selection-card-meta selection-card-meta--compact">
+                        <span>job_id</span><strong class="mono">${esc(row.id)}</strong>
+                        <span>目标版本</span><strong>${esc(`${row.target_model_code || '-'}:${row.target_version || '-'}`)}</strong>
+                        <span>基础模型ID</span><strong class="mono">${esc(row.base_model?.id || '-')}</strong>
+                        <span>候选模型ID</span><strong class="mono">${esc(row.candidate_model?.id || '-')}</strong>
                       </div>
-                    </td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
+                    </div>
+                  </details>
+                </article>
+              `;
+            }).join('')}
           </div>
         `;
         jobsWrap.querySelectorAll('[data-training-open-summary]').forEach((button) => {
@@ -3335,6 +4089,7 @@ function pageTraining(route, rawCtx) {
             activeTrainingJobId = button.getAttribute('data-training-open-summary') || '';
             renderTrainingJobTable(cachedTrainingJobs);
             renderTrainingRunSummary();
+            renderTrainingWorkbenchOverview();
           });
         });
         jobsWrap.querySelectorAll('[data-training-cancel]').forEach((button) => {
@@ -3401,10 +4156,12 @@ function pageTraining(route, rawCtx) {
           renderTrainingJobTable(cachedTrainingJobs);
           renderTrainingRunSummary();
           renderTrainingRuntimeAlerts();
+          renderTrainingWorkbenchOverview();
         } catch (error) {
           jobsWrap.innerHTML = renderError(error.message);
           if (trainingRunSummaryWrap) trainingRunSummaryWrap.innerHTML = renderError(error.message);
           renderTrainingRuntimeAlerts();
+          renderTrainingWorkbenchOverview();
         }
       }
 
@@ -3419,6 +4176,7 @@ function pageTraining(route, rawCtx) {
             if (workerCodesDatalist) workerCodesDatalist.innerHTML = '';
             if (workerHostsDatalist) workerHostsDatalist.innerHTML = '';
             renderTrainingRuntimeAlerts();
+            renderTrainingWorkbenchOverview();
             return;
           }
           const activeRows = rows.filter((row) => row.status === 'ACTIVE');
@@ -3485,11 +4243,13 @@ function pageTraining(route, rawCtx) {
             workersWrap.innerHTML = renderEmpty('当前角色无 Worker 查看权限');
             if (workerPool) workerPool.innerHTML = renderEmpty('当前角色无训练机查看权限');
             renderTrainingRuntimeAlerts();
+            renderTrainingWorkbenchOverview();
             return;
           }
           workersWrap.innerHTML = renderError(error.message);
           if (workerPool) workerPool.innerHTML = renderError(error.message);
           renderTrainingRuntimeAlerts();
+          renderTrainingWorkbenchOverview();
         }
       }
 
@@ -4974,14 +5734,24 @@ function pagePipelines(route, rawCtx) {
   const ctx = makeContext(route, rawCtx);
   const role = primaryRole(ctx.state.user);
   const canRelease = hasPermission(ctx.state, 'model.release');
-  const introText = role.startsWith('platform_')
+  const heroSummary = role.startsWith('platform_')
     ? '把路由模型、专家模型和阈值规则收敛成可发布的执行方案，并在发布前完成验证。'
-    : '查看和维护推理编排方案，确保任务执行时使用正确的模型组合和规则。';
+    : '维护推理编排方案，确保任务执行时命中正确的模型组合和规则。';
   return {
     html: `
+      ${renderPageHero({
+        eyebrow: '编排与发布',
+        title: '流水线中心',
+        summary: heroSummary,
+        highlights: ['路由模型 + 专家模型', '统一阈值配置', '发布工作台'],
+        actions: [
+          { path: 'tasks', label: '去任务中心验证', primary: true },
+          { path: 'models', label: '去模型中心' },
+        ],
+      })}
       <section class="card">
-        <h2>流水线中心</h2>
-        <p>${esc(introText)}</p>
+        <h3>流水线工作台概览</h3>
+        <div id="pipelineWorkbenchOverviewWrap">${renderEmpty('先从流水线列表选择一版配置，这里会汇总当前状态和推荐的发布动作。')}</div>
       </section>
       <section class="grid-two">
         <form id="pipelineRegisterForm" class="card form-grid">
@@ -4990,20 +5760,26 @@ function pagePipelines(route, rawCtx) {
           <label>name(名称)</label><input name="name" placeholder="主线路由流水线" required />
           <label>version(版本)</label><input name="version" placeholder="v1.0.0" required />
           <label>router_model_id(路由模型ID，可选)</label><input name="router_model_id" placeholder="router-model-id" />
-          <label>expert_map(JSON 专家路由表)</label><textarea name="expert_map" rows="3">{}</textarea>
-          <label>thresholds(JSON 阈值配置)</label><textarea name="thresholds" rows="2">{}</textarea>
-          <label>fusion_rules(JSON 融合规则)</label><textarea name="fusion_rules" rows="2">{}</textarea>
-          <label>config(JSON 扩展配置，可空)</label><textarea name="config" rows="4">{}</textarea>
+          <details>
+            <summary>路由配置与高级参数</summary>
+            <div class="details-panel form-grid">
+              <label>expert_map(JSON 专家路由表)</label><textarea name="expert_map" rows="3">{}</textarea>
+              <label>thresholds(JSON 阈值配置)</label><textarea name="thresholds" rows="2">{}</textarea>
+              <label>fusion_rules(JSON 融合规则)</label><textarea name="fusion_rules" rows="2">{}</textarea>
+              <label>config(JSON 扩展配置，可空)</label><textarea name="config" rows="4">{}</textarea>
+            </div>
+          </details>
           <button class="primary" type="submit">注册流水线</button>
           <div id="pipelineRegisterMsg" class="hint"></div>
         </form>
         <section class="card">
           <h3>发布前检查</h3>
-          <ul class="focus-list">
-            <li>先确认路由模型、专家模型和阈值规则已经齐备，再生成正式流水线版本。</li>
-            <li>注册后建议先去任务中心创建一次验证任务，确认结果符合预期，再执行发布。</li>
-            <li>发布时限定目标租户和设备范围，逐步放量，而不是一次性全量下发。</li>
-          </ul>
+          <div class="selection-summary">
+            <strong>建议顺序</strong>
+            <span>先确认路由模型、专家模型和阈值规则齐备，再生成正式流水线版本。</span>
+            <span>注册后先去任务中心创建一次验证任务，确认结果符合预期，再执行发布。</span>
+            <span>发布时限定目标租户和设备范围，逐步放量，而不是一次性全量下发。</span>
+          </div>
           <details>
             <summary>示例 expert_map</summary>
             <pre>{
@@ -5022,11 +5798,72 @@ function pagePipelines(route, rawCtx) {
       </section>
     `,
     async mount(root) {
+      bindPageNavButtons(root, ctx);
       const registerForm = root.querySelector('#pipelineRegisterForm');
       const registerMsg = root.querySelector('#pipelineRegisterMsg');
       const tableWrap = root.querySelector('#pipelinesTableWrap');
+      const pipelineWorkbenchOverviewWrap = root.querySelector('#pipelineWorkbenchOverviewWrap');
       const releaseWorkbenchWrap = root.querySelector('#pipelineReleaseWorkbenchWrap');
       let activePipelineReleaseId = '';
+      let activePipelineId = '';
+      let cachedPipelines = [];
+
+      function selectedPipelineRecord() {
+        return cachedPipelines.find((row) => row.id === activePipelineId) || null;
+      }
+
+      function renderPipelineWorkbenchOverview() {
+        if (!pipelineWorkbenchOverviewWrap) return;
+        const pipeline = selectedPipelineRecord();
+        if (!pipeline) {
+          pipelineWorkbenchOverviewWrap.innerHTML = renderWorkbenchOverview({
+            title: '还没有选中流水线',
+            summary: '先从列表里选一版流水线。发布工作台会自动带出设备、买家和流量范围。',
+            metrics: [
+              { label: '流水线总数', value: cachedPipelines.length, note: '当前可见' },
+              { label: '已发布', value: cachedPipelines.filter((row) => row.status === 'RELEASED').length, note: '正式可用' },
+              { label: '下一步', value: '注册 / 发布', note: '也可先去任务中心验证' },
+            ],
+            actions: [
+              { id: 'pipeline-open-register', label: '注册流水线', primary: true },
+              { id: 'pipeline-open-tasks', label: '去任务中心验证' },
+            ],
+          });
+        } else {
+          pipelineWorkbenchOverviewWrap.innerHTML = renderWorkbenchOverview({
+            title: `${pipeline.pipeline_code}:${pipeline.version}`,
+            status: enumText('pipeline_status', pipeline.status),
+            summary: pipeline.status === 'RELEASED'
+              ? '这条流水线已经正式发布。建议继续用真实样本做验证回查，确认路由与专家模型命中稳定。'
+              : '这条流水线还没有正式发布。建议先核对路由模型、专家路由和阈值，再进入发布工作台。',
+            metrics: [
+              { label: '路由模型', value: pipeline.router_model_id ? truncateMiddle(pipeline.router_model_id, 8, 6) : '未配置', note: 'router_model_id' },
+              { label: '阈值版本', value: pipeline.threshold_version || '未声明', note: 'thresholds' },
+              { label: '状态', value: enumText('pipeline_status', pipeline.status), note: pipeline.name || '当前流水线' },
+            ],
+            actions: [
+              { id: 'pipeline-open-release', label: '打开发布工作台', primary: true },
+              { id: 'pipeline-open-tasks', label: '去任务中心验证' },
+              { id: 'pipeline-open-register', label: '再注册一版' },
+            ],
+          });
+        }
+        pipelineWorkbenchOverviewWrap.querySelector('[data-workbench-action="pipeline-open-register"]')?.addEventListener('click', () => {
+          registerForm?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+        pipelineWorkbenchOverviewWrap.querySelector('[data-workbench-action="pipeline-open-tasks"]')?.addEventListener('click', () => {
+          ctx.navigate('tasks');
+        });
+        pipelineWorkbenchOverviewWrap.querySelector('[data-workbench-action="pipeline-open-release"]')?.addEventListener('click', async () => {
+          if (!activePipelineId) return;
+          try {
+            await openPipelineReleaseWorkbench(activePipelineId);
+            releaseWorkbenchWrap?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          } catch (error) {
+            ctx.toast(error.message || '流水线发布工作台加载失败', 'error');
+          }
+        });
+      }
 
       function renderPipelineReleaseWorkbench(workbench) {
         const recommended = workbench?.recommended_release || {};
@@ -5090,6 +5927,8 @@ function pagePipelines(route, rawCtx) {
       async function openPipelineReleaseWorkbench(pipelineId) {
         if (!releaseWorkbenchWrap) return null;
         activePipelineReleaseId = pipelineId;
+        activePipelineId = pipelineId;
+        renderPipelineWorkbenchOverview();
         releaseWorkbenchWrap.innerHTML = renderLoading('加载流水线发布工作台...');
         try {
           const workbench = await ctx.get(`/pipelines/${pipelineId}/release-workbench`);
@@ -5130,29 +5969,52 @@ function pagePipelines(route, rawCtx) {
         tableWrap.innerHTML = renderLoading('加载流水线列表...');
         try {
           const rows = await ctx.get('/pipelines');
+          cachedPipelines = rows || [];
           if (!rows.length) {
             tableWrap.innerHTML = renderEmpty('暂无流水线。建议先准备路由模型和专家模型，再注册一条用于验证的流水线');
+            activePipelineId = '';
+            renderPipelineWorkbenchOverview();
             return;
           }
+          if (!activePipelineId || !rows.some((row) => row.id === activePipelineId)) {
+            activePipelineId = rows[0].id;
+          }
           tableWrap.innerHTML = `
-            <div class="table-wrap">
-              <table class="table">
-                <thead><tr><th>pipeline_code(流水线编码)</th><th>version(版本)</th><th>status(状态)</th><th>router_model_id(路由模型ID)</th><th>threshold_version(阈值版本)</th><th>操作</th></tr></thead>
-                <tbody>
-                  ${rows.map((row) => `
-                    <tr>
-                      <td>${esc(row.pipeline_code)}</td>
-                      <td>${esc(row.version)}</td>
-                      <td>${esc(enumText('pipeline_status', row.status))}</td>
-                      <td class="mono">${esc(row.router_model_id || '-')}</td>
-                      <td>${esc(row.threshold_version || '-')}</td>
-                      <td>
-                        ${canRelease ? `<button class="ghost" data-release-pipeline="${esc(row.id)}">发布工作台</button>` : '-'}
-                      </td>
-                    </tr>
-                  `).join('')}
-                </tbody>
-              </table>
+            <div class="selection-grid">
+              ${rows.map((row) => `
+                <article class="selection-card ${activePipelineId === row.id ? 'selected active-row' : ''}">
+                  <div class="selection-card-head selection-card-head--stack">
+                    <div class="selection-card-title">
+                      <strong>${esc(row.pipeline_code)}</strong>
+                      <span class="selection-card-subtitle">${esc(row.version)}</span>
+                    </div>
+                    <div class="quick-review-statuses">
+                      <span class="badge">${esc(enumText('pipeline_status', row.status))}</span>
+                      ${row.threshold_version ? `<span class="badge">${esc(row.threshold_version)}</span>` : ''}
+                    </div>
+                  </div>
+                  <div class="selection-card-meta selection-card-meta--compact">
+                    <span>路由模型</span><strong class="mono">${esc(truncateMiddle(row.router_model_id || '-', 8, 6))}</strong>
+                    <span>阈值版本</span><strong>${esc(row.threshold_version || '未声明')}</strong>
+                    <span>配置名</span><strong>${esc(row.name || '-')}</strong>
+                    <span>状态说明</span><strong>${esc(row.status === 'RELEASED' ? '正式可用' : '待发布 / 待验证')}</strong>
+                  </div>
+                  <div class="row-actions">
+                    ${canRelease ? `<button class="primary" data-release-pipeline="${esc(row.id)}">${activePipelineId === row.id ? '当前发布工作台' : '发布工作台'}</button>` : '<span class="hint">当前角色无发布权限</span>'}
+                  </div>
+                  <details class="inline-details">
+                    <summary>技术详情</summary>
+                    <div class="details-panel">
+                      <div class="selection-card-meta selection-card-meta--compact">
+                        <span>pipeline_id</span><strong class="mono">${esc(row.id)}</strong>
+                        <span>router_model_id</span><strong class="mono">${esc(row.router_model_id || '-')}</strong>
+                        <span>threshold_version</span><strong>${esc(row.threshold_version || '-')}</strong>
+                        <span>name</span><strong>${esc(row.name || '-')}</strong>
+                      </div>
+                    </div>
+                  </details>
+                </article>
+              `).join('')}
             </div>
           `;
           if (canRelease) {
@@ -5168,6 +6030,7 @@ function pagePipelines(route, rawCtx) {
               });
             });
           }
+          renderPipelineWorkbenchOverview();
         } catch (error) {
           tableWrap.innerHTML = renderError(error.message);
         }
@@ -5215,17 +6078,23 @@ function pagePipelines(route, rawCtx) {
 function pageTasks(route, rawCtx) {
   const ctx = makeContext(route, rawCtx);
   const role = primaryRole(ctx.state.user);
-  const introText = role.startsWith('buyer_')
-    ? '上传一张图或视频后直接输入要识别的对象，或选择已准备好的资产和授权模型 / 流水线创建任务。'
+  const heroSummary = role.startsWith('buyer_')
+    ? '上传一张图或视频后直接输入目标，或用已有资产、授权模型 / 流水线创建任务。'
     : role.startsWith('platform_')
-      ? '统一创建和跟踪推理任务，既支持一键快速识别，也支持核对模型、流水线、设备与结果的交付状态。'
+      ? '统一创建和跟踪推理任务，既支持一键快速识别，也支持核对模型、流水线、设备与结果交付状态。'
       : '查看任务执行状态与结果回查入口。';
   return {
     html: `
-      <section class="card">
-        <h2>任务中心</h2>
-        <p>${esc(introText)}</p>
-      </section>
+      ${renderPageHero({
+        eyebrow: '在线推理与验证',
+        title: '任务中心',
+        summary: heroSummary,
+        highlights: ['明确目标后直接选模型', '创建后等待完成并打开结果', '批量快速识别已收纳'],
+        actions: [
+          { path: 'assets', label: '先上传资产' },
+          { path: 'results', label: '查看结果页', primary: true },
+        ],
+      })}
       <section class="grid-two">
         <form id="quickDetectForm" class="card form-grid">
           <h3>快速识别</h3>
@@ -5310,6 +6179,7 @@ function pageTasks(route, rawCtx) {
       </section>
     `,
     async mount(root) {
+      bindPageNavButtons(root, ctx);
       const quickDetectForm = root.querySelector('#quickDetectForm');
       const quickDetectFile = root.querySelector('#quickDetectFile');
       const quickDetectAssetInput = root.querySelector('#quickDetectAssetInput');
@@ -5500,6 +6370,7 @@ function pageTasks(route, rawCtx) {
         quickDetectModelOptions.innerHTML = `
           <div class="section-toolbar compact">
             <div class="hint">已明确选择 <strong>${esc(intent.option?.title || enumText('task_type', intent.taskType))}</strong>，可直接选模型并开始识别；不会再强制你先做目标预检。</div>
+            <button class="ghost" type="button" data-use-quick-selection>带入下方精确任务</button>
           </div>
           <div class="selection-grid">
             ${models.map((row) => `
@@ -5530,6 +6401,7 @@ function pageTasks(route, rawCtx) {
             renderQuickDetectModelOptions();
           });
         });
+        quickDetectModelOptions.querySelector('[data-use-quick-selection]')?.addEventListener('click', applyQuickSelectionToCreateForm);
       }
 
       function currentQuickWorkItems() {
@@ -5876,11 +6748,42 @@ function pageTasks(route, rawCtx) {
         renderTaskModelLibrary();
       }
 
+      function applyQuickSelectionToCreateForm() {
+        const prompt = String(quickDetectPrompt?.value || '').trim();
+        const intent = resolveQuickDetectIntent(prompt);
+        const selectedModel = assistModels.find((row) => row.id === quickSelectedModelId) || null;
+        const { assetInput, taskTypeInput, deviceInput, intentInput, schedulerInput } = taskCreateInputs();
+        if (selectedModel) fillTaskModelSelection(selectedModel.id);
+        if (taskTypeInput && intent.taskType) taskTypeInput.value = intent.taskType;
+        if (deviceInput) deviceInput.value = String(quickDetectDeviceCode?.value || 'edge-01').trim() || 'edge-01';
+        if (intentInput && prompt) intentInput.value = prompt;
+        if (schedulerInput) schedulerInput.checked = false;
+        const assetIds = splitCsv(quickDetectAssetInput?.value || '');
+        if (assetInput && assetIds.length === 1) assetInput.value = assetIds[0];
+        renderTaskCreateAssist();
+        if (createMsg) {
+          createMsg.textContent = selectedModel
+            ? `已从快速识别带入模型 ${selectedModel.model_code}:${selectedModel.version}${assetIds.length === 1 ? ` · asset ${assetIds[0]}` : ''}。`
+            : '已把上方快速识别的任务类型、设备和意图带入下方精确任务。';
+        }
+        createForm?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+
+      function clearTaskModelSelection() {
+        const { modelInput, schedulerInput } = taskCreateInputs();
+        if (modelInput) modelInput.value = '';
+        if (schedulerInput) schedulerInput.checked = false;
+        if (createMsg) createMsg.textContent = '已取消显式模型选择，可继续手动选模型、选流水线，或启用主调度器。';
+        renderTaskCreateAssist();
+        renderTaskModelLibrary();
+      }
+
       function renderTaskModelLibrary() {
         if (!taskModelLibrary) return;
         const { modelInput, taskTypeInput, schedulerInput } = taskCreateInputs();
         const currentModelId = String(modelInput?.value || '').trim();
         const requestedTaskType = String(taskTypeInput?.value || '').trim();
+        const currentModel = assistModels.find((row) => row.id === currentModelId) || null;
         const q = String(taskModelQuery || '').trim().toLowerCase();
         const filtered = assistModels
           .filter((row) => {
@@ -5914,33 +6817,56 @@ function pageTasks(route, rawCtx) {
           taskModelLibrary.innerHTML = renderEmpty('当前筛选条件下没有可直接点选的模型');
           return;
         }
+        const libraryOpen = !currentModel || !!q;
         taskModelLibrary.innerHTML = `
-          <div class="selection-grid">
-            ${filtered.map((row) => `
-              <article class="selection-card ${currentModelId === row.id ? 'selected' : ''}">
-                <div class="selection-card-head selection-card-head--stack">
-                  <div class="selection-card-title">
-                    <strong title="${esc(`${row.model_code}:${row.version}`)}">${esc(row.model_code)}</strong>
-                    <span class="selection-card-subtitle mono" title="${esc(row.version)}">${esc(truncateMiddle(row.version, 18, 10))}</span>
-                  </div>
-                  <span class="badge">${esc(enumText('model_status', row.status || '-'))}</span>
+          <div class="task-model-library-stack">
+            ${
+              currentModel
+                ? `
+                    <div class="selection-summary task-model-current">
+                      <strong>当前已显式选择模型</strong>
+                      <span>${esc(`${currentModel.model_code}:${currentModel.version}`)}</span>
+                      <span>${esc(`任务类型：${currentModel.task_type || currentModel.plugin_name || '-'} · 来源：${enumText('model_source_type', (currentModel.platform_meta || {}).model_source_type || '-')}`)}</span>
+                      <div class="row-actions">
+                        <button class="ghost" type="button" data-clear-task-model>取消显式模型</button>
+                      </div>
+                    </div>
+                  `
+                : ''
+            }
+            <details class="inline-details task-model-library-details" ${libraryOpen ? 'open' : ''}>
+              <summary>${currentModel ? '展开可选模型库' : '浏览可选模型库'}</summary>
+              <div class="details-panel">
+                <div class="selection-grid">
+                  ${filtered.map((row) => `
+                    <article class="selection-card ${currentModelId === row.id ? 'selected' : ''}">
+                      <div class="selection-card-head selection-card-head--stack">
+                        <div class="selection-card-title">
+                          <strong title="${esc(`${row.model_code}:${row.version}`)}">${esc(row.model_code)}</strong>
+                          <span class="selection-card-subtitle mono" title="${esc(row.version)}">${esc(truncateMiddle(row.version, 18, 10))}</span>
+                        </div>
+                        <span class="badge">${esc(enumText('model_status', row.status || '-'))}</span>
+                      </div>
+                      <div class="selection-card-meta selection-card-meta--compact">
+                        <span>task_type</span><strong>${esc(row.task_type || row.plugin_name || '-')}</strong>
+                        <span>来源</span><strong>${esc(enumText('model_source_type', (row.platform_meta || {}).model_source_type || '-'))}</strong>
+                        <span>plugin</span><strong>${esc(row.plugin_name || '-')}</strong>
+                        <span>model_id</span><strong class="mono">${esc(truncateMiddle(row.id, 8, 6))}</strong>
+                      </div>
+                      <div class="row-actions">
+                        <button class="primary" type="button" data-pick-task-model="${esc(row.id)}">${currentModelId === row.id ? '当前使用中' : '选这版模型'}</button>
+                      </div>
+                    </article>
+                  `).join('')}
                 </div>
-                <div class="selection-card-meta selection-card-meta--compact">
-                  <span>task_type</span><strong>${esc(row.task_type || row.plugin_name || '-')}</strong>
-                  <span>来源</span><strong>${esc(enumText('model_source_type', (row.platform_meta || {}).model_source_type || '-'))}</strong>
-                  <span>plugin</span><strong>${esc(row.plugin_name || '-')}</strong>
-                  <span>model_id</span><strong class="mono">${esc(truncateMiddle(row.id, 8, 6))}</strong>
-                </div>
-                <div class="row-actions">
-                  <button class="primary" type="button" data-pick-task-model="${esc(row.id)}">选这版模型</button>
-                </div>
-              </article>
-            `).join('')}
+              </div>
+            </details>
           </div>
         `;
         taskModelLibrary.querySelectorAll('[data-pick-task-model]').forEach((button) => {
           button.addEventListener('click', () => fillTaskModelSelection(button.getAttribute('data-pick-task-model') || ''));
         });
+        taskModelLibrary.querySelector('[data-clear-task-model]')?.addEventListener('click', clearTaskModelSelection);
       }
 
       async function waitForQuickDetect(taskId) {
@@ -7179,14 +8105,11 @@ function pageTaskDetail(route, rawCtx) {
                 ${data.device_code ? `<span class="badge">${esc(data.device_code)}</span>` : ''}
               </div>
             </div>
-            <div class="keyvals compact">
-              <div><span>model_id</span><strong class="mono" title="${esc(data.model_id || '-')}">${esc(truncateMiddle(data.model_id || '-', 10, 8))}</strong></div>
-              <div><span>pipeline_id</span><strong class="mono" title="${esc(data.pipeline_id || '-')}">${esc(truncateMiddle(data.pipeline_id || '-', 10, 8))}</strong></div>
-              <div><span>asset_id</span><strong class="mono" title="${esc(data.asset_id || '-')}">${esc(truncateMiddle(data.asset_id || '-', 10, 8))}</strong></div>
+            <div class="keyvals compact result-summary-keyvals">
               <div><span>结果条数</span><strong>${esc(String((rows || []).length))}</strong></div>
-              <div><span>created_at</span><strong>${formatDateTime(data.created_at)}</strong></div>
-              <div><span>started_at</span><strong>${formatDateTime(data.started_at)}</strong></div>
-              <div><span>finished_at</span><strong>${formatDateTime(data.finished_at)}</strong></div>
+              <div><span>创建时间</span><strong>${formatDateTime(data.created_at)}</strong></div>
+              <div><span>开始时间</span><strong>${formatDateTime(data.started_at)}</strong></div>
+              <div><span>完成时间</span><strong>${formatDateTime(data.finished_at)}</strong></div>
             </div>
             ${data.error_message ? `<div class="quick-detect-recommend">${esc(data.error_message)}</div>` : '<div class="hint">如果任务还在执行中，可直接点“等待完成并打开结果页”。</div>'}
           </div>
@@ -7200,7 +8123,15 @@ function pageTaskDetail(route, rawCtx) {
             <button class="primary" id="goTaskResult">查看结果</button>
             <button class="ghost" id="waitTaskResult">等待完成并打开结果页</button>
           </div>
-          <details><summary>Advanced</summary><pre>${esc(safeJson(data))}</pre></details>
+          <details>
+            <summary>Advanced</summary>
+            <div class="keyvals compact result-tech-keyvals">
+              <div><span>asset_id</span><strong class="mono" title="${esc(data.asset_id || '-')}">${esc(truncateMiddle(data.asset_id || '-', 10, 8))}</strong></div>
+              <div><span>model_id</span><strong class="mono" title="${esc(data.model_id || '-')}">${esc(truncateMiddle(data.model_id || '-', 10, 8))}</strong></div>
+              <div><span>pipeline_id</span><strong class="mono" title="${esc(data.pipeline_id || '-')}">${esc(truncateMiddle(data.pipeline_id || '-', 10, 8))}</strong></div>
+            </div>
+            <pre>${esc(safeJson(data))}</pre>
+          </details>
         `;
         root.querySelector('#goTaskResult')?.addEventListener('click', () => ctx.navigate(`results/task/${taskId}`));
         root.querySelector('#waitTaskResult')?.addEventListener('click', async (event) => {
@@ -7225,35 +8156,11 @@ function pageTaskDetail(route, rawCtx) {
 function buildResultListHtml(rows, modelInsights = {}) {
   if (!rows.length) return renderEmpty('暂无结果，请确认任务已执行完成，或返回任务中心重新创建任务');
   const summaries = rows.map((row) => summarizeResultRow(row));
-  const totalObjects = summaries.reduce((sum, item) => sum + item.objectCount, 0);
-  const durations = summaries.map((item) => item.durationMs).filter((value) => Number.isFinite(value));
-  const avgDuration = durations.length ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : null;
   const allTexts = [...new Set(summaries.flatMap((item) => item.recognizedTexts))];
   const uniqueModelIds = [...new Set(rows.map((row) => String(row.model_id || '').trim()).filter(Boolean))];
 
   return `
-    <div class="result-overview-grid">
-      <article class="metric-card">
-        <h4>结果条数</h4>
-        <p class="metric">${esc(rows.length)}</p>
-        <span>当前 task_id 下已回查到的结果记录</span>
-      </article>
-      <article class="metric-card">
-        <h4>识别对象</h4>
-        <p class="metric">${esc(totalObjects)}</p>
-        <span>累计命中的框 / 文本结果数量</span>
-      </article>
-      <article class="metric-card">
-        <h4>平均耗时</h4>
-        <p class="metric">${esc(avgDuration ?? '-')}</p>
-        <span>${esc(avgDuration != null ? 'ms' : '当前结果未回写 duration_ms')}</span>
-      </article>
-      <article class="metric-card">
-        <h4>识别文本</h4>
-        <p class="metric">${esc(allTexts.length)}</p>
-        <span>${esc(allTexts.slice(0, 3).join(' / ') || '暂无 OCR 文本')}</span>
-      </article>
-    </div>
+    ${renderResultOverviewCards(rows, summaries)}
     ${
       allTexts.length
         ? `<section class="result-text-ribbon">${allTexts.slice(0, 12).map((text) => `<span class="badge">${esc(text)}</span>`).join('')}</section>`
@@ -7275,29 +8182,22 @@ function buildResultListHtml(rows, modelInsights = {}) {
     <div class="result-list">
       ${summaries.map((item) => {
         const row = item.row;
-        const labels = Object.entries(item.labelCounts)
-          .sort((left, right) => right[1] - left[1])
-          .slice(0, 6);
+        const labelCloud = renderResultLabelCloud(item);
         const readiness = modelInsights[row.model_id] || null;
         const validationMetrics = readiness?.validation_report?.metrics || {};
         return `
           <article class="result-card">
             <div class="result-head">
               <div>
-                <strong>${esc(row.id)}</strong>
-                <p class="muted">${esc(`${item.taskType} · ${item.stage} · ${formatDateTime(row.created_at)}`)}</p>
+                <strong>${esc(renderResultCardTitle(item))}</strong>
+                <p class="muted">${esc(`${resultStageLabel(item.stage)} · ${formatDateTime(row.created_at)}`)}</p>
               </div>
               <div class="quick-review-statuses">
-                <span class="badge">${esc(row.alert_level || 'INFO')}</span>
-                ${row.model_id ? `<span class="badge mono">${esc(truncateMiddle(row.model_id, 8, 6))}</span>` : ''}
+                ${String(row.alert_level || 'INFO').toUpperCase() !== 'INFO' ? `<span class="badge">${esc(row.alert_level || 'INFO')}</span>` : ''}
+                ${item.ocrRiskLabel ? `<span class="badge">${esc(item.ocrRiskLabel)}</span>` : ''}
               </div>
             </div>
-            <div class="keyvals compact">
-              <div><span>duration_ms</span><strong>${esc(formatMetricValue(item.durationMs))}</strong></div>
-              <div><span>object_count</span><strong>${esc(formatMetricValue(item.objectCount))}</strong></div>
-              <div><span>avg_score</span><strong>${esc(formatMetricValue(item.avgScore, { percent: true }))}</strong></div>
-              <div><span>model_val_accuracy</span><strong>${esc(formatMetricValue(validationMetrics.val_accuracy, { percent: true }))}</strong></div>
-            </div>
+            ${renderResultSummaryStats(item, validationMetrics)}
             ${
               item.recognizedTexts.length
                 ? `
@@ -7327,14 +8227,10 @@ function buildResultListHtml(rows, modelInsights = {}) {
               }
               <section class="result-card-panel">
                 <div class="result-panel-head">
-                  <strong>命中标签</strong>
-                  <span>${esc(labels.length ? `${labels.length} 类` : '暂无')}</span>
+                  <strong>${esc(labelCloud.title)}</strong>
+                  <span>${esc(labelCloud.headerLabel)}</span>
                 </div>
-                ${
-                  labels.length
-                    ? `<div class="result-label-cloud">${labels.map(([label, count]) => `<span class="badge">${esc(`${label} · ${count}`)}</span>`).join('')}</div>`
-                    : '<div class="training-history-empty">当前结果没有结构化标签命中。</div>'
-                }
+                ${labelCloud.html}
               </section>
               <section class="result-card-panel">
                 <div class="result-panel-head">
@@ -7353,8 +8249,14 @@ function buildResultListHtml(rows, modelInsights = {}) {
                     : '<span class="hint">无截图</span>'
               }
               <details class="inline-details">
-                <summary>更多详情</summary>
+                <summary>技术详情</summary>
                 <div class="details-panel">
+                  <div class="keyvals compact result-tech-keyvals">
+                    <div><span>result_id</span><strong class="mono">${esc(row.id)}</strong></div>
+                    <div><span>model_id</span><strong class="mono">${esc(truncateMiddle(row.model_id || '-', 10, 8))}</strong></div>
+                    <div><span>alert_level</span><strong>${esc(row.alert_level || 'INFO')}</strong></div>
+                    <div><span>stage</span><strong>${esc(item.stage)}</strong></div>
+                  </div>
                   <details open>
                     <summary>结果 JSON</summary>
                     <pre>${esc(safeJson(row.result_json))}</pre>
@@ -7374,17 +8276,23 @@ function pageResults(route, rawCtx) {
   const ctx = makeContext(route, rawCtx);
   const role = primaryRole(ctx.state.user);
   const defaultTaskId = route.params?.task_id || localStorage.getItem(STORAGE_KEYS.lastTaskId) || '';
-  const introText = role.startsWith('buyer_')
+  const heroSummary = role.startsWith('buyer_')
     ? '按 task_id 回查结构化结果、截图摘要和导出信息，支撑客户验收与复核。'
     : role.startsWith('platform_')
       ? '统一查看执行结果、导出摘要和截图证据，验证模型交付与任务产出。'
       : '查看任务输出、截图摘要与导出信息。';
   return {
     html: `
-      <section class="card">
-        <h2>结果中心</h2>
-        <p>${esc(introText)}</p>
-      </section>
+      ${renderPageHero({
+        eyebrow: '结果复核与回灌',
+        title: '结果中心',
+        summary: heroSummary,
+        highlights: ['先看验证结论', '低置信度优先复核', '可直接导出回训练'],
+        actions: [
+          { path: 'tasks', label: '返回任务中心' },
+          { path: 'training', label: '打开训练中心', primary: true },
+        ],
+      })}
       <section class="card">
         <form id="resultQueryForm" class="inline-form">
           <input id="resultTaskId" name="task_id" placeholder="输入 task_id" value="${esc(defaultTaskId)}" required />
@@ -7396,6 +8304,10 @@ function pageResults(route, rawCtx) {
         <div id="resultMeta" class="hint">${esc(defaultTaskId ? '' : '训练后验证时，可从训练页点击“去任务中心验证候选模型”，再在任务创建成功后点击“等待执行并打开结果页”。')}</div>
       </section>
       <section class="card">
+        <h3>下一步动作</h3>
+        <div id="resultActionWorkbench">${defaultTaskId ? renderLoading('正在生成下一步建议...') : renderEmpty('查询到结果后，这里会根据当前状态给出下一步建议。')}</div>
+      </section>
+      <section class="card">
         <h3>结果回灌工作台</h3>
         <div id="resultDatasetWorkbench">${defaultTaskId ? renderLoading('正在准备结果回灌工作台...') : renderEmpty('先查询一条 task 结果，再把当前复核结果导出成训练/验证数据集版本。')}</div>
       </section>
@@ -7404,12 +8316,16 @@ function pageResults(route, rawCtx) {
       </section>
     `,
     async mount(root) {
+      bindPageNavButtons(root, ctx);
       const queryForm = root.querySelector('#resultQueryForm');
       const taskInput = root.querySelector('#resultTaskId');
       const resultMeta = root.querySelector('#resultMeta');
+      const actionWorkbench = root.querySelector('#resultActionWorkbench');
       const datasetWorkbench = root.querySelector('#resultDatasetWorkbench');
       const listWrap = root.querySelector('#resultListWrap');
       const exportBtn = root.querySelector('#resultExportBtn');
+      const backTasksBtn = root.querySelector('#resultBackTasksBtn');
+      const openTaskBtn = root.querySelector('#resultOpenTaskBtn');
       let resultBlobUrls = [];
       let currentRows = [];
       let currentSummaries = [];
@@ -7545,6 +8461,28 @@ function pageResults(route, rawCtx) {
         });
       }
 
+      function bindResultActionWorkbench(taskId) {
+        if (!actionWorkbench || !taskId) return;
+        actionWorkbench.querySelector('[data-result-action="open-training"]')?.addEventListener('click', () => {
+          if (currentDatasetExport?.asset?.id) {
+            ctx.navigate('training');
+            return;
+          }
+          actionWorkbench.scrollIntoView({ block: 'center', behavior: 'smooth' });
+          datasetWorkbench?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+          const exportBtn = datasetWorkbench?.querySelector('[data-result-export-dataset]');
+          exportBtn?.focus();
+        });
+        actionWorkbench.querySelector('[data-result-action="open-task-detail"]')?.addEventListener('click', () => {
+          localStorage.setItem(STORAGE_KEYS.lastTaskId, taskId);
+          ctx.navigate(`tasks/${taskId}`);
+        });
+        actionWorkbench.querySelector('[data-result-action="back-tasks"]')?.addEventListener('click', () => {
+          localStorage.setItem(STORAGE_KEYS.lastTaskId, taskId);
+          ctx.navigate('tasks');
+        });
+      }
+
       function bindResultDatasetWorkbench(taskId) {
         if (!datasetWorkbench || !taskId) return;
         datasetWorkbench.querySelector('[data-open-result-training]')?.addEventListener('click', () => ctx.navigate('training'));
@@ -7566,6 +8504,10 @@ function pageResults(route, rawCtx) {
               asset_purpose: String(purposeInput?.value || 'training'),
               include_screenshots: screenshotInput?.checked !== false,
             });
+            if (actionWorkbench) {
+              actionWorkbench.innerHTML = renderResultActionWorkbench(taskId, currentSummaries, currentDatasetExport);
+              bindResultActionWorkbench(taskId);
+            }
             datasetWorkbench.innerHTML = renderResultDatasetWorkbench(taskId, currentSummaries, currentDatasetExport);
             bindResultDatasetWorkbench(taskId);
             resultMeta.textContent = `已导出数据集版本：${currentDatasetExport.dataset_version?.dataset_label || '-'}:${currentDatasetExport.dataset_version?.version || '-'} · asset ${currentDatasetExport.asset?.id || '-'}`;
@@ -7596,6 +8538,10 @@ function pageResults(route, rawCtx) {
             });
             const taskType = dominantTaskType(currentSummaries) || 'object_detect';
             prefillTrainingFromResultExport(currentDatasetExport, String(purposeInput?.value || 'training'), taskType);
+            if (actionWorkbench) {
+              actionWorkbench.innerHTML = renderResultActionWorkbench(taskId, currentSummaries, currentDatasetExport);
+              bindResultActionWorkbench(taskId);
+            }
             datasetWorkbench.innerHTML = renderResultDatasetWorkbench(taskId, currentSummaries, currentDatasetExport);
             bindResultDatasetWorkbench(taskId);
             ctx.toast('已导出并预填训练中心');
@@ -7641,6 +8587,7 @@ function pageResults(route, rawCtx) {
           revokeResultBlobUrls();
           listWrap.innerHTML = renderEmpty('请输入 task_id，或先在任务中心创建并执行任务');
           resultMeta.textContent = '';
+          if (actionWorkbench) actionWorkbench.innerHTML = renderEmpty('查询到结果后，这里会根据当前状态给出下一步建议。');
           if (datasetWorkbench) datasetWorkbench.innerHTML = renderEmpty('先查询一条 task 结果，再把当前复核结果导出成训练/验证数据集版本。');
           currentRows = [];
           currentSummaries = [];
@@ -7648,6 +8595,7 @@ function pageResults(route, rawCtx) {
           return;
         }
         listWrap.innerHTML = renderLoading('加载结果...');
+        if (actionWorkbench) actionWorkbench.innerHTML = renderLoading('正在生成下一步建议...');
         if (datasetWorkbench) datasetWorkbench.innerHTML = renderLoading('正在准备结果回灌工作台...');
         resultMeta.textContent = '';
         try {
@@ -7658,6 +8606,10 @@ function pageResults(route, rawCtx) {
           currentSummaries = currentRows.map(summarizeResultRow);
           currentDatasetExport = null;
           listWrap.innerHTML = buildResultListHtml(enrichedRows || [], modelInsights);
+          if (actionWorkbench) {
+            actionWorkbench.innerHTML = renderResultActionWorkbench(clean, currentSummaries, currentDatasetExport);
+            bindResultActionWorkbench(clean);
+          }
           if (datasetWorkbench) {
             datasetWorkbench.innerHTML = renderResultDatasetWorkbench(clean, currentSummaries, currentDatasetExport);
             bindResultDatasetWorkbench(clean);
@@ -7668,6 +8620,7 @@ function pageResults(route, rawCtx) {
           await bindScreenshotButtons();
         } catch (error) {
           listWrap.innerHTML = renderError(error.message);
+          if (actionWorkbench) actionWorkbench.innerHTML = renderError(error.message);
           if (datasetWorkbench) datasetWorkbench.innerHTML = renderError(error.message);
         }
       }
@@ -7675,6 +8628,22 @@ function pageResults(route, rawCtx) {
       queryForm?.addEventListener('submit', async (event) => {
         event.preventDefault();
         await loadByTaskId(taskInput?.value || '');
+      });
+
+      backTasksBtn?.addEventListener('click', () => {
+        const taskId = String(taskInput?.value || '').trim();
+        if (taskId) localStorage.setItem(STORAGE_KEYS.lastTaskId, taskId);
+        ctx.navigate('tasks');
+      });
+
+      openTaskBtn?.addEventListener('click', () => {
+        const taskId = String(taskInput?.value || '').trim();
+        if (!taskId) {
+          ctx.toast('请先输入 task_id', 'error');
+          return;
+        }
+        localStorage.setItem(STORAGE_KEYS.lastTaskId, taskId);
+        ctx.navigate(`tasks/${taskId}`);
       });
 
       exportBtn?.addEventListener('click', async () => {
@@ -7703,10 +8672,16 @@ function pageAudit(route, rawCtx) {
   const ctx = makeContext(route, rawCtx);
   return {
     html: `
-      <section class="card">
-        <h2>审计中心</h2>
-        <p>统一核对模型审批发布、训练拉取、任务创建、结果导出和设备执行证据。</p>
-      </section>
+      ${renderPageHero({
+        eyebrow: '证据与留痕',
+        title: '审计中心',
+        summary: '统一核对模型审批发布、训练拉取、任务创建、结果导出和设备执行证据。',
+        highlights: ['按动作查找', '按资源回溯', '用于交付留痕'],
+        actions: [
+          { path: 'models', label: '查看模型审批' },
+          { path: 'devices', label: '查看设备状态', primary: true },
+        ],
+      })}
       <section class="card">
         <form id="auditFilterForm" class="inline-form">
           <input name="action" placeholder="action(动作)，例如 MODEL_RELEASE" />
@@ -7719,6 +8694,7 @@ function pageAudit(route, rawCtx) {
       </section>
     `,
     async mount(root) {
+      bindPageNavButtons(root, ctx);
       const filterForm = root.querySelector('#auditFilterForm');
       const tableWrap = root.querySelector('#auditTableWrap');
 
@@ -7774,20 +8750,27 @@ function pageAudit(route, rawCtx) {
 function pageDevices(route, rawCtx) {
   const ctx = makeContext(route, rawCtx);
   const role = primaryRole(ctx.state.user);
-  const introText = role.startsWith('buyer_')
+  const heroSummary = role.startsWith('buyer_')
     ? '查看已授权边缘设备的在线状态、最近心跳和 Agent 版本，确认设备可执行范围。'
     : '查看设备授权、在线状态、最近心跳和 Agent 版本，核对边缘运行面。';
   return {
     html: `
-      <section class="card">
-        <h2>设备中心</h2>
-        <p>${esc(introText)}</p>
-      </section>
+      ${renderPageHero({
+        eyebrow: '设备与运行面',
+        title: '设备中心',
+        summary: heroSummary,
+        highlights: ['在线状态', '最近心跳', 'Agent 版本'],
+        actions: [
+          { path: 'audit', label: '查看审计' },
+          { path: 'tasks', label: '去任务中心', primary: true },
+        ],
+      })}
       <section class="card">
         <div id="devicesTableWrap">${renderLoading('加载设备列表...')}</div>
       </section>
     `,
     async mount(root) {
+      bindPageNavButtons(root, ctx);
       const wrap = root.querySelector('#devicesTableWrap');
       try {
         const rows = await ctx.get('/devices');
@@ -7828,13 +8811,20 @@ function pageSettings(route, rawCtx) {
   const ctx = makeContext(route, rawCtx);
   return {
     html: `
-      <section class="card">
-        <h2>设置</h2>
-        <p>核对当前登录身份、租户边界、权限能力和默认角色路径。</p>
-      </section>
+      ${renderPageHero({
+        eyebrow: '身份与权限',
+        title: '设置',
+        summary: '核对当前登录身份、租户边界、权限能力和默认角色路径。',
+        highlights: ['账号信息', '角色权限', '默认操作路径'],
+        actions: [
+          { path: 'dashboard', label: '返回工作台', primary: true },
+          { path: 'guide', label: '查看使用指南' },
+        ],
+      })}
       <section class="card" id="settingsWrap">${renderLoading('加载用户信息...')}</section>
     `,
     async mount(root) {
+      bindPageNavButtons(root, ctx);
       const wrap = root.querySelector('#settingsWrap');
       try {
         const me = await ctx.get('/users/me');
@@ -7866,6 +8856,7 @@ function pageSettings(route, rawCtx) {
 const factories = {
   login: pageLogin,
   dashboard: pageDashboard,
+  guide: pageGuide,
   assets: pageAssets,
   models: pageModels,
   training: pageTraining,

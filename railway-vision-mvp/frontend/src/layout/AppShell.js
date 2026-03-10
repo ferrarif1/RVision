@@ -28,6 +28,7 @@ const NAV_ITEMS = [
 
 const LABELS = {
   dashboard: '工作台',
+  guide: '接入与使用指南',
   assets: '资产',
   models: '模型',
   training: '训练',
@@ -138,6 +139,7 @@ export function renderShell({ state, routeView, contentHtml, commandPalette }) {
             <div class="breadcrumb">${renderBreadcrumb(routeView)}</div>
           </div>
           <div class="topbar-right">
+            <button class="ghost topbar-guide-btn ${routeView.navPage === 'guide' ? 'active' : ''}" data-nav="guide">接入与使用指南</button>
             <button id="openCommandPaletteBtn" class="command-trigger" title="打开命令面板（Ctrl/Cmd + K）">
               <span>命令面板</span><kbd>Ctrl/⌘ K</kbd>
             </button>

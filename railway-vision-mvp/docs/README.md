@@ -77,6 +77,8 @@
   模型包结构、签名、加密、验签与发布要求。
 - [demo.md](./demo.md)
   demo 运行手册与验证路径。
+- [platform_access_and_feature_guide.md](./platform_access_and_feature_guide.md)
+  面向商业交付的接入与功能使用指南，覆盖角色上手、核心流程和推荐路径。
 - [roadmap_ctxport_based.md](./roadmap_ctxport_based.md)
   分阶段路线图与能力演进顺序。
 - [product/platform_user_centric_implementation_v1.md](./product/platform_user_centric_implementation_v1.md)
@@ -91,6 +93,8 @@
   项目目录、职责边界与建议的下一步重构顺序。
 - [qa/release_gate_runbook.md](./qa/release_gate_runbook.md)
   发布 GO/NO-GO 执行手册。
+- [qa/browser_walkthrough_checklist_2026-03-11.md](./qa/browser_walkthrough_checklist_2026-03-11.md)
+  页面级人工走查清单，覆盖任务、结果、训练、模型、流水线等关键控制台页。
 - [references.md](./references.md)
   文档体系参考的公开方法论来源。
 
