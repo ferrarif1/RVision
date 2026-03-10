@@ -1929,6 +1929,64 @@ label {
   border-color: rgba(156, 128, 52, 0.3);
 }
 
+.result-validation-conclusion {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(156, 128, 52, 0.18);
+  background: rgba(16, 17, 13, 0.92);
+  margin-bottom: 14px;
+}
+
+.result-validation-conclusion.ok {
+  border-color: rgba(74, 144, 96, 0.35);
+}
+
+.result-validation-conclusion.warning {
+  border-color: rgba(156, 128, 52, 0.35);
+}
+
+.result-validation-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.result-validation-grid div,
+.result-ocr-grid div {
+  display: grid;
+  gap: 4px;
+}
+
+.result-validation-grid span,
+.result-validation-notes span {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.result-validation-notes {
+  display: grid;
+  gap: 6px;
+}
+
+.training-inline-validation {
+  margin-top: 12px;
+}
+
+.training-inline-validation-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+}
+
+@media (max-width: 900px) {
+  .training-inline-validation-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .result-risk-ok {
   background: linear-gradient(180deg, rgba(18, 48, 31, 0.94), rgba(12, 28, 19, 0.98));
   border-color: rgba(74, 144, 96, 0.3);

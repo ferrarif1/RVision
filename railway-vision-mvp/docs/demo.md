@@ -208,7 +208,7 @@ docker compose -f docker/docker-compose.yml exec backend sh -lc '
 3. 再用 `platform_admin` 登录，进入“模型中心”点击“审批工作台”，系统会按模型能力自动推荐几张验证样本，并支持直接批量创建验证任务。
 4. 等几条验证任务完成后，在同一工作台查看输出文本、confidence 和训练指标；满足门禁后点击“一键审批通过”，不必手填 `validation_asset_ids`。
 5. 审批通过后，在“发布工作台”里确认设备、买家和交付方式。系统会先给出发布前评估，再点“确认发布”。
-6. 进入“流水线注册表”，用主路由和专家模型注册一条 Pipeline，再按 `edge-01 / buyer-demo-001` 发布。
+6. 进入“流水线注册表”，用主路由和专家模型注册一条 Pipeline，再点“发布工作台”。系统会自动预填 `edge-01 / buyer-demo-001` 等推荐项，再确认发布。
 7. 刷新模型列表和流水线列表，确认状态从 `SUBMITTED -> APPROVED -> RELEASED`，流水线状态为 `RELEASED`。
 
 ## 1.5 上传视频/图片
@@ -278,6 +278,8 @@ python3 docker/scripts/prepare_local_car_number_text_dataset.py \
 界面里对应两条入口：
 - “导出训练资产并打开训练页”：只会把 train / validation 资产预填到训练中心，仍需手动点击“创建训练作业”
 - “导出训练资产并直接创建训练作业”：会直接创建一条 `car_number_ocr` 训练作业
+- 训练作业成功后，训练中心可直接点击“直接验证候选模型”，只补单图/视频资产即可创建验证任务
+- 验证任务完成后，结果中心会显示“验证结论卡”，集中展示样本数、低置信度数、OCR 文本和建议动作
 
 ## 1.6 创建任务
 

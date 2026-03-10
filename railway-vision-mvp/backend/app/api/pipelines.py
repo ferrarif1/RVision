@@ -9,7 +9,7 @@ from app.audit import actions
 from app.core.constants import PIPELINE_STATUS_DRAFT
 from app.core.constants import PIPELINE_STATUS_RELEASED
 from app.db.database import get_db
-from app.db.models import PipelineRecord
+from app.db.models import Device, PipelineRecord, Tenant
 from app.security.dependencies import AuthUser, require_roles
 from app.security.roles import MODEL_READ_ROLES, MODEL_RELEASE_ROLES
 from app.security.roles import is_buyer_user, is_platform_user, is_supplier_user
@@ -43,6 +43,56 @@ class PipelineReleaseRequest(BaseModel):
     target_buyers: list[str] = Field(default_factory=list, description="目标买家列表 / Target buyer tenant codes")
     traffic_ratio: int = Field(default=100, ge=1, le=100, description="流量比例 / Traffic ratio percentage")
     release_notes: str | None = Field(default=None, description="发布说明 / Release notes")
+
+
+@router.get("/{pipeline_id}/release-workbench")
+def get_pipeline_release_workbench(
+    pipeline_id: str,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*MODEL_RELEASE_ROLES)),
+):
+    pipeline = get_accessible_pipeline_or_404(db, current_user, pipeline_id)
+    catalog = get_pipeline_catalog(db, pipeline)
+    devices = (
+        db.query(Device)
+        .filter(Device.status == "ACTIVE")
+        .order_by(Device.last_seen_at.desc().nullslast(), Device.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    buyers = (
+        db.query(Tenant)
+        .filter(Tenant.tenant_type == "BUYER", Tenant.status == "ACTIVE")
+        .order_by(Tenant.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    release_config = (pipeline.config or {}).get("release") if isinstance(pipeline.config, dict) else {}
+    recommended_devices = list(release_config.get("target_devices") or [])
+    recommended_buyers = list(release_config.get("target_buyers") or [])
+    if not recommended_devices and devices:
+        recommended_devices = [devices[0].code]
+    if not recommended_buyers and buyers:
+        recommended_buyers = [buyers[0].tenant_code]
+    return {
+        "pipeline": serialize_pipeline(pipeline, catalog.router, catalog.models),
+        "scope_candidates": {
+            "devices": [
+                {"code": row.code, "name": row.name, "status": row.status, "last_seen_at": row.last_seen_at}
+                for row in devices
+            ],
+            "buyers": [
+                {"tenant_code": row.tenant_code, "name": row.name, "status": row.status}
+                for row in buyers
+            ],
+        },
+        "recommended_release": {
+            "target_devices": recommended_devices,
+            "target_buyers": recommended_buyers,
+            "traffic_ratio": int(release_config.get("traffic_ratio") or 100),
+            "release_notes": str(release_config.get("release_notes") or "").strip() or "console release",
+        },
+    }
 
 
 @router.get("")
