@@ -42,6 +42,7 @@ from app.security.roles import (
     is_supplier_user,
 )
 from app.services.audit_service import record_audit
+from app.services.data_hygiene_service import is_synthetic_training_job
 from app.services.dataset_version_service import create_dataset_version_record
 from app.services.model_package_service import ModelPackageError, load_model_blobs, parse_and_validate_model_package, persist_model_package
 from app.services.pipeline_service import normalize_model_inputs, normalize_model_outputs
@@ -926,6 +927,7 @@ def _serialize_job(db: Session, job: TrainingJob) -> dict[str, Any]:
         "alert_level": alert_level,
         "alert_reason": alert_reason,
         "recommended_action": recommended_action,
+        "is_synthetic": is_synthetic_training_job(job, base_model=base_model, candidate_model=candidate_model),
         "dispatch_count": job.dispatch_count,
         "can_cancel": job.status not in TRAINING_JOB_TERMINAL_STATUSES,
         "can_retry": job.status in {TRAINING_JOB_STATUS_FAILED, TRAINING_JOB_STATUS_CANCELLED} and not bool(job.candidate_model_id),

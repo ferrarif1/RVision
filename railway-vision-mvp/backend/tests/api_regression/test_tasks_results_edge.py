@@ -273,7 +273,11 @@ class TasksResultsEdgeRegressionTest(ApiRegressionHelper):
         self.assertEqual(dataset_export["dataset_version"]["dataset_label"], dataset_label)
 
         versions = self.request_json("GET", f"/assets/dataset-versions?q={dataset_label}", token=self.buyer_token)
-        self.assertTrue(any(row["id"] == dataset_version_id for row in versions), versions)
+        first_version = next((row for row in versions if row["id"] == dataset_version_id), None)
+        self.assertIsNotNone(first_version, versions)
+        self.assertTrue(first_version["is_latest"])
+        self.assertEqual(first_version["history_depth"], 1)
+        self.assertIsNone(first_version["previous_version_id"])
 
         recommended = self.request_json(
             "POST",
@@ -337,4 +341,8 @@ class TasksResultsEdgeRegressionTest(ApiRegressionHelper):
         self.assertEqual(rolled_back["rolled_back_from"]["id"], second_version_id)
 
         versions_after = self.request_json("GET", f"/assets/dataset-versions?q={dataset_label}", token=self.buyer_token)
-        self.assertTrue(any(row["id"] == rollback_version["id"] for row in versions_after), versions_after)
+        rollback_row = next((row for row in versions_after if row["id"] == rollback_version["id"]), None)
+        self.assertIsNotNone(rollback_row, versions_after)
+        self.assertTrue(rollback_row["is_latest"])
+        self.assertEqual(rollback_row["history_depth"], 3)
+        self.assertEqual(rollback_row["previous_version_id"], second_version_id)

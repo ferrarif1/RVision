@@ -141,6 +141,73 @@ function formatDurationWindow(startedAt, finishedAt, durationSec) {
   return `${remainder} 秒`;
 }
 
+function hasSyntheticMarker(value) {
+  const text = String(value || '').trim().toLowerCase();
+  if (!text) return false;
+  return (
+    text.startsWith('api-')
+    || text.startsWith('api_')
+    || text.startsWith('qa-')
+    || text.startsWith('qa_')
+    || text.startsWith('quick-detect')
+    || text.includes('api-regression')
+    || text.includes('api_regression')
+    || text.includes('api-runtime')
+    || text.includes('api_runtime')
+    || text.includes('runtime-eval')
+    || text.includes('runtime_eval')
+  );
+}
+
+function isSyntheticAssetRow(row) {
+  if (!row || typeof row !== 'object') return false;
+  const assetType = String(row.asset_type || '').trim().toLowerCase();
+  if (assetType === 'screenshot') return true;
+  const meta = row.meta && typeof row.meta === 'object' ? row.meta : {};
+  return hasSyntheticMarker(row.file_name)
+    || hasSyntheticMarker(row.storage_uri)
+    || hasSyntheticMarker(row.source_uri)
+    || hasSyntheticMarker(meta.dataset_label)
+    || hasSyntheticMarker(meta.use_case)
+    || hasSyntheticMarker(meta.intended_model_code);
+}
+
+function isSyntheticModelRow(row) {
+  if (!row || typeof row !== 'object') return false;
+  return hasSyntheticMarker(row.model_code);
+}
+
+function isSyntheticTrainingJobRow(row) {
+  if (!row || typeof row !== 'object') return false;
+  if (row.is_synthetic === true) return true;
+  return hasSyntheticMarker(row.target_model_code)
+    || isSyntheticModelRow(row.base_model)
+    || isSyntheticModelRow(row.candidate_model);
+}
+
+function isSyntheticDatasetVersionRow(row) {
+  if (!row || typeof row !== 'object') return false;
+  return hasSyntheticMarker(row.dataset_label)
+    || hasSyntheticMarker(row.source_type)
+    || isSyntheticAssetRow(row.asset);
+}
+
+function filterBusinessAssets(rows) {
+  return (Array.isArray(rows) ? rows : []).filter((row) => !isSyntheticAssetRow(row));
+}
+
+function filterBusinessModels(rows) {
+  return (Array.isArray(rows) ? rows : []).filter((row) => !isSyntheticModelRow(row));
+}
+
+function filterBusinessTrainingJobs(rows) {
+  return (Array.isArray(rows) ? rows : []).filter((row) => !isSyntheticTrainingJobRow(row));
+}
+
+function filterBusinessDatasetVersions(rows) {
+  return (Array.isArray(rows) ? rows : []).filter((row) => !isSyntheticDatasetVersionRow(row));
+}
+
 function normalizeTrainingHistory(rawHistory) {
   if (!Array.isArray(rawHistory)) return [];
   return rawHistory
@@ -981,6 +1048,7 @@ function pageDashboard(route, rawCtx) {
         </div>
       </section>
       <section class="lane-grid" id="laneGrid">${renderLoading('加载主线指标...')}</section>
+      <section class="lane-grid" id="realDataGrid">${renderLoading('加载真实数据来源...')}</section>
       <section class="grid-two">
         <div class="card">
           <h3>最近资产</h3>
@@ -1001,32 +1069,57 @@ function pageDashboard(route, rawCtx) {
         btn.addEventListener('click', () => ctx.navigate(btn.getAttribute('data-dashboard-nav')));
       });
       const laneGrid = root.querySelector('#laneGrid');
+      const realDataGrid = root.querySelector('#realDataGrid');
       const recentAssets = root.querySelector('#recentAssets');
       const recentModels = root.querySelector('#recentModels');
       const recentTasks = root.querySelector('#recentTasks');
       try {
         const data = await ctx.get('/dashboard/summary');
         const lanes = data?.lanes || {};
+        const hygiene = data?.hygiene || {};
+        const realData = data?.real_data || {};
         laneGrid.innerHTML = `
           <article class="lane-card">
             <h4>主线1 资产输入</h4>
             <p class="metric">${lanes.line1_assets?.total_assets ?? 0}</p>
-            <p class="muted">可用于训练 / 验证 / 推理的资产总量</p>
+            <p class="muted">可用于训练 / 验证 / 推理的真实资产总量${Number(hygiene.hidden_assets || 0) > 0 ? ` · 已隐藏 ${Number(hygiene.hidden_assets)} 个测试/截图资产` : ''}</p>
           </article>
           <article class="lane-card">
             <h4>主线2 模型交付与微调</h4>
             <p class="metric">${lanes.line2_models_training?.models_submitted ?? 0} / ${lanes.line2_models_training?.models_released ?? 0}</p>
-            <p class="muted">待审模型 / 已发布模型</p>
+            <p class="muted">待审模型 / 已发布模型${Number(hygiene.hidden_models || 0) > 0 ? ` · 已隐藏 ${Number(hygiene.hidden_models)} 个测试候选` : ''}</p>
           </article>
           <article class="lane-card">
             <h4>主线3 验证与执行</h4>
             <p class="metric">${lanes.line3_execution?.tasks_succeeded ?? 0}</p>
-            <p class="muted">成功任务数（累计）</p>
+            <p class="muted">成功任务数（累计）${Number(hygiene.hidden_tasks || 0) > 0 ? ` · 已隐藏 ${Number(hygiene.hidden_tasks)} 条测试任务` : ''}</p>
           </article>
           <article class="lane-card">
             <h4>主线4 授权设备运行</h4>
             <p class="metric">${lanes.line4_governance_delivery?.devices_online ?? 0} / ${lanes.line4_governance_delivery?.devices_total ?? 0}</p>
             <p class="muted">在线设备 / 设备总数</p>
+          </article>
+        `;
+        realDataGrid.innerHTML = `
+          <article class="lane-card">
+            <h4>真实演示资产</h4>
+            <p class="metric">${realData.demo_assets ?? 0}</p>
+            <p class="muted">来自 demo_data / 演示导入的真实图片、视频和本地训练包</p>
+          </article>
+          <article class="lane-card">
+            <h4>本地车号样本</h4>
+            <p class="metric">${realData.local_train_images ?? 0}</p>
+            <p class="muted">demo_data/train 内已整理好的现有车号照片</p>
+          </article>
+          <article class="lane-card">
+            <h4>待复核文本行</h4>
+            <p class="metric">${realData.labeling_rows ?? 0}</p>
+            <p class="muted">车号 OCR 文本标注清单总行数</p>
+          </article>
+          <article class="lane-card">
+            <h4>OCR 文本训练包</h4>
+            <p class="metric">${realData.text_train_rows ?? 0} / ${realData.text_validation_rows ?? 0}</p>
+            <p class="muted">当前真值/建议值回灌后的 train / validation 行数</p>
           </article>
         `;
 
@@ -1702,21 +1795,22 @@ function pageModels(route, rawCtx) {
         modelsWrap.innerHTML = renderLoading('加载模型列表...');
         try {
           const rows = await ctx.get('/models');
-          cachedModels = rows || [];
-          if (!rows.length) {
-            modelsWrap.innerHTML = renderEmpty('暂无模型，可先提交一个模型包，或等待供应商交付候选模型');
+          const visibleRows = filterBusinessModels(rows || []);
+          cachedModels = visibleRows;
+          if (!visibleRows.length) {
+            modelsWrap.innerHTML = renderEmpty((rows || []).length ? '当前只有测试/占位模型，已自动隐藏' : '暂无模型，可先提交一个模型包，或等待供应商交付候选模型');
             return;
           }
-          renderModelsTable(rows);
+          renderModelsTable(visibleRows);
 
-          if (requestedFocusModelId && rows.some((row) => row.id === requestedFocusModelId)) {
+          if (requestedFocusModelId && visibleRows.some((row) => row.id === requestedFocusModelId)) {
             const focusRow = modelsWrap.querySelector(`[data-model-row="${requestedFocusModelId}"]`);
             focusRow?.scrollIntoView({ block: 'center', behavior: 'smooth' });
             if (requestedOpenModelTimeline) {
               await openModelTimeline(requestedFocusModelId);
             }
             await openModelReadiness(requestedFocusModelId);
-          } else if (activeModelId && rows.some((row) => row.id === activeModelId)) {
+          } else if (activeModelId && visibleRows.some((row) => row.id === activeModelId)) {
             await openModelReadiness(activeModelId);
           }
           localStorage.removeItem(STORAGE_KEYS.focusModelId);
@@ -1907,6 +2001,7 @@ function pageTraining(route, rawCtx) {
                     <option value="finetune">${enumText('asset_purpose', 'finetune')}</option>
                   </select>
                   <label class="checkbox-row"><input id="trainingDatasetRecommendedOnly" type="checkbox" /> 仅看推荐</label>
+                  <label class="checkbox-row"><input id="trainingDatasetShowHistory" type="checkbox" /> 显示历史</label>
                   <div id="trainingDatasetMeta" class="hint"></div>
                 </div>
                 <div id="trainingDatasetVersionLibrary">${renderLoading('加载数据集版本...')}</div>
@@ -1985,6 +2080,7 @@ function pageTraining(route, rawCtx) {
       const trainingDatasetSearch = root.querySelector('#trainingDatasetSearch');
       const trainingDatasetPurposeFilter = root.querySelector('#trainingDatasetPurposeFilter');
       const trainingDatasetRecommendedOnly = root.querySelector('#trainingDatasetRecommendedOnly');
+      const trainingDatasetShowHistory = root.querySelector('#trainingDatasetShowHistory');
       const trainingDatasetMeta = root.querySelector('#trainingDatasetMeta');
       const datasetCompareWrap = root.querySelector('#trainingDatasetCompareWrap');
       const datasetPreviewWrap = root.querySelector('#trainingDatasetPreviewWrap');
@@ -2021,6 +2117,7 @@ function pageTraining(route, rawCtx) {
         datasetQuery: '',
         datasetPurpose: '',
         datasetRecommendedOnly: false,
+        datasetShowHistory: false,
       };
 
       if (createForm && (prefillTrainingAssetIds || prefillTrainingValidationAssetIds || prefillTrainingDatasetVersionId)) {
@@ -2466,7 +2563,8 @@ function pageTraining(route, rawCtx) {
             status: fd.get('status'),
             training_kind: fd.get('training_kind'),
           });
-          cachedTrainingJobs = await ctx.get(`/training/jobs${query}`);
+          const rows = await ctx.get(`/training/jobs${query}`);
+          cachedTrainingJobs = filterBusinessTrainingJobs(rows || []);
           if (requestedFocusTrainingJobId && cachedTrainingJobs.some((row) => row.id === requestedFocusTrainingJobId)) {
             activeTrainingJobId = requestedFocusTrainingJobId;
             localStorage.removeItem(STORAGE_KEYS.focusTrainingJobId);
@@ -2746,7 +2844,7 @@ function pageTraining(route, rawCtx) {
         const trainAssetIds = splitCsv(assetIdsInput?.value || '');
         const validationAssetIds = splitCsv(validationAssetIdsInput?.value || '');
         const q = String(trainingLibraryFilters.datasetQuery || '').trim().toLowerCase();
-        const filteredVersions = assistDatasetVersions.filter((row) => {
+        const matchingVersions = assistDatasetVersions.filter((row) => {
           if (trainingLibraryFilters.datasetPurpose && row.asset_purpose !== trainingLibraryFilters.datasetPurpose) return false;
           if (trainingLibraryFilters.datasetRecommendedOnly && !row.recommended) return false;
           if (!q) return true;
@@ -2763,7 +2861,32 @@ function pageTraining(route, rawCtx) {
             .join(' ');
           return haystack.includes(q);
         });
-        if (trainingDatasetMeta) trainingDatasetMeta.textContent = `显示 ${filteredVersions.length} / ${assistDatasetVersions.length} 个版本`;
+        const filteredVersions = (() => {
+          if (trainingLibraryFilters.datasetShowHistory) return matchingVersions;
+          const picked = [];
+          const pickedKeys = new Set();
+          const selectedVersionIds = new Set(
+            [prefillTrainingDatasetVersionId, activeDatasetCompareVersionId].filter(Boolean),
+          );
+          matchingVersions.forEach((row) => {
+            const key = String(row.dataset_key || row.id);
+            if (!pickedKeys.has(key) && row.is_latest !== false) {
+              picked.push(row);
+              pickedKeys.add(key);
+              return;
+            }
+            if (selectedVersionIds.has(row.id) && !picked.some((item) => item.id === row.id)) {
+              picked.push(row);
+            }
+          });
+          return picked.length ? picked : matchingVersions;
+        })();
+        if (trainingDatasetMeta) {
+          const hiddenHistoryCount = Math.max(matchingVersions.length - filteredVersions.length, 0);
+          trainingDatasetMeta.textContent = trainingLibraryFilters.datasetShowHistory
+            ? `显示 ${filteredVersions.length} / ${assistDatasetVersions.length} 个版本`
+            : `显示 ${filteredVersions.length} 个最新版本，收起历史 ${hiddenHistoryCount} 条`;
+        }
         if (!filteredVersions.length) {
           datasetVersionLibrary.innerHTML = renderEmpty('当前筛选条件下没有数据集版本');
           return;
@@ -2781,6 +2904,8 @@ function pageTraining(route, rawCtx) {
                     <div class="quick-review-statuses">
                       <span class="badge">${esc(enumText('asset_purpose', row.asset_purpose || '-'))}</span>
                       ${row.recommended ? '<span class="badge">推荐</span>' : ''}
+                      ${row.is_latest ? '<span class="badge">最新</span>' : '<span class="badge">历史版</span>'}
+                      ${row.is_latest && row.history_depth > 1 ? `<span class="badge">历史 ${esc(String(row.history_depth - 1))}</span>` : ''}
                     </div>
                   </div>
                   <div class="selection-card-meta">
@@ -2788,6 +2913,7 @@ function pageTraining(route, rawCtx) {
                     <span>来源</span><strong>${esc(row.source_type || '-')}</strong>
                     <span>样本数</span><strong>${esc(String(summary.task_count ?? summary.source_result_count ?? meta.archive_resource_count ?? 0))}</strong>
                     <span>标签</span><strong>${esc((summary.label_vocab || meta.label_vocab || []).slice(0, 6).join(', ') || '-')}</strong>
+                    <span>版本链</span><strong>${esc(row.previous_version ? `${row.version} -> ${row.previous_version}` : `${row.version} -> -`)}</strong>
                   </div>
                   <div class="row-actions">
                     <button class="primary" type="button" data-pick-dataset-training="${esc(row.asset_id)}" data-dataset-version-id="${esc(row.id)}">加入训练集</button>
@@ -3172,9 +3298,9 @@ function pageTraining(route, rawCtx) {
             ctx.get('/models'),
             ctx.get('/assets/dataset-versions?limit=60'),
           ]);
-          assistAssets = assets || [];
-          assistModels = models || [];
-          assistDatasetVersions = [...(datasetVersions || [])].sort((left, right) => {
+          assistAssets = filterBusinessAssets(assets || []);
+          assistModels = filterBusinessModels(models || []);
+          assistDatasetVersions = [...filterBusinessDatasetVersions(datasetVersions || [])].sort((left, right) => {
             const leftRecommended = left.recommended ? 1 : 0;
             const rightRecommended = right.recommended ? 1 : 0;
             if (leftRecommended !== rightRecommended) return rightRecommended - leftRecommended;
@@ -3310,6 +3436,10 @@ function pageTraining(route, rawCtx) {
       });
       trainingDatasetRecommendedOnly?.addEventListener('change', () => {
         trainingLibraryFilters.datasetRecommendedOnly = trainingDatasetRecommendedOnly.checked;
+        renderDatasetVersionLibrary();
+      });
+      trainingDatasetShowHistory?.addEventListener('change', () => {
+        trainingLibraryFilters.datasetShowHistory = trainingDatasetShowHistory.checked;
         renderDatasetVersionLibrary();
       });
 
@@ -4402,10 +4532,11 @@ function pageTasks(route, rawCtx) {
             ctx.get('/pipelines'),
             ctx.get('/models'),
           ]);
-          assistAssets = assets || [];
-          assetsDatalist.innerHTML = (assets || []).map((row) => `<option value="${esc(row.id)}">${esc(row.file_name)}</option>`).join('');
+          assistAssets = filterBusinessAssets(assets || []);
+          const visibleModels = filterBusinessModels(models || []);
+          assetsDatalist.innerHTML = assistAssets.map((row) => `<option value="${esc(row.id)}">${esc(row.file_name)}</option>`).join('');
           pipelinesDatalist.innerHTML = (pipelines || []).map((row) => `<option value="${esc(row.id)}">${esc(row.pipeline_code)}:${esc(row.version)}</option>`).join('');
-          modelsDatalist.innerHTML = (models || []).map((row) => `<option value="${esc(row.id)}">${esc(row.model_code)}:${esc(row.version)}</option>`).join('');
+          modelsDatalist.innerHTML = visibleModels.map((row) => `<option value="${esc(row.id)}">${esc(row.model_code)}:${esc(row.version)}</option>`).join('');
         } catch {
           // Ignore suggestion loading failure.
         }

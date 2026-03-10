@@ -190,86 +190,106 @@ def run_eval(args: argparse.Namespace) -> dict[str, Any]:
 
     for index, row in enumerate(rows, start=1):
         source_file = str(row.get("source_file") or "").strip()
-        sample_path = _find_source_file(source_file)
-        asset = _upload_asset(
-            opener,
-            api_base,
-            token=token,
-            file_name=sample_path.name,
-            file_bytes=sample_path.read_bytes(),
-            content_type="image/png" if sample_path.suffix.lower() == ".png" else "image/jpeg",
-        )
-        status, recommendation = _json_request(
-            opener,
-            api_base,
-            "POST",
-            "/tasks/recommend-model",
-            token=token,
-            payload={
-                "asset_id": asset["id"],
-                "task_type": "car_number_ocr",
-                "device_code": args.device_code,
-                "intent_text": "车号",
-                "limit": 3,
-            },
-        )
-        if status != 200 or not recommendation.get("selected_model"):
-            raise EvalFailure(f"recommend-model failed for {source_file}: {status} {recommendation}")
-        selected = recommendation["selected_model"]
-        status, created = _json_request(
-            opener,
-            api_base,
-            "POST",
-            "/tasks/create",
-            token=token,
-            payload={
-                "asset_id": asset["id"],
-                "model_id": selected["model_id"],
-                "task_type": selected.get("task_type") or "car_number_ocr",
-                "device_code": args.device_code,
-                "use_master_scheduler": False,
-                "intent_text": "车号",
-                "policy": {
-                    "upload_raw_video": False,
-                    "upload_frames": True,
-                    "desensitize_frames": False,
-                    "retention_days": 30,
-                    "quick_detect": {
-                        "requested_task_type": "car_number_ocr",
-                        "resolved_task_type": "car_number_ocr",
-                    },
+        sample_result = {
+            "index": index,
+            "sample_id": row.get("sample_id"),
+            "source_file": source_file,
+            "task_id": None,
+            "task_status": None,
+            "selected_model_code": None,
+            "runtime_text": "",
+            "runtime_confidence": None,
+            "runtime_engine": None,
+            "runtime_bbox": None,
+            "manifest_suggestion": str(row.get("ocr_suggestion") or "").strip(),
+            "manifest_engine": row.get("ocr_suggestion_engine"),
+            "issue": "task_failed",
+            "error": None,
+        }
+        try:
+            sample_path = _find_source_file(source_file)
+            asset = _upload_asset(
+                opener,
+                api_base,
+                token=token,
+                file_name=sample_path.name,
+                file_bytes=sample_path.read_bytes(),
+                content_type="image/png" if sample_path.suffix.lower() == ".png" else "image/jpeg",
+            )
+            status, recommendation = _json_request(
+                opener,
+                api_base,
+                "POST",
+                "/tasks/recommend-model",
+                token=token,
+                payload={
+                    "asset_id": asset["id"],
+                    "task_type": "car_number_ocr",
+                    "device_code": args.device_code,
+                    "intent_text": "车号",
+                    "limit": 3,
                 },
-                "context": {},
-                "options": {},
-            },
-        )
-        if status != 200:
-            raise EvalFailure(f"task create failed for {source_file}: {status} {created}")
-        task = _poll_task(opener, api_base, token, created["id"], args.wait_seconds)
-        expert = _fetch_expert_result(opener, api_base, token, created["id"])
-        result_json = expert.get("result_json") or {}
-        runtime_text = str(result_json.get("car_number") or "").strip()
-        confidence_value = result_json.get("confidence")
-        confidence = float(confidence_value) if isinstance(confidence_value, (int, float)) else None
-        suggestion = str(row.get("ocr_suggestion") or "").strip()
-        issue = _classify_issue(runtime_text, confidence, suggestion)
-        report_rows.append(
-            {
-                "index": index,
-                "sample_id": row.get("sample_id"),
-                "source_file": source_file,
-                "task_id": created["id"],
-                "task_status": task.get("status"),
-                "selected_model_code": selected.get("model_code"),
-                "runtime_text": runtime_text,
-                "runtime_confidence": confidence,
-                "runtime_engine": result_json.get("engine"),
-                "runtime_bbox": result_json.get("bbox"),
-                "manifest_suggestion": suggestion,
-                "manifest_engine": row.get("ocr_suggestion_engine"),
-                "issue": issue,
-            }
-        )
+            )
+            if status != 200 or not recommendation.get("selected_model"):
+                raise EvalFailure(f"recommend-model failed for {source_file}: {status} {recommendation}")
+            selected = recommendation["selected_model"]
+            sample_result["selected_model_code"] = selected.get("model_code")
+            status, created = _json_request(
+                opener,
+                api_base,
+                "POST",
+                "/tasks/create",
+                token=token,
+                payload={
+                    "asset_id": asset["id"],
+                    "model_id": selected["model_id"],
+                    "task_type": selected.get("task_type") or "car_number_ocr",
+                    "device_code": args.device_code,
+                    "use_master_scheduler": False,
+                    "intent_text": "车号",
+                    "policy": {
+                        "upload_raw_video": False,
+                        "upload_frames": True,
+                        "desensitize_frames": False,
+                        "retention_days": 30,
+                        "quick_detect": {
+                            "requested_task_type": "car_number_ocr",
+                            "resolved_task_type": "car_number_ocr",
+                        },
+                    },
+                    "context": {},
+                    "options": {},
+                },
+            )
+            if status != 200:
+                raise EvalFailure(f"task create failed for {source_file}: {status} {created}")
+            sample_result["task_id"] = created["id"]
+            task = _poll_task(opener, api_base, token, created["id"], args.wait_seconds)
+            sample_result["task_status"] = task.get("status")
+            if task.get("status") != "SUCCEEDED":
+                raise EvalFailure(f"task finished with status {task.get('status')}: {task.get('error_message')}")
+            expert = _fetch_expert_result(opener, api_base, token, created["id"])
+            result_json = expert.get("result_json") or {}
+            runtime_text = str(result_json.get("car_number") or "").strip()
+            confidence_value = result_json.get("confidence")
+            confidence = float(confidence_value) if isinstance(confidence_value, (int, float)) else None
+            suggestion = sample_result["manifest_suggestion"]
+            sample_result.update(
+                {
+                    "runtime_text": runtime_text,
+                    "runtime_confidence": confidence,
+                    "runtime_engine": result_json.get("engine"),
+                    "runtime_bbox": result_json.get("bbox"),
+                    "issue": _classify_issue(runtime_text, confidence, suggestion),
+                }
+            )
+        except Exception as exc:
+            sample_result["error"] = str(exc)
+            if "timed out" in str(exc).lower():
+                sample_result["issue"] = "timeout"
+            elif sample_result["task_status"] == "FAILED":
+                sample_result["issue"] = "task_failed"
+        report_rows.append(sample_result)
 
     summary = {
         "generated_at": _utc_now_iso(),
@@ -278,7 +298,7 @@ def run_eval(args: argparse.Namespace) -> dict[str, Any]:
         "sample_count": len(report_rows),
         "issue_counts": {
             key: sum(1 for row in report_rows if row["issue"] == key)
-            for key in ("ok", "low_confidence", "suggestion_mismatch", "empty")
+            for key in ("ok", "low_confidence", "suggestion_mismatch", "empty", "timeout", "task_failed")
         },
         "rows": report_rows,
     }
@@ -306,6 +326,7 @@ def _write_report(report: dict[str, Any], output_dir: Path) -> None:
             "manifest_suggestion",
             "manifest_engine",
             "issue",
+            "error",
         ]
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()

@@ -331,6 +331,8 @@ def _score_car_number_text(text: str | None, confidence: float = 0.0) -> float:
 
     if 7 <= len(cleaned) <= 8:
         score += 0.3
+        if len(cleaned) == 8:
+            score += 0.08
     elif 6 <= len(cleaned) <= 10:
         score += 0.12
     else:
@@ -355,6 +357,26 @@ def _score_car_number_text(text: str | None, confidence: float = 0.0) -> float:
     if len(cleaned) <= 4:
         score -= 0.5
     return round(score, 4)
+
+
+def _calibrate_car_number_confidence(text: str | None, raw_confidence: float, quality: float) -> float:
+    cleaned = _clean_car_number_text(text)
+    calibrated = float(raw_confidence)
+    if not cleaned:
+        return round(max(0.0, calibrated), 4)
+    if quality >= 2.3:
+        calibrated = max(calibrated, 0.78)
+    elif quality >= 2.0:
+        calibrated = max(calibrated, 0.7)
+    elif quality >= 1.7:
+        calibrated = max(calibrated, 0.62)
+    elif quality >= 1.35:
+        calibrated = max(calibrated, 0.56)
+    if re.fullmatch(r"\d{7,8}", cleaned):
+        calibrated += 0.02
+    elif re.fullmatch(r"[A-Z]{1,3}\d{4,8}", cleaned):
+        calibrated += 0.01
+    return round(min(calibrated, 0.92), 4)
 
 
 @lru_cache(maxsize=1)
@@ -437,9 +459,13 @@ def _anchor_car_number_rois(frame: np.ndarray) -> list[list[int]]:
         (0.10, 0.26, 0.28, 0.40),
         (0.10, 0.30, 0.45, 0.44),
         (0.18, 0.27, 0.48, 0.42),
+        (0.22, 0.28, 0.58, 0.39),
+        (0.20, 0.28, 0.58, 0.42),
+        (0.29, 0.30, 0.65, 0.40),
         (0.28, 0.28, 0.72, 0.42),
+        (0.46, 0.28, 0.84, 0.42),
+        (0.58, 0.29, 0.99, 0.44),
         (0.46, 0.28, 0.96, 0.43),
-        (0.56, 0.29, 0.99, 0.44),
     ]
     return [
         [
@@ -512,6 +538,66 @@ def _detect_text_band_rois(frame: np.ndarray) -> list[list[int]]:
             ]
         )
     return rois
+
+
+def _aggregate_car_number_candidates(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not candidates:
+        return None
+    buckets: dict[str, dict[str, Any]] = {}
+    for item in candidates:
+        text = _clean_car_number_text(item.get("text"))
+        if not text:
+            continue
+        bucket = buckets.setdefault(
+            text,
+            {
+                "text": text,
+                "aggregate_score": 0.0,
+                "count": 0,
+                "engines": set(),
+                "variants": set(),
+                "best": None,
+            },
+        )
+        bucket["aggregate_score"] += float(item.get("quality") or 0.0)
+        bucket["count"] += 1
+        bucket["engines"].add(str(item.get("engine") or ""))
+        bucket["variants"].add(str(item.get("variant") or ""))
+        best = bucket["best"]
+        if best is None or float(item.get("quality") or 0.0) > float(best.get("quality") or 0.0):
+            bucket["best"] = item
+
+    ranked: list[dict[str, Any]] = []
+    for bucket in buckets.values():
+        best = bucket["best"]
+        if not best:
+            continue
+        aggregate_score = float(bucket["aggregate_score"])
+        aggregate_score += min(0.42, 0.12 * max(0, bucket["count"] - 1))
+        aggregate_score += min(0.16, 0.08 * max(0, len(bucket["variants"]) - 1))
+        if len(bucket["engines"]) > 1:
+            aggregate_score += 0.06
+        ranked.append(
+            {
+                **best,
+                "text": bucket["text"],
+                "aggregate_score": round(aggregate_score, 4),
+                "count": bucket["count"],
+                "engine_count": len(bucket["engines"]),
+                "variant_count": len(bucket["variants"]),
+            }
+        )
+    if not ranked:
+        return None
+    ranked.sort(
+        key=lambda item: (
+            float(item.get("aggregate_score") or 0.0),
+            float(item.get("quality") or 0.0),
+            float(item.get("confidence") or 0.0),
+        ),
+        reverse=True,
+    )
+    return ranked[0]
 
 
 def _candidate_car_number_rois(frame: np.ndarray) -> list[list[int]]:
@@ -598,8 +684,7 @@ def _run_car_number_ocr(frame: np.ndarray, file_name: str, *, force_mock_ocr: bo
         )
     if force_mock_ocr:
         return _mock_car_number(file_name), 0.5, fallback_bbox, "mock"
-    best_candidate: dict[str, Any] | None = None
-    best_quality = -1.0
+    pooled_candidates: list[dict[str, Any]] = []
     for bbox in _candidate_car_number_rois(frame):
         x1, y1, x2, y2 = bbox
         roi = frame[y1:y2, x1:x2]
@@ -619,17 +704,19 @@ def _run_car_number_ocr(frame: np.ndarray, file_name: str, *, force_mock_ocr: bo
                 quality = _score_car_number_text(candidate_text, confidence)
                 if candidate_text != normalized_raw_text:
                     quality -= 0.08
-                if quality > best_quality:
-                    best_quality = quality
-                    best_candidate = {
+                pooled_candidates.append(
+                    {
                         "text": candidate_text,
-                        "confidence": confidence,
+                        "confidence": _calibrate_car_number_confidence(candidate_text, confidence, quality),
+                        "raw_confidence": confidence,
+                        "quality": quality,
                         "bbox": bbox,
                         "engine": engine,
+                        "variant": engine.split(":", 1)[-1] if ":" in engine else engine,
                     }
-        if best_quality >= 1.6:
-            break
-    if best_candidate and best_quality >= 0.95:
+                )
+    best_candidate = _aggregate_car_number_candidates(pooled_candidates)
+    if best_candidate and float(best_candidate.get("aggregate_score") or 0.0) >= 0.95:
         return (
             str(best_candidate["text"]),
             float(best_candidate["confidence"]),

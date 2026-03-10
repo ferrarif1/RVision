@@ -287,7 +287,12 @@ def _get_visible_dataset_version_or_404(db: Session, version_id: str, current_us
     return row
 
 
-def _serialize_dataset_version(row: DatasetVersion, asset: DataAsset | None = None, buyer: Tenant | None = None) -> dict:
+def _serialize_dataset_version(
+    row: DatasetVersion,
+    asset: DataAsset | None = None,
+    buyer: Tenant | None = None,
+    history: dict[str, Any] | None = None,
+) -> dict:
     summary = row.summary or {}
     return {
         "id": row.id,
@@ -311,6 +316,11 @@ def _serialize_dataset_version(row: DatasetVersion, asset: DataAsset | None = No
         }
         if asset
         else None,
+        "is_latest": bool(history.get("is_latest")) if isinstance(history, dict) else False,
+        "history_depth": int(history.get("history_depth") or 0) if isinstance(history, dict) else 0,
+        "superseded_count": int(history.get("superseded_count") or 0) if isinstance(history, dict) else 0,
+        "previous_version_id": history.get("previous_version_id") if isinstance(history, dict) else None,
+        "previous_version": history.get("previous_version") if isinstance(history, dict) else None,
         "created_at": row.created_at,
     }
 
@@ -517,6 +527,20 @@ def list_dataset_versions(
         query = query.filter(DatasetVersion.asset_purpose == asset_purpose)
 
     rows = query.limit(limit).all()
+    history_by_row_id: dict[str, dict[str, Any]] = {}
+    grouped_rows: dict[str, list[DatasetVersion]] = {}
+    for row in rows:
+        grouped_rows.setdefault(str(row.dataset_key or row.id), []).append(row)
+    for versions in grouped_rows.values():
+        for index, row in enumerate(versions):
+            previous = versions[index + 1] if index + 1 < len(versions) else None
+            history_by_row_id[row.id] = {
+                "is_latest": index == 0,
+                "history_depth": len(versions),
+                "superseded_count": max(len(versions) - index - 1, 0),
+                "previous_version_id": previous.id if previous else None,
+                "previous_version": previous.version if previous else None,
+            }
     asset_ids = [row.asset_id for row in rows if row.asset_id]
     asset_map = {row.id: row for row in db.query(DataAsset).filter(DataAsset.id.in_(asset_ids)).all()}
     tenant_ids = {row.buyer_tenant_id for row in rows if row.buyer_tenant_id}
@@ -536,7 +560,7 @@ def list_dataset_versions(
             ]
             if not any(keyword in item for item in haystacks):
                 continue
-        payload.append(_serialize_dataset_version(row, asset=asset, buyer=buyer))
+        payload.append(_serialize_dataset_version(row, asset=asset, buyer=buyer, history=history_by_row_id.get(row.id)))
     return payload
 
 
