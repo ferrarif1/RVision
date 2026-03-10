@@ -278,6 +278,11 @@ class TasksResultsEdgeRegressionTest(ApiRegressionHelper):
         self.assertTrue(first_version["is_latest"])
         self.assertEqual(first_version["history_depth"], 1)
         self.assertIsNone(first_version["previous_version_id"])
+        assets_after_first_export = self.request_json("GET", f"/assets?q={dataset_label}", token=self.buyer_token)
+        first_asset = next((row for row in assets_after_first_export if row["id"] == dataset_export["asset"]["id"]), None)
+        self.assertIsNotNone(first_asset, assets_after_first_export)
+        self.assertTrue(first_asset["dataset_version_meta"]["is_latest"])
+        self.assertEqual(first_asset["dataset_version_meta"]["history_depth"], 1)
 
         recommended = self.request_json(
             "POST",
@@ -329,6 +334,13 @@ class TasksResultsEdgeRegressionTest(ApiRegressionHelper):
         self.assertEqual(compare_filtered["diff"]["filtered_sample_count"], 1)
         self.assertEqual(len(compare_filtered["diff"]["changed_samples"]), 1)
         self.assertEqual(compare_filtered["diff"]["changed_samples"][0]["right"]["matched_labels"], ["car_rechecked"])
+        assets_after_second_export = self.request_json("GET", f"/assets?q={dataset_label}", token=self.buyer_token)
+        latest_asset = next((row for row in assets_after_second_export if row["id"] == dataset_export_second["asset"]["id"]), None)
+        first_asset_after = next((row for row in assets_after_second_export if row["id"] == dataset_export["asset"]["id"]), None)
+        self.assertIsNotNone(latest_asset, assets_after_second_export)
+        self.assertIsNotNone(first_asset_after, assets_after_second_export)
+        self.assertTrue(latest_asset["dataset_version_meta"]["is_latest"])
+        self.assertFalse(first_asset_after["dataset_version_meta"]["is_latest"])
 
         rolled_back = self.request_json(
             "POST",

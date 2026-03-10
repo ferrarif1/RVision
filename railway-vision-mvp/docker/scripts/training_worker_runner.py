@@ -718,7 +718,12 @@ def _builtin_train(
 class TrainingWorkerRunner:
     def __init__(self, args: argparse.Namespace):
         self.args = args
-        self.client = httpx.Client(base_url=args.backend_base_url.rstrip("/"), timeout=60.0, verify=args.verify_tls)
+        self.client = httpx.Client(
+            base_url=args.backend_base_url.rstrip("/"),
+            timeout=60.0,
+            verify=args.verify_tls,
+            trust_env=False,
+        )
         self.headers = {
             "X-Training-Worker-Code": args.worker_code,
             "X-Training-Worker-Token": args.worker_token,
@@ -808,12 +813,14 @@ class TrainingWorkerRunner:
         return base_model_path, manifest
 
     def package_candidate(self, model_path: Path, job: dict[str, Any], out_zip: Path) -> None:
+        resolved_model_path = model_path.resolve()
+        resolved_out_zip = out_zip.resolve()
         cmd = [
             sys.executable,
             "-m",
             "app.services.model_package_tool",
             "--model-path",
-            str(model_path),
+            str(resolved_model_path),
             "--model-id",
             str(job["target_model_code"]),
             "--version",
@@ -823,7 +830,7 @@ class TrainingWorkerRunner:
             "--signing-private-key",
             str(self.model_sign_private_key_path),
             "--output",
-            str(out_zip),
+            str(resolved_out_zip),
             "--task-type",
             str(job["target_model_code"]),
             "--model-type",

@@ -34,9 +34,13 @@ class EdgeApiClient:
             resp.raise_for_status()
             return resp.json()
 
-    def pull_model(self, model_id: str) -> dict[str, Any]:
+    def pull_model(self, model_id: str, task_id: str | None = None) -> dict[str, Any]:
         with httpx.Client(timeout=120.0, verify=settings.verify_tls) as client:
-            resp = client.post(self._url("/edge/pull_model"), json={"model_id": model_id}, headers=self.headers)
+            resp = client.post(
+                self._url("/edge/pull_model"),
+                json={"model_id": model_id, "task_id": task_id},
+                headers=self.headers,
+            )
             resp.raise_for_status()
             return resp.json()
 

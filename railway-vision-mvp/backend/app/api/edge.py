@@ -40,6 +40,7 @@ class PullTasksRequest(BaseModel):
 
 class PullModelRequest(BaseModel):
     model_id: str = Field(description="模型ID / Model ID to download")
+    task_id: str | None = Field(default=None, description="任务ID / Optional task ID for task-scoped candidate model validation")
 
 
 class EdgePushStatus(str, Enum):
@@ -90,6 +91,20 @@ def _is_model_released_to_device(db: Session, model_id: str, device_code: str) -
         if not targets or device_code in targets:
             return True
     return False
+
+
+def _is_model_authorized_for_task(db: Session, model_id: str, task_id: str | None, device_code: str) -> bool:
+    clean_task_id = str(task_id or "").strip()
+    if not clean_task_id:
+        return False
+    task = db.query(InferenceTask).filter(InferenceTask.id == clean_task_id).first()
+    if not task:
+        return False
+    if task.model_id != model_id:
+        return False
+    if task.device_code and task.device_code != device_code:
+        return False
+    return task.status in {TASK_STATUS_PENDING, TASK_STATUS_DISPATCHED}
 
 
 def _normalize_pipeline_id(pipeline_id: str | None) -> str | None:
@@ -247,7 +262,12 @@ def edge_pull_model(
     if not model:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
 
-    if not _is_model_released_to_device(db, model.id, device.code):
+    if not _is_model_released_to_device(db, model.id, device.code) and not _is_model_authorized_for_task(
+        db,
+        model_id=model.id,
+        task_id=payload.task_id,
+        device_code=device.code,
+    ):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Model not released to this device")
 
     if not (os.path.exists(model.manifest_uri) and os.path.exists(model.encrypted_uri) and os.path.exists(model.signature_uri)):

@@ -17,7 +17,7 @@ from app.core.constants import MODEL_STATUS_RELEASED
 from app.core.constants import MODEL_STATUS_SUBMITTED
 from app.core.config import get_settings
 from app.db.database import get_db
-from app.db.models import AuditLog, ModelRecord, ModelRelease, Tenant, User
+from app.db.models import AuditLog, DataAsset, Device, InferenceResult, InferenceTask, ModelRecord, ModelRelease, Tenant, User
 from app.security.dependencies import AuthUser, require_roles
 from app.security.roles import (
     MODEL_APPROVE_ROLES,
@@ -39,6 +39,7 @@ from app.services.model_package_service import (
     parse_and_validate_model_package,
     persist_model_package,
 )
+from app.services.model_router_service import task_type_from_model
 from app.services.pipeline_service import build_model_registry_payload
 from app.services.pipeline_service import normalize_model_inputs
 from app.services.pipeline_service import normalize_model_outputs
@@ -116,6 +117,255 @@ def _submitted_summary(model: ModelRecord) -> str:
     if source_label in {"初始算法", "预训练模型"}:
         return f"供应商已提交{source_label}，等待结合客户数据继续微调或进入验证。"
     return "供应商已提交基于客户数据迭代后的候选模型，等待平台验证。"
+
+
+def _task_type_keywords(task_type: str | None) -> list[str]:
+    normalized = str(task_type or "").strip().lower()
+    if normalized == "car_number_ocr":
+        return ["车号", "车厢号", "车皮号", "编号", "ocr", "number", "railcar", "wagon", "thumb", "car"]
+    if normalized == "bolt_missing_detect":
+        return ["螺栓", "bolt", "紧固件", "缺失", "fastener"]
+    if normalized == "object_detect":
+        return ["目标", "检测", "detect", "car", "person", "train", "bus", "vehicle"]
+    return [normalized] if normalized else []
+
+
+def _build_capability_summary(model: ModelRecord) -> dict[str, Any]:
+    platform_meta = _build_platform_meta(model)
+    task_type = task_type_from_model(model)
+    source_type = str(platform_meta.get("model_source_type") or "").strip() or "delivery_candidate"
+    keywords = _task_type_keywords(task_type)
+    task_label = {
+        "car_number_ocr": "车号文本识别",
+        "object_detect": "目标检测",
+        "bolt_missing_detect": "螺栓缺失检测",
+    }.get(task_type or "", task_type or "通用模型")
+    summary_parts = [
+        f"当前模型定位为{task_label}",
+        f"来源类型：{_source_label(source_type)}",
+    ]
+    if platform_meta.get("training_summary"):
+        summary_parts.append(f"训练摘要：{platform_meta.get('training_summary')}")
+    elif platform_meta.get("dataset_label"):
+        summary_parts.append(f"数据标签：{platform_meta.get('dataset_label')}")
+    return {
+        "task_type": task_type,
+        "task_label": task_label,
+        "source_type": source_type,
+        "source_label": _source_label(source_type),
+        "plugin_name": model.plugin_name,
+        "dataset_label": platform_meta.get("dataset_label"),
+        "training_summary": platform_meta.get("training_summary"),
+        "keywords": keywords,
+        "summary": "；".join(summary_parts),
+    }
+
+
+def _asset_suggestion_rows(
+    db: Session,
+    *,
+    current_user: AuthUser,
+    model: ModelRecord,
+    validation_asset_ids: list[str],
+) -> list[dict[str, Any]]:
+    capability = _build_capability_summary(model)
+    task_type = capability.get("task_type")
+    keywords = [str(item).strip().lower() for item in capability.get("keywords") or [] if str(item).strip()]
+    query = db.query(DataAsset).order_by(DataAsset.created_at.desc())
+    if is_buyer_user(current_user.roles):
+        query = query.filter(DataAsset.buyer_tenant_id == current_user.tenant_id)
+    rows = query.limit(240).all()
+    suggestions: list[dict[str, Any]] = []
+    for asset in rows:
+        if asset.asset_type == "archive":
+            continue
+        meta = asset.meta if isinstance(asset.meta, dict) else {}
+        haystacks = [
+            str(asset.file_name or "").lower(),
+            str(meta.get("dataset_label") or "").lower(),
+            str(meta.get("use_case") or "").lower(),
+            str(meta.get("intended_model_code") or "").lower(),
+            str(meta.get("archive_kind") or "").lower(),
+        ]
+        score = 0
+        reason_tags: list[str] = []
+        if asset.id in validation_asset_ids:
+            score += 120
+            reason_tags.append("历史验证资产")
+        intended_model_code = str(meta.get("intended_model_code") or "").strip().lower()
+        if intended_model_code and intended_model_code == str(model.model_code or "").strip().lower():
+            score += 45
+            reason_tags.append("用途指向当前模型")
+        asset_purpose = str(meta.get("asset_purpose") or "").strip().lower()
+        if asset_purpose == "validation":
+            score += 22
+            reason_tags.append("验证用途")
+        elif asset_purpose == "inference":
+            score += 14
+            reason_tags.append("推理用途")
+        elif asset_purpose == "training":
+            score += 8
+        matched_keywords = [keyword for keyword in keywords if keyword and any(keyword in item for item in haystacks)]
+        if matched_keywords:
+            score += 12 + (len(matched_keywords) * 8)
+            reason_tags.append(f"命中能力关键词 {', '.join(dict.fromkeys(matched_keywords[:3]))}")
+        if task_type == "car_number_ocr" and asset.asset_type == "image":
+            score += 10
+        if task_type == "bolt_missing_detect" and asset.asset_type == "image":
+            score += 6
+        if score <= 0:
+            continue
+        suggestions.append(
+            {
+                "id": asset.id,
+                "file_name": asset.file_name,
+                "asset_type": asset.asset_type,
+                "created_at": asset.created_at,
+                "meta": {
+                    "asset_purpose": meta.get("asset_purpose"),
+                    "dataset_label": meta.get("dataset_label"),
+                    "use_case": meta.get("use_case"),
+                    "intended_model_code": meta.get("intended_model_code"),
+                },
+                "score": score,
+                "reason_tags": reason_tags,
+            }
+        )
+    suggestions.sort(key=lambda item: (-int(item.get("score") or 0), str(item.get("created_at") or "")), reverse=False)
+    return suggestions[:6]
+
+
+def _validation_result_summary(result: InferenceResult | None) -> dict[str, Any] | None:
+    if not result:
+        return None
+    result_json = result.result_json if isinstance(result.result_json, dict) else {}
+    summary = result_json.get("summary") if isinstance(result_json.get("summary"), dict) else {}
+    predictions = result_json.get("predictions") if isinstance(result_json.get("predictions"), list) else []
+    first_prediction = predictions[0] if predictions and isinstance(predictions[0], dict) else {}
+    recognized_text = (
+        str(summary.get("car_number") or "").strip()
+        or str(first_prediction.get("text") or first_prediction.get("attributes", {}).get("text") or "").strip()
+        or None
+    )
+    confidence = first_prediction.get("score") or summary.get("confidence")
+    return {
+        "result_id": result.id,
+        "alert_level": result.alert_level,
+        "duration_ms": result.duration_ms,
+        "recognized_text": recognized_text,
+        "prediction_count": len(predictions),
+        "confidence": confidence,
+        "summary": summary,
+        "created_at": result.created_at,
+    }
+
+
+def _recent_validation_tasks(
+    db: Session,
+    *,
+    current_user: AuthUser,
+    model: ModelRecord,
+) -> dict[str, Any]:
+    query = db.query(InferenceTask).filter(InferenceTask.model_id == model.id).order_by(InferenceTask.created_at.desc())
+    if is_buyer_user(current_user.roles):
+        query = query.filter(InferenceTask.buyer_tenant_id == current_user.tenant_id)
+    tasks = query.limit(12).all()
+    asset_ids = [row.asset_id for row in tasks if row.asset_id]
+    asset_map = {row.id: row for row in db.query(DataAsset).filter(DataAsset.id.in_(asset_ids)).all()} if asset_ids else {}
+    task_ids = [row.id for row in tasks]
+    result_rows = (
+        db.query(InferenceResult)
+        .filter(InferenceResult.task_id.in_(task_ids))
+        .order_by(InferenceResult.created_at.desc())
+        .all()
+        if task_ids
+        else []
+    )
+    latest_result_by_task_id: dict[str, InferenceResult] = {}
+    for row in result_rows:
+        latest_result_by_task_id.setdefault(row.task_id, row)
+
+    payload = []
+    success_count = 0
+    failed_count = 0
+    running_count = 0
+    for row in tasks:
+        asset = asset_map.get(row.asset_id)
+        latest_result = latest_result_by_task_id.get(row.id)
+        if row.status == "SUCCEEDED":
+            success_count += 1
+        elif row.status == "FAILED":
+            failed_count += 1
+        else:
+            running_count += 1
+        payload.append(
+            {
+                "id": row.id,
+                "task_type": row.task_type,
+                "status": row.status,
+                "asset_id": row.asset_id,
+                "asset_file_name": asset.file_name if asset else None,
+                "device_code": row.device_code,
+                "created_at": row.created_at,
+                "finished_at": row.finished_at,
+                "error_message": row.error_message,
+                "result": _validation_result_summary(latest_result),
+            }
+        )
+    return {
+        "rows": payload,
+        "counts": {
+            "total": len(payload),
+            "success": success_count,
+            "failed": failed_count,
+            "running": running_count,
+        },
+    }
+
+
+def _release_scope_candidates(db: Session) -> dict[str, list[dict[str, Any]]]:
+    devices = (
+        db.query(Device)
+        .filter(Device.status == "ACTIVE")
+        .order_by(Device.last_seen_at.desc().nullslast(), Device.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    buyers = (
+        db.query(Tenant)
+        .filter(Tenant.tenant_type == "BUYER", Tenant.status == "ACTIVE")
+        .order_by(Tenant.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    return {
+        "devices": [
+            {
+                "code": row.code,
+                "name": row.name,
+                "status": row.status,
+                "last_seen_at": row.last_seen_at,
+            }
+            for row in devices
+        ],
+        "buyers": [
+            {
+                "tenant_code": row.tenant_code,
+                "name": row.name,
+                "status": row.status,
+            }
+            for row in buyers
+        ],
+    }
+
+
+def _latest_release_record(db: Session, model_id: str) -> ModelRelease | None:
+    return (
+        db.query(ModelRelease)
+        .filter(ModelRelease.model_id == model_id, ModelRelease.status == MODEL_RELEASE_STATUS_RELEASED)
+        .order_by(ModelRelease.created_at.desc())
+        .first()
+    )
 
 
 def _get_accessible_model_or_404(db: Session, current_user: AuthUser, model_id: str) -> ModelRecord:
@@ -365,6 +615,120 @@ def get_model_readiness(
         "default_release_risk_summary": default_release_risk_summary,
         "stored_validation_report": _readiness_summary(platform_meta, "validation_report"),
         "stored_release_risk_summary": _readiness_summary(platform_meta, "latest_release_risk_summary"),
+    }
+
+
+@router.get("/{model_id}/approval-workbench")
+def get_model_approval_workbench(
+    model_id: str,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*MODEL_READ_ROLES)),
+):
+    model = _get_accessible_model_or_404(db, current_user, model_id)
+    validation_report = build_model_validation_report(db, model)
+    default_release_risk_summary = build_model_release_risk_summary(
+        model,
+        validation_report,
+        target_devices=[],
+        target_buyers=[],
+        delivery_mode="local_key",
+        authorization_mode="device_key",
+        runtime_encryption=True,
+        api_access_key_label=None,
+        local_key_label=None,
+    )
+    capability = _build_capability_summary(model)
+    suggested_assets = _asset_suggestion_rows(
+        db,
+        current_user=current_user,
+        model=model,
+        validation_asset_ids=validation_report.get("validation_asset_ids") or [],
+    )
+    recent_tasks = _recent_validation_tasks(db, current_user=current_user, model=model)
+    platform_meta = _build_platform_meta(model)
+    return {
+        "model": {
+            **build_model_registry_payload(model),
+            "status": model.status,
+            "platform_meta": platform_meta,
+        },
+        "capability": capability,
+        "recommended_task_type": capability.get("task_type"),
+        "recommended_device_code": "edge-01",
+        "readiness": {
+            "validation_report": validation_report,
+            "default_release_risk_summary": default_release_risk_summary,
+            "stored_validation_report": _readiness_summary(platform_meta, "validation_report"),
+            "stored_release_risk_summary": _readiness_summary(platform_meta, "latest_release_risk_summary"),
+        },
+        "suggested_assets": suggested_assets,
+        "recent_validation_tasks": recent_tasks["rows"],
+        "recent_validation_counts": recent_tasks["counts"],
+    }
+
+
+@router.get("/{model_id}/release-workbench")
+def get_model_release_workbench(
+    model_id: str,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*MODEL_RELEASE_ROLES)),
+):
+    model = _get_accessible_model_or_404(db, current_user, model_id)
+    validation_report = build_model_validation_report(db, model)
+    latest_release = _latest_release_record(db, model.id)
+    scope_candidates = _release_scope_candidates(db)
+    platform_meta = _build_platform_meta(model)
+    capability = _build_capability_summary(model)
+    recommended_target_devices = list(latest_release.target_devices or []) if latest_release else []
+    recommended_target_buyers = list(latest_release.target_buyers or []) if latest_release else []
+    if not recommended_target_devices and scope_candidates["devices"]:
+        recommended_target_devices = [scope_candidates["devices"][0]["code"]]
+    if not recommended_target_buyers and scope_candidates["buyers"]:
+        recommended_target_buyers = [scope_candidates["buyers"][0]["tenant_code"]]
+    recommended_config = {
+        "delivery_mode": "local_key",
+        "authorization_mode": "device_key",
+        "runtime_encryption": True,
+        "api_access_key_label": None,
+        "local_key_label": "edge/keys/model_decrypt.key",
+    }
+    release_risk_summary = build_model_release_risk_summary(
+        model,
+        validation_report,
+        target_devices=recommended_target_devices,
+        target_buyers=recommended_target_buyers,
+        delivery_mode=recommended_config["delivery_mode"],
+        authorization_mode=recommended_config["authorization_mode"],
+        runtime_encryption=recommended_config["runtime_encryption"],
+        api_access_key_label=recommended_config["api_access_key_label"],
+        local_key_label=recommended_config["local_key_label"],
+    )
+    return {
+        "model": {
+            **build_model_registry_payload(model),
+            "status": model.status,
+            "platform_meta": platform_meta,
+        },
+        "capability": capability,
+        "readiness": {
+            "validation_report": validation_report,
+            "release_risk_summary": release_risk_summary,
+            "stored_release_risk_summary": _readiness_summary(platform_meta, "latest_release_risk_summary"),
+        },
+        "scope_candidates": scope_candidates,
+        "recommended_release": {
+            "target_devices": recommended_target_devices,
+            "target_buyers": recommended_target_buyers,
+            **recommended_config,
+        },
+        "latest_release": {
+            "id": latest_release.id,
+            "target_devices": latest_release.target_devices,
+            "target_buyers": latest_release.target_buyers,
+            "created_at": latest_release.created_at,
+        }
+        if latest_release
+        else None,
     }
 
 

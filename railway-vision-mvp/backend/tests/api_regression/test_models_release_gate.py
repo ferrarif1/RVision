@@ -6,6 +6,46 @@ from backend.tests.api_regression.helpers import ApiRegressionHelper
 
 
 class ModelReleaseGateRegressionTest(ApiRegressionHelper):
+    def test_model_approval_workbench_prefills_capability_and_suggested_assets(self) -> None:
+        base_model = next((row for row in self.buyer_models() if row.get("model_type") == "expert"), None)
+        self.assertIsNotNone(base_model, "no buyer-visible expert model found")
+        asset = self.upload_asset(
+            token=self.buyer_token,
+            filename=f"{self.unique_name('api-approve-workbench')}.png",
+            content=self.tiny_png_bytes(),
+            asset_purpose="validation",
+            use_case="railcar-number-validation",
+            intended_model_code=base_model["model_code"],
+            dataset_label="approval-workbench-demo",
+        )
+        payload = self.request_json(
+            "GET",
+            f"/models/{base_model['id']}/approval-workbench",
+            token=self.platform_token,
+        )
+        self.assertEqual(payload["model"]["id"], base_model["id"])
+        self.assertTrue(payload["capability"]["summary"])
+        self.assertIn("recommended_task_type", payload)
+        self.assertIn("recent_validation_counts", payload)
+        suggested_ids = [row["id"] for row in payload["suggested_assets"]]
+        self.assertIn(asset["id"], suggested_ids)
+
+    def test_model_release_workbench_prefills_scope_candidates(self) -> None:
+        base_model = next((row for row in self.buyer_models() if row.get("model_type") == "expert"), None)
+        self.assertIsNotNone(base_model, "no buyer-visible expert model found")
+        payload = self.request_json(
+            "GET",
+            f"/models/{base_model['id']}/release-workbench",
+            token=self.platform_token,
+        )
+        self.assertEqual(payload["model"]["id"], base_model["id"])
+        self.assertIn("scope_candidates", payload)
+        self.assertTrue(payload["scope_candidates"]["devices"])
+        self.assertTrue(payload["scope_candidates"]["buyers"])
+        self.assertIn("recommended_release", payload)
+        self.assertTrue(payload["recommended_release"]["target_devices"])
+        self.assertTrue(payload["recommended_release"]["target_buyers"])
+
     def test_supplier_candidate_requires_validation_gate(self) -> None:
         model_code = self.unique_name("api-supplier-candidate")
         version = "v1.0.0"

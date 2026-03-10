@@ -61,7 +61,7 @@ def run_once(client: EdgeApiClient) -> None:
             for model_id in model_ids:
                 # 关键安全链路：拉模型 -> 验签 -> 解密，任何一步失败即终止当前任务。
                 # Security-critical chain: pull -> verify signature -> decrypt.
-                model_payload = client.pull_model(model_id=model_id)
+                model_payload = client.pull_model(model_id=model_id, task_id=task_id)
                 artifacts = verify_and_decrypt_model(
                     model_payload=model_payload,
                     cache_models_dir=get_model_dir(),

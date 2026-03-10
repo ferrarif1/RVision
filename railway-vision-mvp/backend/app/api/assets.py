@@ -325,6 +325,32 @@ def _serialize_dataset_version(
     }
 
 
+def _dataset_history_group_key(row: DatasetVersion) -> tuple[str, str | None]:
+    return str(row.dataset_key or row.id), row.buyer_tenant_id
+
+
+def _build_dataset_history_maps(rows: list[DatasetVersion]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    by_version_id: dict[str, dict[str, Any]] = {}
+    by_asset_id: dict[str, dict[str, Any]] = {}
+    grouped_rows: dict[tuple[str, str | None], list[DatasetVersion]] = {}
+    for row in rows:
+        grouped_rows.setdefault(_dataset_history_group_key(row), []).append(row)
+    for versions in grouped_rows.values():
+        ordered = sorted(versions, key=lambda item: item.created_at or datetime.min, reverse=True)
+        for index, row in enumerate(ordered):
+            previous = ordered[index + 1] if index + 1 < len(ordered) else None
+            payload = {
+                "is_latest": index == 0,
+                "history_depth": len(ordered),
+                "superseded_count": max(len(ordered) - index - 1, 0),
+                "previous_version_id": previous.id if previous else None,
+                "previous_version": previous.version if previous else None,
+            }
+            by_version_id[row.id] = payload
+            by_asset_id[row.asset_id] = payload
+    return by_version_id, by_asset_id
+
+
 def _dataset_sample_summary(record: dict[str, Any]) -> dict[str, Any]:
     matched_labels = sorted({str(item).strip() for item in (record.get("matched_labels") or []) if str(item).strip()})
     return {
@@ -458,6 +484,16 @@ def list_assets(
         row.id: row
         for row in db.query(Tenant).filter(Tenant.id.in_(tenant_ids)).all()
     }
+    dataset_asset_ids = [row.id for row in rows]
+    related_dataset_versions = db.query(DatasetVersion).filter(DatasetVersion.asset_id.in_(dataset_asset_ids)).all() if dataset_asset_ids else []
+    dataset_keys = {row.dataset_key for row in related_dataset_versions if row.dataset_key}
+    related_dataset_histories = (
+        db.query(DatasetVersion).filter(DatasetVersion.dataset_key.in_(dataset_keys)).all()
+        if dataset_keys
+        else []
+    )
+    _, dataset_history_by_asset_id = _build_dataset_history_maps(related_dataset_histories)
+    dataset_version_by_asset_id = {row.asset_id: row for row in related_dataset_versions}
 
     keyword = (q or "").strip().lower()
     payload = []
@@ -492,6 +528,17 @@ def list_assets(
                 "buyer_tenant_code": buyer.tenant_code if buyer else None,
                 "buyer_tenant_name": buyer.name if buyer else None,
                 "meta": meta,
+                "dataset_version_meta": (
+                    {
+                        "id": dataset_version_by_asset_id[row.id].id,
+                        "dataset_key": dataset_version_by_asset_id[row.id].dataset_key,
+                        "dataset_label": dataset_version_by_asset_id[row.id].dataset_label,
+                        "version": dataset_version_by_asset_id[row.id].version,
+                        **(dataset_history_by_asset_id.get(row.id) or {}),
+                    }
+                    if row.id in dataset_version_by_asset_id
+                    else None
+                ),
                 "created_at": row.created_at,
             }
         )
@@ -527,20 +574,13 @@ def list_dataset_versions(
         query = query.filter(DatasetVersion.asset_purpose == asset_purpose)
 
     rows = query.limit(limit).all()
-    history_by_row_id: dict[str, dict[str, Any]] = {}
-    grouped_rows: dict[str, list[DatasetVersion]] = {}
-    for row in rows:
-        grouped_rows.setdefault(str(row.dataset_key or row.id), []).append(row)
-    for versions in grouped_rows.values():
-        for index, row in enumerate(versions):
-            previous = versions[index + 1] if index + 1 < len(versions) else None
-            history_by_row_id[row.id] = {
-                "is_latest": index == 0,
-                "history_depth": len(versions),
-                "superseded_count": max(len(versions) - index - 1, 0),
-                "previous_version_id": previous.id if previous else None,
-                "previous_version": previous.version if previous else None,
-            }
+    dataset_keys = {row.dataset_key for row in rows if row.dataset_key}
+    related_dataset_histories = (
+        db.query(DatasetVersion).filter(DatasetVersion.dataset_key.in_(dataset_keys)).all()
+        if dataset_keys
+        else []
+    )
+    history_by_row_id, _ = _build_dataset_history_maps(related_dataset_histories)
     asset_ids = [row.asset_id for row in rows if row.asset_id]
     asset_map = {row.id: row for row in db.query(DataAsset).filter(DataAsset.id.in_(asset_ids)).all()}
     tenant_ids = {row.buyer_tenant_id for row in rows if row.buyer_tenant_id}

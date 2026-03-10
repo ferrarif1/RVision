@@ -208,6 +208,65 @@ function filterBusinessDatasetVersions(rows) {
   return (Array.isArray(rows) ? rows : []).filter((row) => !isSyntheticDatasetVersionRow(row));
 }
 
+function isCarNumberOcrExportAsset(row) {
+  if (!row || typeof row !== 'object') return false;
+  const meta = row.meta && typeof row.meta === 'object' ? row.meta : {};
+  const sourceUri = String(row.source_uri || '').trim().toLowerCase();
+  const datasetKey = String(meta.dataset_key || '').trim().toLowerCase();
+  return sourceUri.startsWith('vistral://training/car-number-labeling/export-text-dataset/')
+    || datasetKey.startsWith('local-car-number-ocr-text-');
+}
+
+function collapseLatestCarNumberExportAssets(rows) {
+  const ordered = Array.isArray(rows) ? rows : [];
+  const kept = [];
+  const seenGroups = new Set();
+  let hiddenCount = 0;
+  ordered.forEach((row) => {
+    if (!isCarNumberOcrExportAsset(row)) {
+      kept.push(row);
+      return;
+    }
+    const meta = row.meta && typeof row.meta === 'object' ? row.meta : {};
+    const key = [
+      String(meta.dataset_key || '').trim().toLowerCase(),
+      String(row.source_uri || '').trim().toLowerCase(),
+      String(row.file_name || '').trim().toLowerCase(),
+    ].join('::');
+    if (seenGroups.has(key)) {
+      hiddenCount += 1;
+      return;
+    }
+    seenGroups.add(key);
+    kept.push(row);
+  });
+  return { rows: kept, hiddenCount };
+}
+
+function renderInfoPanel(title, items, actions = '') {
+  const rows = Array.isArray(items) ? items.filter((item) => item && item.label) : [];
+  return `
+    <div class="selection-summary upload-result-panel">
+      <strong>${esc(title || '结果摘要')}</strong>
+      ${
+        rows.length
+          ? `
+              <div class="keyvals compact-info-grid">
+                ${rows.map((item) => `
+                  <div>
+                    <span>${esc(item.label)}</span>
+                    <strong class="${item.mono ? 'mono' : ''}">${esc(item.value ?? '-')}</strong>
+                  </div>
+                `).join('')}
+              </div>
+            `
+          : ''
+      }
+      ${actions || ''}
+    </div>
+  `;
+}
+
 function normalizeTrainingHistory(rawHistory) {
   if (!Array.isArray(rawHistory)) return [];
   return rawHistory
@@ -1210,6 +1269,8 @@ function pageAssets(route, rawCtx) {
             <option value="finetune">${enumText('asset_purpose', 'finetune')}</option>
             <option value="validation">${enumText('asset_purpose', 'validation')}</option>
           </select>
+          <label class="checkbox-row"><input id="assetShowHistoryExports" type="checkbox" /> 显示 OCR 导出历史</label>
+          <div id="assetListMeta" class="hint"></div>
           <button class="ghost" type="submit">刷新列表</button>
         </form>
         <div id="assetsTableWrap">${renderLoading('加载资产列表...')}</div>
@@ -1221,6 +1282,9 @@ function pageAssets(route, rawCtx) {
       const uploadResult = root.querySelector('#assetUploadResult');
       const filterForm = root.querySelector('#assetFilterForm');
       const tableWrap = root.querySelector('#assetsTableWrap');
+      const assetShowHistoryExports = root.querySelector('#assetShowHistoryExports');
+      const assetListMeta = root.querySelector('#assetListMeta');
+      const assetListFilters = { showExportHistory: false };
 
       function prefillTrainingAssets(assetIds) {
         const merged = [...new Set([...splitCsv(localStorage.getItem(STORAGE_KEYS.prefillTrainingAssetIds) || ''), ...assetIds])];
@@ -1236,8 +1300,15 @@ function pageAssets(route, rawCtx) {
             asset_purpose: fd.get('asset_purpose'),
             limit: 100,
           });
-          const rows = await ctx.get(`/assets${query}`);
-          if (!rows.length) {
+          const rows = filterBusinessAssets(await ctx.get(`/assets${query}`));
+          const collapsed = assetListFilters.showExportHistory ? { rows, hiddenCount: 0 } : collapseLatestCarNumberExportAssets(rows);
+          const visibleRows = collapsed.rows;
+          if (assetListMeta) {
+            assetListMeta.textContent = assetListFilters.showExportHistory
+              ? `显示 ${visibleRows.length} 条真实资产`
+              : `显示 ${visibleRows.length} 条真实资产，收起 OCR 导出历史 ${collapsed.hiddenCount} 条`;
+          }
+          if (!visibleRows.length) {
             tableWrap.innerHTML = renderEmpty('暂无资产。建议先上传一条单图 / 单视频资产用于推理，或上传 ZIP 数据集包用于训练准备');
             return;
           }
@@ -1246,10 +1317,18 @@ function pageAssets(route, rawCtx) {
               <table class="table">
                 <thead><tr><th>asset_id(资产ID)</th><th>file_name(文件名)</th><th>type(类型)</th><th>resource_count(资源数)</th><th>purpose(用途)</th><th>sensitivity(敏感等级)</th><th>创建时间</th><th>操作</th></tr></thead>
                 <tbody>
-                  ${rows.map((row) => `
+                  ${visibleRows.map((row) => {
+                    const datasetMeta = row.dataset_version_meta || null;
+                    const datasetBadge = isCarNumberOcrExportAsset(row)
+                      ? `<span class="badge">${esc(datasetMeta?.is_latest ? `OCR 最新 ${datasetMeta?.version || ''}`.trim() : `OCR 历史 ${datasetMeta?.version || ''}`.trim())}</span>`
+                      : '';
+                    return `
                     <tr>
                       <td class="mono">${esc(row.id)}</td>
-                      <td>${esc(row.file_name)}</td>
+                      <td>
+                        ${esc(row.file_name)}
+                        ${datasetBadge}
+                      </td>
                       <td>${esc(enumText('asset_type', row.asset_type))}</td>
                       <td>${archiveResourceCount(row.meta || {}) || 1}</td>
                       <td>${esc(enumText('asset_purpose', (row.meta || {}).asset_purpose || '-'))}</td>
@@ -1262,7 +1341,8 @@ function pageAssets(route, rawCtx) {
                         ${isTaskAsset(row) ? `<button class="ghost" data-use-asset="${esc(row.id)}">用于任务</button>` : ''}
                       </td>
                     </tr>
-                  `).join('')}
+                  `;
+                  }).join('')}
                 </tbody>
               </table>
             </div>
@@ -1310,25 +1390,26 @@ function pageAssets(route, rawCtx) {
           const formData = new FormData(uploadForm);
           const data = await ctx.postForm('/assets/upload', formData);
           uploadMsg.textContent = '上传成功';
-          uploadResult.innerHTML = `
-            <div class="keyvals">
-              <div><span>asset_id</span><strong class="mono">${esc(data.id)}</strong></div>
-              <div><span>file_name</span><strong>${esc(data.file_name)}</strong></div>
-              <div><span>asset_type</span><strong>${esc(enumText('asset_type', data.asset_type))}</strong></div>
-              <div><span>sensitivity</span><strong>${esc(enumText('sensitivity_level', data.sensitivity_level))}</strong></div>
-              ${
-                archiveResourceCount(data.meta || {})
-                  ? `<div><span>resource_count</span><strong>${archiveResourceCount(data.meta || {})}</strong></div>`
-                  : ''
-              }
-            </div>
-            <div class="row-actions">
-              <button class="ghost" id="copyAssetIdBtn">复制资产ID</button>
-              ${isTaskAsset(data) ? `<button class="primary" id="gotoQuickDetectFromAsset">快速识别</button>` : ''}
-              ${isTaskAsset(data) ? `<button class="primary" id="gotoTaskFromAsset">用该资产创建任务</button>` : ''}
-              <button class="ghost" id="gotoTrainingFromAsset">用于训练</button>
-            </div>
-          `;
+          uploadResult.innerHTML = renderInfoPanel(
+            '上传结果',
+            [
+              { label: 'asset_id', value: data.id, mono: true },
+              { label: 'file_name', value: data.file_name },
+              { label: 'asset_type', value: enumText('asset_type', data.asset_type) },
+              { label: 'sensitivity', value: enumText('sensitivity_level', data.sensitivity_level) },
+              archiveResourceCount(data.meta || {})
+                ? { label: 'resource_count', value: archiveResourceCount(data.meta || {}) }
+                : null,
+            ],
+            `
+              <div class="row-actions">
+                <button class="ghost" id="copyAssetIdBtn">复制资产ID</button>
+                ${isTaskAsset(data) ? `<button class="primary" id="gotoQuickDetectFromAsset">快速识别</button>` : ''}
+                ${isTaskAsset(data) ? `<button class="primary" id="gotoTaskFromAsset">用该资产创建任务</button>` : ''}
+                <button class="ghost" id="gotoTrainingFromAsset">用于训练</button>
+              </div>
+            `,
+          );
           root.querySelector('#copyAssetIdBtn')?.addEventListener('click', async () => {
             try {
               await navigator.clipboard.writeText(String(data.id || ''));
@@ -1362,6 +1443,10 @@ function pageAssets(route, rawCtx) {
         event.preventDefault();
         await loadAssets();
       });
+      assetShowHistoryExports?.addEventListener('change', () => {
+        assetListFilters.showExportHistory = assetShowHistoryExports.checked;
+        loadAssets();
+      });
 
       await loadAssets();
     },
@@ -1375,6 +1460,7 @@ function pageModels(route, rawCtx) {
   const canRelease = hasPermission(ctx.state, 'model.release');
   const canCreateTrainingJob = hasPermission(ctx.state, 'training.job.create');
   const canViewTrainingJob = hasPermission(ctx.state, 'training.job.view');
+  const canCreateTask = hasPermission(ctx.state, 'task.create');
   const introText = role.startsWith('supplier')
     ? '提交初始算法或候选模型，持续跟踪审批反馈与训练协作进度。'
     : role.startsWith('platform_')
@@ -1414,6 +1500,7 @@ function pageModels(route, rawCtx) {
           <textarea name="training_summary" rows="2" placeholder="微调摘要"></textarea>
           <button class="primary" type="submit">提交模型</button>
           <div id="modelRegisterMsg" class="hint"></div>
+          <div id="modelRegisterResult">${renderEmpty('提交模型后会在这里显示 model_id、版本和下一步动作')}</div>
         </form>
         <section class="card">
           <h3>模型时间线</h3>
@@ -1421,6 +1508,14 @@ function pageModels(route, rawCtx) {
           <div class="readiness-block">
             <h3>评估与风险</h3>
             <div id="modelReadinessWrap">${renderEmpty('在模型列表点击“评估”，查看自动验证结论和发布前风险摘要')}</div>
+          </div>
+          <div class="readiness-block">
+            <h3>审批工作台</h3>
+            <div id="modelApprovalWorkbenchWrap">${renderEmpty('先在模型列表里选一版候选模型，这里会自动推荐验证样本、汇总验证结果，并在满足门禁后给出一键审批。')}</div>
+          </div>
+          <div class="readiness-block">
+            <h3>发布工作台</h3>
+            <div id="modelReleaseWorkbenchWrap">${renderEmpty('审批通过后，在这里选择设备、买家和交付方式。系统会先做发布前评估，再确认发布。')}</div>
           </div>
         </section>
       </section>
@@ -1486,8 +1581,11 @@ function pageModels(route, rawCtx) {
       const modelsWrap = root.querySelector('#modelsTableWrap');
       const registerForm = root.querySelector('#modelRegisterForm');
       const registerMsg = root.querySelector('#modelRegisterMsg');
+      const registerResult = root.querySelector('#modelRegisterResult');
       const timelineWrap = root.querySelector('#modelTimelineWrap');
       const readinessWrap = root.querySelector('#modelReadinessWrap');
+      const approvalWorkbenchWrap = root.querySelector('#modelApprovalWorkbenchWrap');
+      const releaseWorkbenchWrap = root.querySelector('#modelReleaseWorkbenchWrap');
       const trainingJobsWrap = root.querySelector('#trainingJobsWrap');
       const trainingJobForm = root.querySelector('#trainingJobForm');
       const trainingJobMsg = root.querySelector('#trainingJobMsg');
@@ -1496,6 +1594,8 @@ function pageModels(route, rawCtx) {
       const modelSourceFilter = root.querySelector('#modelSourceFilter');
       const modelListMeta = root.querySelector('#modelListMeta');
       let cachedModels = [];
+      let activeApprovalModelId = '';
+      let activeReleaseModelId = '';
       const requestedFocusModelId = localStorage.getItem(STORAGE_KEYS.focusModelId);
       const requestedOpenModelTimeline = localStorage.getItem(STORAGE_KEYS.focusModelTimeline) === '1';
       let activeModelId = requestedFocusModelId || '';
@@ -1566,6 +1666,225 @@ function pageModels(route, rawCtx) {
         `;
       }
 
+      function buildWorkbenchApprovalSummary(workbench, validationAssetIds) {
+        const capability = workbench?.capability || {};
+        const readiness = workbench?.readiness?.validation_report || {};
+        const counts = workbench?.recent_validation_counts || {};
+        const successRows = (workbench?.recent_validation_tasks || []).filter((row) => row.status === 'SUCCEEDED');
+        const successTexts = successRows
+          .map((row) => row?.result?.recognized_text)
+          .filter(Boolean)
+          .slice(0, 3);
+        const metricText = [
+          readiness?.metrics?.val_score != null ? `val_score=${formatMetricValue(readiness.metrics.val_score, { digits: 4 })}` : '',
+          readiness?.metrics?.val_accuracy != null ? `val_accuracy=${formatMetricValue(readiness.metrics.val_accuracy, { percent: true, digits: 4 })}` : '',
+          readiness?.metrics?.val_loss != null ? `val_loss=${formatMetricValue(readiness.metrics.val_loss, { digits: 4 })}` : '',
+        ].filter(Boolean).join('，');
+        return [
+          `审批前已完成 ${capability.task_label || capability.task_type || '候选模型'} 验证。`,
+          validationAssetIds.length ? `验证资产 ${validationAssetIds.length} 个。` : '',
+          counts.success ? `运行验证成功 ${counts.success} 条。` : '',
+          successTexts.length ? `示例输出：${successTexts.join(' / ')}。` : '',
+          readiness?.summary ? `门禁结论：${readiness.summary}` : '',
+          metricText ? `训练指标：${metricText}。` : '',
+        ].filter(Boolean).join(' ');
+      }
+
+      function renderApprovalWorkbenchPanel(workbench) {
+        const capability = workbench?.capability || {};
+        const readiness = workbench?.readiness?.validation_report || {};
+        const suggestions = Array.isArray(workbench?.suggested_assets) ? workbench.suggested_assets : [];
+        const recentTasks = Array.isArray(workbench?.recent_validation_tasks) ? workbench.recent_validation_tasks : [];
+        const counts = workbench?.recent_validation_counts || {};
+        const successfulAssetIds = Array.from(new Set(
+          recentTasks.filter((row) => row.status === 'SUCCEEDED' && row.asset_id).map((row) => row.asset_id),
+        ));
+        const defaultSelection = new Set(
+          successfulAssetIds.length
+            ? successfulAssetIds
+            : suggestions.slice(0, Math.min(3, suggestions.length)).map((row) => row.id),
+        );
+        const canApproveNow = Boolean(readiness?.can_approve) && successfulAssetIds.length > 0;
+        return `
+          <div class="approval-workbench" data-approval-model="${esc(workbench?.model?.id || '')}">
+            <div class="approval-workbench-grid">
+              <article class="metric-card">
+                <h4>模型能力</h4>
+                <p class="metric">${esc(capability.task_label || capability.task_type || '-')}</p>
+                <span>${esc(capability.summary || '暂无能力描述')}</span>
+              </article>
+              <article class="metric-card">
+                <h4>建议样本</h4>
+                <p class="metric">${esc(suggestions.length)}</p>
+                <span>${esc(suggestions.length ? '已按模型能力和用途排序推荐' : '当前没有命中的建议样本')}</span>
+              </article>
+              <article class="metric-card">
+                <h4>运行验证</h4>
+                <p class="metric">${esc(`${counts.success || 0} / ${counts.total || 0}`)}</p>
+                <span>${esc((counts.running || 0) > 0 ? `仍有 ${counts.running} 条执行中` : '优先看成功验证再审批')}</span>
+              </article>
+            </div>
+            <div class="approval-workbench-actions">
+              <div class="inline-form compact">
+                <label class="approval-inline-label">task_type</label>
+                <input id="approvalTaskType" value="${esc(workbench?.recommended_task_type || capability.task_type || '')}" />
+                <label class="approval-inline-label">device_code</label>
+                <input id="approvalDeviceCode" value="${esc(workbench?.recommended_device_code || 'edge-01')}" />
+              </div>
+              <div class="row-actions">
+                <button class="ghost" type="button" data-approval-select-all>全选建议样本</button>
+                <button class="ghost" type="button" data-approval-refresh>刷新验证结果</button>
+                <button class="primary" type="button" data-approval-create-tasks ${(suggestions.length && canCreateTask) ? '' : 'disabled'}>批量创建验证任务</button>
+              </div>
+            </div>
+            <div class="hint">${esc(canCreateTask ? '审批前建议先点选几张最贴近该模型能力的样本做运行验证。系统会自动汇总成功样本，不再手填 validation_asset_ids。' : '当前角色没有创建任务权限，只能查看建议样本和已有验证结果。')}</div>
+            <div id="approvalWorkbenchMsg" class="hint"></div>
+            <div class="approval-suggestion-list">
+              ${suggestions.length ? suggestions.map((row) => `
+                <label class="approval-asset-card">
+                  <input type="checkbox" data-approval-asset value="${esc(row.id)}" ${defaultSelection.has(row.id) ? 'checked' : ''} />
+                  <div class="approval-asset-card-body">
+                    <strong>${esc(row.file_name || row.id)}</strong>
+                    <span class="mono">${esc(row.id)}</span>
+                    <span>${esc(enumText('asset_type', row.asset_type || '-'))} · score ${esc(row.score ?? '-')}</span>
+                    <span>${esc((row.reason_tags || []).join(' · ') || '推荐样本')}</span>
+                  </div>
+                </label>
+              `).join('') : renderEmpty('当前没有建议样本，可先上传几张单图或视频资产')}
+            </div>
+            <div class="approval-runtime-list">
+              <h4>最近验证结果</h4>
+              ${recentTasks.length ? `
+                <div class="table-wrap">
+                  <table class="table">
+                    <thead>
+                      <tr><th>任务</th><th>资产</th><th>状态</th><th>输出</th><th>confidence</th><th>操作</th></tr>
+                    </thead>
+                    <tbody>
+                      ${recentTasks.map((row) => `
+                        <tr>
+                          <td class="mono">${esc((row.id || '').slice(0, 12))}</td>
+                          <td>${esc(row.asset_file_name || row.asset_id || '-')}</td>
+                          <td><span class="badge">${esc(enumText('task_status', row.status || '-'))}</span></td>
+                          <td>${esc(row?.result?.recognized_text || row?.result?.summary?.car_number || row.error_message || '-')}</td>
+                          <td>${esc(formatMetricValue(row?.result?.confidence, { digits: 3 }))}</td>
+                          <td class="row-actions">
+                            ${row.status === 'SUCCEEDED' ? `<button class="ghost" type="button" data-open-validation-result="${esc(row.id)}">打开结果</button>` : ''}
+                          </td>
+                        </tr>
+                      `).join('')}
+                    </tbody>
+                  </table>
+                </div>
+              ` : renderEmpty('还没有针对这版模型的运行验证任务')}
+            </div>
+            <div class="approval-summary-card">
+              <strong>审批建议</strong>
+              <span>${esc(canApproveNow ? '门禁已通过，且已有成功验证样本。可以直接审批。' : readiness?.can_approve ? '训练门禁已通过，但还缺成功运行验证。建议先跑几张样本。' : (readiness?.summary || '当前仍有阻断项，暂不能审批。'))}</span>
+              <textarea id="approvalSummaryInput" rows="3" placeholder="审批说明会自动生成，这里可补充少量备注">${esc(buildWorkbenchApprovalSummary(workbench, successfulAssetIds))}</textarea>
+              <div class="row-actions">
+                <button class="primary" type="button" data-approval-approve ${canApproveNow ? '' : 'disabled'}>一键审批通过</button>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+
+      function renderReleaseWorkbenchPanel(workbench, evaluated = null) {
+        const capability = workbench?.capability || {};
+        const recommended = workbench?.recommended_release || {};
+        const releaseRisk = evaluated?.release_risk_summary || workbench?.readiness?.release_risk_summary || {};
+        const devices = Array.isArray(workbench?.scope_candidates?.devices) ? workbench.scope_candidates.devices : [];
+        const buyers = Array.isArray(workbench?.scope_candidates?.buyers) ? workbench.scope_candidates.buyers : [];
+        const latestRelease = workbench?.latest_release || null;
+        const initialDevices = (recommended.target_devices || []).join(', ');
+        const initialBuyers = (recommended.target_buyers || []).join(', ');
+        return `
+          <div class="release-workbench" data-release-model="${esc(workbench?.model?.id || '')}">
+            <div class="approval-workbench-grid">
+              <article class="metric-card">
+                <h4>发布对象</h4>
+                <p class="metric">${esc(capability.task_label || capability.task_type || '-')}</p>
+                <span>${esc(workbench?.model?.model_code || '-')} : ${esc(workbench?.model?.version || '-')}</span>
+              </article>
+              <article class="metric-card">
+                <h4>设备范围</h4>
+                <p class="metric">${esc(String((recommended.target_devices || []).length || 0))}</p>
+                <span>${esc(latestRelease ? '优先继承最近一次发布范围' : '默认取在线设备和可见买家')}</span>
+              </article>
+              <article class="metric-card">
+                <h4>发布前评估</h4>
+                <p class="metric">${esc(releaseRisk.decision || '-')}</p>
+                <span>${esc(releaseRisk.summary || '先填写交付范围后做评估')}</span>
+              </article>
+            </div>
+            <div class="form-grid release-workbench-form">
+              <div class="grid-two">
+                <div class="form-grid">
+                  <label>target_devices(目标设备，逗号分隔)</label>
+                  <input id="releaseTargetDevices" value="${esc(initialDevices)}" list="releaseDevicesDatalist" placeholder="edge-01" />
+                  <label>target_buyers(目标买家，tenant_code，逗号分隔)</label>
+                  <input id="releaseTargetBuyers" value="${esc(initialBuyers)}" list="releaseBuyersDatalist" placeholder="buyer-demo-001" />
+                  <datalist id="releaseDevicesDatalist">
+                    ${devices.map((row) => `<option value="${esc(row.code)}">${esc(row.name || row.code)}</option>`).join('')}
+                  </datalist>
+                  <datalist id="releaseBuyersDatalist">
+                    ${buyers.map((row) => `<option value="${esc(row.tenant_code)}">${esc(row.name || row.tenant_code)}</option>`).join('')}
+                  </datalist>
+                </div>
+                <div class="form-grid">
+                  <label>delivery_mode(交付方式)</label>
+                  <select id="releaseDeliveryMode">
+                    <option value="local_key" ${recommended.delivery_mode === 'local_key' ? 'selected' : ''}>本地解密</option>
+                    <option value="api" ${recommended.delivery_mode === 'api' ? 'selected' : ''}>API</option>
+                    <option value="hybrid" ${recommended.delivery_mode === 'hybrid' ? 'selected' : ''}>混合</option>
+                  </select>
+                  <label>authorization_mode(授权方式)</label>
+                  <select id="releaseAuthorizationMode">
+                    <option value="device_key" ${recommended.authorization_mode === 'device_key' ? 'selected' : ''}>device_key</option>
+                    <option value="api_token" ${recommended.authorization_mode === 'api_token' ? 'selected' : ''}>api_token</option>
+                    <option value="hybrid" ${recommended.authorization_mode === 'hybrid' ? 'selected' : ''}>hybrid</option>
+                  </select>
+                  <label>local_key_label(本地密钥标签，可选)</label>
+                  <input id="releaseLocalKeyLabel" value="${esc(recommended.local_key_label || '')}" placeholder="edge/keys/model_decrypt.key" />
+                  <label>api_access_key_label(API 密钥标签，可选)</label>
+                  <input id="releaseApiKeyLabel" value="${esc(recommended.api_access_key_label || '')}" placeholder="vh_api" />
+                </div>
+              </div>
+              <label class="checkbox-row"><input id="releaseRuntimeEncryption" type="checkbox" ${recommended.runtime_encryption === false ? '' : 'checked'} /> 启用运行时解密</label>
+              <div class="hint">推荐直接从下拉候选里选设备和买家。系统会自动检查交付方式、授权方式和解密要求是否匹配。</div>
+              <div id="releaseWorkbenchMsg" class="hint"></div>
+              <div class="row-actions">
+                <button class="ghost" type="button" data-release-evaluate>先做发布评估</button>
+                <button class="primary" type="button" data-release-confirm ${releaseRisk.can_release ? '' : 'disabled'}>确认发布</button>
+              </div>
+            </div>
+            <div class="readiness-section">
+              <div class="readiness-head">
+                <strong>发布风险摘要</strong>
+                <span class="badge">${esc(releaseRisk.decision || '-')}</span>
+              </div>
+              <p>${esc(releaseRisk.summary || '填写参数后点“先做发布评估”')}</p>
+              <div class="readiness-counts">
+                <span>阻断 ${esc(releaseRisk?.counts?.blocker_count ?? 0)}</span>
+                <span>提醒 ${esc(releaseRisk?.counts?.warning_count ?? 0)}</span>
+                <span>通过 ${esc(releaseRisk?.counts?.ok_count ?? 0)}</span>
+              </div>
+              ${Array.isArray(releaseRisk?.checks) && releaseRisk.checks.length ? `
+                <ul class="readiness-checklist">
+                  ${releaseRisk.checks.map((item) => `
+                    <li class="readiness-check ${esc(item.status || 'warning')}">
+                      <strong>${esc(item.label || item.code || '-')}</strong>
+                      <span>${esc(item.reason || '-')}</span>
+                    </li>
+                  `).join('')}
+                </ul>
+              ` : ''}
+            </div>
+          </div>
+        `;
+      }
+
       async function openModelTimeline(modelId) {
         activeModelId = modelId;
         timelineWrap.innerHTML = renderLoading('加载模型时间线...');
@@ -1611,6 +1930,186 @@ function pageModels(route, rawCtx) {
           return rendered;
         } catch (error) {
           readinessWrap.innerHTML = renderError(error.message || '模型评估加载失败');
+          throw error;
+        }
+      }
+
+      async function openModelApprovalWorkbench(modelId) {
+        if (!approvalWorkbenchWrap) return null;
+        activeApprovalModelId = modelId;
+        approvalWorkbenchWrap.innerHTML = renderLoading('加载审批工作台...');
+        try {
+          const workbench = await ctx.get(`/models/${modelId}/approval-workbench`);
+          approvalWorkbenchWrap.innerHTML = renderApprovalWorkbenchPanel(workbench);
+          const workbenchMsg = approvalWorkbenchWrap.querySelector('#approvalWorkbenchMsg');
+          const taskTypeInput = approvalWorkbenchWrap.querySelector('#approvalTaskType');
+          const deviceCodeInput = approvalWorkbenchWrap.querySelector('#approvalDeviceCode');
+          const collectSelectedAssetIds = () => Array.from(
+            approvalWorkbenchWrap.querySelectorAll('[data-approval-asset]:checked'),
+          ).map((node) => node.value).filter(Boolean);
+
+          approvalWorkbenchWrap.querySelector('[data-approval-select-all]')?.addEventListener('click', () => {
+            approvalWorkbenchWrap.querySelectorAll('[data-approval-asset]').forEach((input) => {
+              input.checked = true;
+            });
+          });
+          approvalWorkbenchWrap.querySelector('[data-approval-refresh]')?.addEventListener('click', async () => {
+            await openModelApprovalWorkbench(modelId);
+          });
+          approvalWorkbenchWrap.querySelectorAll('[data-open-validation-result]').forEach((button) => {
+            button.addEventListener('click', () => {
+              const taskId = button.getAttribute('data-open-validation-result');
+              if (taskId) ctx.navigate(`results/task/${taskId}`);
+            });
+          });
+          approvalWorkbenchWrap.querySelector('[data-approval-create-tasks]')?.addEventListener('click', async () => {
+            const assetIds = collectSelectedAssetIds();
+            if (!assetIds.length) {
+              ctx.toast('先勾选至少一个建议样本', 'error');
+              return;
+            }
+            const taskType = String(taskTypeInput?.value || workbench?.recommended_task_type || '').trim();
+            const deviceCode = String(deviceCodeInput?.value || workbench?.recommended_device_code || 'edge-01').trim();
+            const createButton = approvalWorkbenchWrap.querySelector('[data-approval-create-tasks]');
+            createButton.disabled = true;
+            if (workbenchMsg) workbenchMsg.textContent = `正在创建 ${assetIds.length} 条验证任务...`;
+            try {
+              for (const assetId of assetIds) {
+                await ctx.post('/tasks/create', {
+                  asset_id: assetId,
+                  model_id: modelId,
+                  task_type: taskType || workbench?.capability?.task_type || '',
+                  device_code: deviceCode || 'edge-01',
+                  use_master_scheduler: false,
+                  intent_text: workbench?.capability?.task_label || workbench?.capability?.task_type || '',
+                });
+              }
+              ctx.toast(`已创建 ${assetIds.length} 条验证任务`);
+              await openModelApprovalWorkbench(modelId);
+            } catch (error) {
+              if (workbenchMsg) workbenchMsg.textContent = error.message || '创建验证任务失败';
+              ctx.toast(error.message || '创建验证任务失败', 'error');
+            } finally {
+              createButton.disabled = false;
+            }
+          });
+          approvalWorkbenchWrap.querySelector('[data-approval-approve]')?.addEventListener('click', async () => {
+            const readiness = workbench?.readiness?.validation_report || {};
+            if (!readiness.can_approve) {
+              ctx.toast(readiness.summary || '当前仍有阻断项，不能审批', 'error');
+              return;
+            }
+            const validationAssetIds = Array.from(new Set(
+              (workbench?.recent_validation_tasks || [])
+                .filter((row) => row.status === 'SUCCEEDED' && row.asset_id)
+                .map((row) => row.asset_id),
+            ));
+            if (!validationAssetIds.length) {
+              ctx.toast('至少需要一条成功的运行验证样本后再审批', 'error');
+              return;
+            }
+            const summaryInput = approvalWorkbenchWrap.querySelector('#approvalSummaryInput');
+            const validationSummary = String(summaryInput?.value || '').trim() || buildWorkbenchApprovalSummary(workbench, validationAssetIds);
+            const approveButton = approvalWorkbenchWrap.querySelector('[data-approval-approve]');
+            approveButton.disabled = true;
+            if (workbenchMsg) workbenchMsg.textContent = '正在提交审批...';
+            try {
+              await ctx.post('/models/approve', {
+                model_id: modelId,
+                validation_asset_ids: validationAssetIds,
+                validation_result: 'passed',
+                validation_summary: validationSummary,
+              });
+              ctx.toast('模型已审批通过');
+              await loadModels();
+              await openModelTimeline(modelId);
+              await openModelReadiness(modelId);
+              await openModelApprovalWorkbench(modelId);
+              if (canRelease) {
+                await openModelReleaseWorkbench(modelId);
+              }
+            } catch (error) {
+              if (workbenchMsg) workbenchMsg.textContent = error.message || '审批失败';
+              ctx.toast(error.message || '审批失败', 'error');
+            } finally {
+              approveButton.disabled = false;
+            }
+          });
+          return workbench;
+        } catch (error) {
+          approvalWorkbenchWrap.innerHTML = renderError(error.message || '审批工作台加载失败');
+          throw error;
+        }
+      }
+
+      async function openModelReleaseWorkbench(modelId, releasePayload = null) {
+        if (!releaseWorkbenchWrap) return null;
+        activeReleaseModelId = modelId;
+        releaseWorkbenchWrap.innerHTML = renderLoading('加载发布工作台...');
+        try {
+          const workbench = await ctx.get(`/models/${modelId}/release-workbench`);
+          let evaluated = null;
+          if (releasePayload) {
+            evaluated = await ctx.post('/models/release-readiness', releasePayload);
+          }
+          releaseWorkbenchWrap.innerHTML = renderReleaseWorkbenchPanel(workbench, evaluated);
+          const msg = releaseWorkbenchWrap.querySelector('#releaseWorkbenchMsg');
+          const collectPayload = () => {
+            const targetDevices = splitCsv(releaseWorkbenchWrap.querySelector('#releaseTargetDevices')?.value || '');
+            const targetBuyers = splitCsv(releaseWorkbenchWrap.querySelector('#releaseTargetBuyers')?.value || '');
+            const deliveryMode = String(releaseWorkbenchWrap.querySelector('#releaseDeliveryMode')?.value || 'local_key').trim();
+            const authorizationMode = String(releaseWorkbenchWrap.querySelector('#releaseAuthorizationMode')?.value || 'device_key').trim();
+            const runtimeEncryption = Boolean(releaseWorkbenchWrap.querySelector('#releaseRuntimeEncryption')?.checked);
+            const localKeyLabel = String(releaseWorkbenchWrap.querySelector('#releaseLocalKeyLabel')?.value || '').trim() || null;
+            const apiAccessKeyLabel = String(releaseWorkbenchWrap.querySelector('#releaseApiKeyLabel')?.value || '').trim() || null;
+            return {
+              model_id: modelId,
+              target_devices: targetDevices,
+              target_buyers: targetBuyers,
+              delivery_mode: deliveryMode,
+              authorization_mode: authorizationMode,
+              runtime_encryption: runtimeEncryption,
+              local_key_label: localKeyLabel,
+              api_access_key_label: apiAccessKeyLabel,
+            };
+          };
+          releaseWorkbenchWrap.querySelector('[data-release-evaluate]')?.addEventListener('click', async () => {
+            const payload = collectPayload();
+            const button = releaseWorkbenchWrap.querySelector('[data-release-evaluate]');
+            button.disabled = true;
+            if (msg) msg.textContent = '正在执行发布前评估...';
+            try {
+              await openModelReadiness(modelId, payload);
+              await openModelReleaseWorkbench(modelId, payload);
+            } catch (error) {
+              if (msg) msg.textContent = error.message || '发布前评估失败';
+              ctx.toast(error.message || '发布前评估失败', 'error');
+            } finally {
+              button.disabled = false;
+            }
+          });
+          releaseWorkbenchWrap.querySelector('[data-release-confirm]')?.addEventListener('click', async () => {
+            const payload = collectPayload();
+            const button = releaseWorkbenchWrap.querySelector('[data-release-confirm]');
+            button.disabled = true;
+            if (msg) msg.textContent = '正在发布模型...';
+            try {
+              await ctx.post('/models/release', payload);
+              ctx.toast('模型已发布');
+              await loadModels();
+              await openModelTimeline(modelId);
+              await openModelReadiness(modelId, payload);
+              await openModelReleaseWorkbench(modelId, payload);
+            } catch (error) {
+              if (msg) msg.textContent = error.message || '模型发布失败';
+              ctx.toast(error.message || '模型发布失败', 'error');
+            } finally {
+              button.disabled = false;
+            }
+          });
+          return workbench;
+        } catch (error) {
+          releaseWorkbenchWrap.innerHTML = renderError(error.message || '发布工作台加载失败');
           throw error;
         }
       }
@@ -1695,8 +2194,8 @@ function pageModels(route, rawCtx) {
                               <details class="inline-details">
                                 <summary>更多操作</summary>
                                 <div class="details-panel action-panel">
-                                  ${canApprove && row.status === 'SUBMITTED' ? `<button class="ghost" data-model-approve="${esc(row.id)}">审批通过</button>` : ''}
-                                  ${canRelease && ['APPROVED', 'RELEASED'].includes(row.status) ? `<button class="ghost" data-model-release="${esc(row.id)}">发布</button>` : ''}
+                                  ${canApprove && row.status === 'SUBMITTED' ? `<button class="ghost" data-model-approve="${esc(row.id)}">审批工作台</button>` : ''}
+                                  ${canRelease && ['APPROVED', 'RELEASED'].includes(row.status) ? `<button class="ghost" data-model-release="${esc(row.id)}">发布工作台</button>` : ''}
                                 </div>
                               </details>
                             `
@@ -1732,25 +2231,11 @@ function pageModels(route, rawCtx) {
           btn.addEventListener('click', async () => {
             const modelId = btn.getAttribute('data-model-approve');
             try {
-              const readiness = await openModelReadiness(modelId);
-              if (!readiness?.validation_report?.can_approve) {
-                ctx.toast(readiness?.validation_report?.summary || '自动验证未通过，不能审批', 'error');
-                return;
-              }
-              const suggestedSummary = readiness?.validation_report?.summary || '自动验证通过';
-              const validationSummary = window.prompt('审批说明（可空）', suggestedSummary);
-              await ctx.post('/models/approve', {
-                model_id: modelId,
-                validation_asset_ids: readiness?.validation_report?.validation_asset_ids || [],
-                validation_result: 'passed',
-                validation_summary: validationSummary || suggestedSummary,
-              });
-              ctx.toast('模型已审批通过');
-              await loadModels();
-              await openModelTimeline(modelId);
               await openModelReadiness(modelId);
+              await openModelApprovalWorkbench(modelId);
+              approvalWorkbenchWrap?.scrollIntoView({ block: 'center', behavior: 'smooth' });
             } catch (error) {
-              ctx.toast(error.message, 'error');
+              ctx.toast(error.message || '审批工作台加载失败', 'error');
             }
           });
         });
@@ -1758,34 +2243,11 @@ function pageModels(route, rawCtx) {
         modelsWrap.querySelectorAll('[data-model-release]').forEach((btn) => {
           btn.addEventListener('click', async () => {
             const modelId = btn.getAttribute('data-model-release');
-            const targetDevices = splitCsv(window.prompt('目标设备（逗号分隔，可空）', 'edge-01'));
-            const targetBuyers = splitCsv(window.prompt('目标买家 tenant_code（逗号分隔，可空）', 'buyer-demo-001'));
             try {
-              const releasePayload = {
-                model_id: modelId,
-                target_devices: targetDevices,
-                target_buyers: targetBuyers,
-                delivery_mode: 'local_key',
-                authorization_mode: 'device_key',
-                runtime_encryption: true,
-              };
-              const readiness = await openModelReadiness(modelId, releasePayload);
-              const releaseRisk = readiness?.release_risk_summary || {};
-              if (!releaseRisk.can_release) {
-                ctx.toast(releaseRisk.summary || '发布前评估未通过', 'error');
-                return;
-              }
-              const confirmRelease = window.confirm(
-                `${releaseRisk.summary || '发布前评估通过'}${Number(releaseRisk?.counts?.warning_count || 0) > 0 ? `\n仍有 ${releaseRisk.counts.warning_count} 个提醒项，确认继续发布？` : '\n确认立即发布？'}`
-              );
-              if (!confirmRelease) return;
-              await ctx.post('/models/release', releasePayload);
-              ctx.toast('模型已发布');
-              await loadModels();
-              await openModelTimeline(modelId);
-              await openModelReadiness(modelId, releasePayload);
+              await openModelReleaseWorkbench(modelId);
+              releaseWorkbenchWrap?.scrollIntoView({ block: 'center', behavior: 'smooth' });
             } catch (error) {
-              ctx.toast(error.message, 'error');
+              ctx.toast(error.message || '发布工作台加载失败', 'error');
             }
           });
         });
@@ -1810,8 +2272,20 @@ function pageModels(route, rawCtx) {
               await openModelTimeline(requestedFocusModelId);
             }
             await openModelReadiness(requestedFocusModelId);
+            if (canApprove && visibleRows.find((row) => row.id === requestedFocusModelId)?.status === 'SUBMITTED') {
+              await openModelApprovalWorkbench(requestedFocusModelId);
+            }
+            if (canRelease && ['APPROVED', 'RELEASED'].includes(visibleRows.find((row) => row.id === requestedFocusModelId)?.status || '')) {
+              await openModelReleaseWorkbench(requestedFocusModelId);
+            }
           } else if (activeModelId && visibleRows.some((row) => row.id === activeModelId)) {
             await openModelReadiness(activeModelId);
+            if (activeApprovalModelId && activeApprovalModelId === activeModelId) {
+              await openModelApprovalWorkbench(activeApprovalModelId);
+            }
+            if (activeReleaseModelId && activeReleaseModelId === activeModelId) {
+              await openModelReleaseWorkbench(activeReleaseModelId);
+            }
           }
           localStorage.removeItem(STORAGE_KEYS.focusModelId);
           localStorage.removeItem(STORAGE_KEYS.focusModelTimeline);
@@ -1829,6 +2303,42 @@ function pageModels(route, rawCtx) {
           const formData = new FormData(registerForm);
           const created = await ctx.postForm('/models/register', formData);
           registerMsg.textContent = `提交成功：${created.model_code}:${created.version}`;
+          registerResult.innerHTML = renderInfoPanel(
+            '模型提交结果',
+            [
+              { label: 'model_id', value: created.id, mono: true },
+              { label: 'model_code', value: created.model_code },
+              { label: 'version', value: created.version },
+              { label: 'status', value: enumText('model_status', created.status || 'SUBMITTED') },
+              { label: 'plugin', value: created.plugin_name || '-' },
+              { label: 'model_type', value: enumText('model_type', created.model_type || '-') },
+            ],
+            `
+              <div class="row-actions">
+                <button class="ghost" type="button" id="copyModelIdBtn">复制模型ID</button>
+                <button class="ghost" type="button" id="openModelTimelineBtn">查看时间线</button>
+                <button class="primary" type="button" id="openModelReadinessBtn">查看评估</button>
+              </div>
+            `,
+          );
+          root.querySelector('#copyModelIdBtn')?.addEventListener('click', async () => {
+            try {
+              await navigator.clipboard.writeText(String(created.id || ''));
+              ctx.toast('模型ID已复制');
+            } catch {
+              ctx.toast(`模型ID: ${created.id}`);
+            }
+          });
+          root.querySelector('#openModelTimelineBtn')?.addEventListener('click', async () => {
+            await openModelTimeline(created.id);
+          });
+          root.querySelector('#openModelReadinessBtn')?.addEventListener('click', async () => {
+            try {
+              await openModelReadiness(created.id);
+            } catch (error) {
+              ctx.toast(error.message || '模型评估失败', 'error');
+            }
+          });
           ctx.toast('模型提交成功');
           registerForm.reset();
           await loadModels();
@@ -1984,6 +2494,7 @@ function pageTraining(route, rawCtx) {
                   <p class="hint">选择要执行训练的机器。可按 worker_code、host 或 IP 精确派发到指定节点。</p>
                   <div class="section-toolbar compact">
                     <input id="trainingWorkerSearch" placeholder="搜索 worker_code / host / 状态" />
+                    <label class="checkbox-row"><input id="trainingWorkerShowHistory" type="checkbox" /> 显示历史异常</label>
                     <div id="trainingWorkerMeta" class="hint"></div>
                   </div>
                   <div id="trainingWorkerPool">${renderLoading('加载训练机...')}</div>
@@ -2076,6 +2587,7 @@ function pageTraining(route, rawCtx) {
       const trainingModelSearch = root.querySelector('#trainingModelSearch');
       const trainingModelMeta = root.querySelector('#trainingModelMeta');
       const trainingWorkerSearch = root.querySelector('#trainingWorkerSearch');
+      const trainingWorkerShowHistory = root.querySelector('#trainingWorkerShowHistory');
       const trainingWorkerMeta = root.querySelector('#trainingWorkerMeta');
       const trainingDatasetSearch = root.querySelector('#trainingDatasetSearch');
       const trainingDatasetPurposeFilter = root.querySelector('#trainingDatasetPurposeFilter');
@@ -2114,6 +2626,7 @@ function pageTraining(route, rawCtx) {
       const trainingLibraryFilters = {
         modelQuery: '',
         workerQuery: '',
+        workerShowHistory: false,
         datasetQuery: '',
         datasetPurpose: '',
         datasetRecommendedOnly: false,
@@ -2125,7 +2638,7 @@ function pageTraining(route, rawCtx) {
         if (validationAssetIdsInput && prefillTrainingValidationAssetIds) validationAssetIdsInput.value = prefillTrainingValidationAssetIds;
         if (targetModelCodeInput && prefillTrainingTargetModelCode) targetModelCodeInput.value = prefillTrainingTargetModelCode;
         if (createMsg) {
-          createMsg.textContent = `已预填 OCR 文本训练资产：train ${prefillTrainingAssetIds || '-'} / validation ${prefillTrainingValidationAssetIds || '-'}${prefillTrainingDatasetLabel ? ` · ${prefillTrainingDatasetLabel}` : ''}${prefillTrainingDatasetVersionId ? ` · ${prefillTrainingDatasetVersionId}` : ''}`;
+          createMsg.textContent = `已预填 OCR 文本训练资产：train ${prefillTrainingAssetIds || '-'} / validation ${prefillTrainingValidationAssetIds || '-'}${prefillTrainingDatasetLabel ? ` · ${prefillTrainingDatasetLabel}` : ''}${prefillTrainingDatasetVersionId ? ` · ${prefillTrainingDatasetVersionId}` : ''}。这一步还没有创建训练作业，确认参数后请点击“创建训练作业”。`;
         }
         localStorage.removeItem(STORAGE_KEYS.prefillTrainingAssetIds);
         localStorage.removeItem(STORAGE_KEYS.prefillTrainingValidationAssetIds);
@@ -2318,7 +2831,13 @@ function pageTraining(route, rawCtx) {
                     ? `<button class="primary" type="button" data-open-candidate-model="${esc(candidateModel.id)}">查看候选模型</button>`
                     : ''
                 }
-                ${canCreateTask ? '<button class="ghost" type="button" data-go-training-task>去任务中心做验证</button>' : ''}
+                ${
+                  canCreateTask && candidateModel?.id
+                    ? '<button class="ghost" type="button" data-create-candidate-validation>去任务中心验证候选模型</button>'
+                    : canCreateTask
+                      ? '<button class="ghost" type="button" data-go-training-task>去任务中心</button>'
+                      : ''
+                }
               </div>
             </section>
             <div class="keyvals">
@@ -2427,6 +2946,7 @@ function pageTraining(route, rawCtx) {
                 <span>目标版本：${esc(`${job.target_model_code}:${job.target_version}`)}</span>
                 <span>训练资产：${esc(trainRefs.length ? trainRefs.map((row) => row.version ? `${row.version.dataset_label}:${row.version.version}` : row.asset?.file_name || row.assetId).join(' / ') : '未绑定')}</span>
                 <span>验证资产：${esc(validationRefs.length ? validationRefs.map((row) => row.version ? `${row.version.dataset_label}:${row.version.version}` : row.asset?.file_name || row.assetId).join(' / ') : '未绑定')}</span>
+                ${candidateModel?.id ? '<span>下一步：候选模型已回收后，可点上方“去任务中心验证候选模型”，任务页会自动预填模型/任务类型/设备，但仍需选择一张单图或视频资产；训练用 ZIP 数据集不能直接做在线验证。</span>' : '<span>下一步：候选模型回收后，任务页可直接拿候选模型做验证。</span>'}
                 ${job.error_message ? `<span>错误摘要：${esc(job.error_message)}</span>` : '<span>错误摘要：无</span>'}
               </section>
             </div>
@@ -2459,6 +2979,21 @@ function pageTraining(route, rawCtx) {
           ctx.navigate('models');
         });
         trainingRunSummaryWrap.querySelector('[data-go-training-task]')?.addEventListener('click', () => {
+          ctx.navigate('tasks');
+        });
+        trainingRunSummaryWrap.querySelector('[data-create-candidate-validation]')?.addEventListener('click', () => {
+          if (!candidateModel?.id) return;
+          localStorage.setItem(STORAGE_KEYS.prefillTaskModelId, candidateModel.id);
+          localStorage.setItem(STORAGE_KEYS.prefillTaskType, job.target_model_code || 'car_number_ocr');
+          localStorage.setItem(
+            STORAGE_KEYS.prefillTaskDeviceCode,
+            job.assigned_worker_code ? 'edge-01' : (job.worker_selector?.hosts?.[0] || job.worker_selector?.host || 'edge-01'),
+          );
+          localStorage.removeItem(STORAGE_KEYS.prefillTaskAssetId);
+          localStorage.setItem(
+            STORAGE_KEYS.prefillTaskHint,
+            `已预填候选模型 ${candidateModel.model_code}:${candidateModel.version}。下一步请选择一张单图/视频资产做在线验证；训练/验证 ZIP 数据集不能直接作为任务输入。`,
+          );
           ctx.navigate('tasks');
         });
       }
@@ -2594,12 +3129,16 @@ function pageTraining(route, rawCtx) {
             renderTrainingRuntimeAlerts();
             return;
           }
+          const activeRows = rows.filter((row) => row.status === 'ACTIVE');
+          const archivedRows = rows.filter((row) => row.status !== 'ACTIVE');
+          const visibleRows = trainingLibraryFilters.workerShowHistory ? rows : activeRows;
           workersWrap.innerHTML = `
+            <div class="hint">默认仅展示活跃 Worker。历史异常/失联记录 ${archivedRows.length} 条，可在训练机池里勾选“显示历史异常”查看。</div>
             <div class="table-wrap">
               <table class="table">
                 <thead><tr><th>worker_code(Worker 编码)</th><th>alert(告警)</th><th>status(状态)</th><th>host(主机)</th><th>outstanding(待处理)</th><th>last_seen(最近心跳)</th><th>resources(资源)</th><th>操作</th></tr></thead>
                 <tbody>
-                  ${rows.map((row) => `
+                  ${visibleRows.map((row) => `
                     <tr>
                       <td class="mono">${esc(row.worker_code)}</td>
                       <td>${row.alert_level ? `<span class="badge">${esc(row.alert_level)}</span>` : '-'}</td>
@@ -2614,6 +3153,7 @@ function pageTraining(route, rawCtx) {
                 </tbody>
               </table>
             </div>
+            ${!visibleRows.length && archivedRows.length ? renderEmpty('当前没有活跃 Worker；如需排查历史失联节点，请勾选“显示历史异常”') : ''}
           `;
           if (workerCodesDatalist) {
             workerCodesDatalist.innerHTML = rows.map((row) => `<option value="${esc(row.worker_code)}">${esc(row.name || row.worker_code)}</option>`).join('');
@@ -2779,7 +3319,10 @@ function pageTraining(route, rawCtx) {
           return;
         }
         const q = String(trainingLibraryFilters.workerQuery || '').trim().toLowerCase();
-        const filteredWorkers = [...assistWorkers].filter((row) => {
+        const visibleSource = trainingLibraryFilters.workerShowHistory
+          ? [...assistWorkers]
+          : assistWorkers.filter((row) => row.status === 'ACTIVE');
+        const filteredWorkers = visibleSource.filter((row) => {
           if (!q) return true;
           const haystack = [
             row.worker_code,
@@ -2792,9 +3335,15 @@ function pageTraining(route, rawCtx) {
             .join(' ');
           return haystack.includes(q);
         });
-        if (trainingWorkerMeta) trainingWorkerMeta.textContent = `显示 ${filteredWorkers.length} / ${assistWorkers.length} 台训练机`;
+        if (trainingWorkerMeta) {
+          const activeCount = assistWorkers.filter((row) => row.status === 'ACTIVE').length;
+          const archivedCount = assistWorkers.length - activeCount;
+          trainingWorkerMeta.textContent = trainingLibraryFilters.workerShowHistory
+            ? `显示 ${filteredWorkers.length} / ${assistWorkers.length} 台训练机（活跃 ${activeCount} / 历史异常 ${archivedCount}）`
+            : `显示 ${filteredWorkers.length} / ${activeCount} 台活跃训练机（历史异常 ${archivedCount} 已折叠）`;
+        }
         if (!filteredWorkers.length) {
-          workerPool.innerHTML = renderEmpty('当前筛选条件下没有训练机');
+          workerPool.innerHTML = renderEmpty(trainingLibraryFilters.workerShowHistory ? '当前筛选条件下没有训练机' : '当前没有活跃训练机；可勾选“显示历史异常”查看失联节点');
           return;
         }
         const sorted = [...filteredWorkers].sort((left, right) => {
@@ -3426,6 +3975,11 @@ function pageTraining(route, rawCtx) {
         trainingLibraryFilters.workerQuery = trainingWorkerSearch.value || '';
         renderWorkerPool();
       });
+      trainingWorkerShowHistory?.addEventListener('change', () => {
+        trainingLibraryFilters.workerShowHistory = trainingWorkerShowHistory.checked;
+        renderWorkerPool();
+        loadWorkers();
+      });
       trainingDatasetSearch?.addEventListener('input', () => {
         trainingLibraryFilters.datasetQuery = trainingDatasetSearch.value || '';
         renderDatasetVersionLibrary();
@@ -3480,9 +4034,9 @@ function pageCarNumberLabeling(route, rawCtx) {
         <div class="row-actions review-toolbar">
           <label class="checkbox-row"><input id="carNumberAllowSuggestionsExport" type="checkbox" /> 导出时允许建议值补空</label>
           <button id="exportCarNumberTextDataset" class="ghost" type="button">导出 OCR 文本训练包</button>
-          <button id="exportCarNumberTextAssets" class="primary" type="button">导出并送训练中心</button>
-          <button id="exportCarNumberTrainingJob" class="ghost" type="button">导出并创建训练作业</button>
-          <span class="hint">快捷键：<code>Ctrl/Cmd+S</code> 保存，<code>Alt+↑/↓</code> 切换上一条/下一条</span>
+          <button id="exportCarNumberTextAssets" class="primary" type="button">导出训练资产并打开训练页</button>
+          <button id="exportCarNumberTrainingJob" class="ghost" type="button">导出训练资产并直接创建训练作业</button>
+          <span class="hint">快捷键：<code>Ctrl/Cmd+S</code> 保存，<code>Alt+↑/↓</code> 切换上一条/下一条。前者只预填训练页，不会自动创建作业。</span>
         </div>
         <div id="carNumberLabelingExportMsg" class="hint"></div>
         <div id="carNumberLabelingSummaryWrap">${renderLoading('加载复核摘要...')}</div>
@@ -3830,7 +4384,7 @@ function pageCarNumberLabeling(route, rawCtx) {
         exportBtn.disabled = true;
         exportAssetsBtn.disabled = true;
         if (exportTrainingJobBtn) exportTrainingJobBtn.disabled = true;
-        exportMsg.textContent = '正在导出并注册训练/验证资产...';
+        exportMsg.textContent = '正在导出并注册训练/验证资产，随后打开训练页...';
         try {
           const payload = await ctx.post('/training/car-number-labeling/export-text-assets', {
             allow_suggestions: !!exportAllowSuggestionsInput?.checked,
@@ -3841,8 +4395,8 @@ function pageCarNumberLabeling(route, rawCtx) {
           if (prefill.dataset_label) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetLabel, prefill.dataset_label);
           if (prefill.training_dataset_version_id) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetVersionId, prefill.training_dataset_version_id);
           if (prefill.intended_model_code) localStorage.setItem(STORAGE_KEYS.prefillTrainingTargetModelCode, prefill.intended_model_code);
-          exportMsg.textContent = `已注册训练资产 ${payload?.training_asset?.asset_id || '-'} / 验证资产 ${payload?.validation_asset?.asset_id || '-'}，即将跳转训练中心。`;
-          ctx.toast('OCR 文本训练资产已送入训练中心');
+          exportMsg.textContent = `已注册训练资产 ${payload?.training_asset?.asset_id || '-'} / 验证资产 ${payload?.validation_asset?.asset_id || '-'}。训练页已预填这些资产，但还需要你手动点“创建训练作业”。`;
+          ctx.toast('训练资产已导出，训练页已预填');
           ctx.navigate('training');
         } catch (error) {
           exportMsg.textContent = error.message || '注册训练资产失败';
@@ -3859,7 +4413,7 @@ function pageCarNumberLabeling(route, rawCtx) {
         exportBtn.disabled = true;
         if (exportAssetsBtn) exportAssetsBtn.disabled = true;
         exportTrainingJobBtn.disabled = true;
-        exportMsg.textContent = '正在导出资产并创建 car_number_ocr 训练作业...';
+          exportMsg.textContent = '正在导出资产并直接创建 car_number_ocr 训练作业...';
         try {
           const payload = await ctx.post('/training/car-number-labeling/export-text-training-job', {
             allow_suggestions: !!exportAllowSuggestionsInput?.checked,
@@ -4160,6 +4714,7 @@ function pageTasks(route, rawCtx) {
           <label>intent_text(意图描述)</label>
           <input name="intent_text" placeholder="例如：优先识别车号" />
           <label class="checkbox-row"><input type="checkbox" name="use_master_scheduler" /> 启用主调度器自动选模</label>
+          <div class="hint">如果你已经明确知道要用哪一版模型，建议直接从下方“可选模型”里点选，避免手输 model_id。</div>
           <datalist id="taskAssetsDatalist"></datalist>
           <datalist id="taskPipelinesDatalist"></datalist>
           <datalist id="taskModelsDatalist"></datalist>
@@ -4170,6 +4725,14 @@ function pageTasks(route, rawCtx) {
           <h3>创建结果</h3>
           <div id="taskCreateResult">${renderEmpty('创建成功后会显示 task_id，并提供结果页直达入口')}</div>
         </section>
+      </section>
+      <section class="card">
+        <h3>可选模型</h3>
+        <div class="section-toolbar compact">
+          <input id="taskModelSearch" placeholder="搜索 model_code / version / task_type / 来源" />
+          <div id="taskModelMeta" class="hint"></div>
+        </div>
+        <div id="taskModelLibrary">${renderLoading('加载可选模型...')}</div>
       </section>
       <section class="card">
         <h3>任务列表</h3>
@@ -4194,6 +4757,9 @@ function pageTasks(route, rawCtx) {
       const assetsDatalist = root.querySelector('#taskAssetsDatalist');
       const pipelinesDatalist = root.querySelector('#taskPipelinesDatalist');
       const modelsDatalist = root.querySelector('#taskModelsDatalist');
+      const taskModelSearch = root.querySelector('#taskModelSearch');
+      const taskModelMeta = root.querySelector('#taskModelMeta');
+      const taskModelLibrary = root.querySelector('#taskModelLibrary');
       let quickPreviewUrl = '';
       let quickResultScreenshotUrls = [];
       let quickAssetPreviewUrls = [];
@@ -4202,6 +4768,8 @@ function pageTasks(route, rawCtx) {
       let quickDatasetExport = null;
       let quickPreflightOutcomes = [];
       let assistAssets = [];
+      let assistModels = [];
+      let taskModelQuery = '';
 
       function revokeQuickUrls() {
         if (quickPreviewUrl) {
@@ -4517,6 +5085,30 @@ function pageTasks(route, rawCtx) {
         if (assetInput) assetInput.value = prefillAsset;
         localStorage.removeItem(STORAGE_KEYS.prefillAssetId);
       }
+      const prefillTaskModelId = localStorage.getItem(STORAGE_KEYS.prefillTaskModelId);
+      const prefillTaskAssetId = localStorage.getItem(STORAGE_KEYS.prefillTaskAssetId);
+      const prefillTaskType = localStorage.getItem(STORAGE_KEYS.prefillTaskType);
+      const prefillTaskDeviceCode = localStorage.getItem(STORAGE_KEYS.prefillTaskDeviceCode);
+      const prefillTaskHint = localStorage.getItem(STORAGE_KEYS.prefillTaskHint);
+      if (createForm && (prefillTaskModelId || prefillTaskAssetId || prefillTaskType || prefillTaskDeviceCode || prefillTaskHint)) {
+        const modelInput = createForm.querySelector('input[name="model_id"]');
+        const assetInput = createForm.querySelector('input[name="asset_id"]');
+        const taskTypeInput = createForm.querySelector('input[name="task_type"]');
+        const deviceCodeInput = createForm.querySelector('input[name="device_code"]');
+        if (modelInput && prefillTaskModelId) modelInput.value = prefillTaskModelId;
+        if (assetInput && prefillTaskAssetId) assetInput.value = prefillTaskAssetId;
+        if (taskTypeInput && prefillTaskType) taskTypeInput.value = prefillTaskType;
+        if (deviceCodeInput && prefillTaskDeviceCode) deviceCodeInput.value = prefillTaskDeviceCode;
+        if (createMsg) {
+          createMsg.textContent = prefillTaskHint
+            || `已预填验证任务：model ${prefillTaskModelId || '-'} · task_type ${prefillTaskType || '-'} · device ${prefillTaskDeviceCode || '-'}`;
+        }
+        localStorage.removeItem(STORAGE_KEYS.prefillTaskModelId);
+        localStorage.removeItem(STORAGE_KEYS.prefillTaskAssetId);
+        localStorage.removeItem(STORAGE_KEYS.prefillTaskType);
+        localStorage.removeItem(STORAGE_KEYS.prefillTaskDeviceCode);
+        localStorage.removeItem(STORAGE_KEYS.prefillTaskHint);
+      }
       const quickPrefillAsset = localStorage.getItem(STORAGE_KEYS.quickDetectAssetId);
       if (quickPrefillAsset && quickDetectAssetInput) {
         quickDetectAssetInput.value = quickPrefillAsset;
@@ -4534,12 +5126,103 @@ function pageTasks(route, rawCtx) {
           ]);
           assistAssets = filterBusinessAssets(assets || []);
           const visibleModels = filterBusinessModels(models || []);
+          assistModels = visibleModels;
           assetsDatalist.innerHTML = assistAssets.map((row) => `<option value="${esc(row.id)}">${esc(row.file_name)}</option>`).join('');
           pipelinesDatalist.innerHTML = (pipelines || []).map((row) => `<option value="${esc(row.id)}">${esc(row.pipeline_code)}:${esc(row.version)}</option>`).join('');
           modelsDatalist.innerHTML = visibleModels.map((row) => `<option value="${esc(row.id)}">${esc(row.model_code)}:${esc(row.version)}</option>`).join('');
+          renderTaskModelLibrary();
         } catch {
           // Ignore suggestion loading failure.
         }
+      }
+
+      function taskCreateInputs() {
+        return {
+          modelInput: createForm?.querySelector('input[name="model_id"]'),
+          taskTypeInput: createForm?.querySelector('select[name="task_type"]'),
+          schedulerInput: createForm?.querySelector('input[name="use_master_scheduler"]'),
+          intentInput: createForm?.querySelector('input[name="intent_text"]'),
+        };
+      }
+
+      function fillTaskModelSelection(modelId) {
+        const row = assistModels.find((item) => item.id === modelId);
+        const { modelInput, taskTypeInput, schedulerInput, intentInput } = taskCreateInputs();
+        if (!row || !modelInput) return;
+        modelInput.value = row.id;
+        if (taskTypeInput && row.task_type) taskTypeInput.value = row.task_type;
+        if (schedulerInput) schedulerInput.checked = false;
+        if (intentInput && !String(intentInput.value || '').trim()) {
+          intentInput.value = row.task_type === 'car_number_ocr' ? '验证候选车号模型' : `验证模型 ${row.model_code}`;
+        }
+        if (createMsg) {
+          createMsg.textContent = `已选择具体模型 ${row.model_code}:${row.version}${row.task_type ? ` · ${row.task_type}` : ''}。创建任务时将直接使用这版模型，不走主调度器。`;
+        }
+        renderTaskModelLibrary();
+      }
+
+      function renderTaskModelLibrary() {
+        if (!taskModelLibrary) return;
+        const { modelInput, taskTypeInput, schedulerInput } = taskCreateInputs();
+        const currentModelId = String(modelInput?.value || '').trim();
+        const requestedTaskType = String(taskTypeInput?.value || '').trim();
+        const q = String(taskModelQuery || '').trim().toLowerCase();
+        const filtered = assistModels
+          .filter((row) => {
+            if (!requestedTaskType || requestedTaskType === 'pipeline_orchestrated') return true;
+            return !row.task_type || row.task_type === requestedTaskType;
+          })
+          .filter((row) => {
+            if (!q) return true;
+            const haystack = [
+              row.model_code,
+              row.version,
+              row.task_type,
+              row.plugin_name,
+              row.status,
+              (row.platform_meta || {}).model_source_type,
+            ]
+              .map((item) => String(item || '').toLowerCase())
+              .join(' ');
+            return haystack.includes(q);
+          })
+          .sort((left, right) => {
+            const leftReleased = left.status === 'RELEASED' ? 1 : 0;
+            const rightReleased = right.status === 'RELEASED' ? 1 : 0;
+            if (leftReleased !== rightReleased) return rightReleased - leftReleased;
+            return String(left.model_code || '').localeCompare(String(right.model_code || '')) || String(right.version || '').localeCompare(String(left.version || ''));
+          });
+        if (taskModelMeta) {
+          taskModelMeta.textContent = `显示 ${filtered.length} / ${assistModels.length} 个模型${requestedTaskType && requestedTaskType !== 'pipeline_orchestrated' ? ` · 当前任务类型 ${requestedTaskType}` : ''}${schedulerInput?.checked ? ' · 当前已勾选主调度器' : ''}`;
+        }
+        if (!filtered.length) {
+          taskModelLibrary.innerHTML = renderEmpty('当前筛选条件下没有可直接点选的模型');
+          return;
+        }
+        taskModelLibrary.innerHTML = `
+          <div class="selection-grid">
+            ${filtered.map((row) => `
+              <article class="selection-card ${currentModelId === row.id ? 'selected' : ''}">
+                <div class="selection-card-head">
+                  <strong>${esc(row.model_code)}:${esc(row.version)}</strong>
+                  <span class="badge">${esc(enumText('model_status', row.status || '-'))}</span>
+                </div>
+                <div class="selection-card-meta">
+                  <span>task_type</span><strong>${esc(row.task_type || row.plugin_name || '-')}</strong>
+                  <span>来源</span><strong>${esc(enumText('model_source_type', (row.platform_meta || {}).model_source_type || '-'))}</strong>
+                  <span>plugin</span><strong>${esc(row.plugin_name || '-')}</strong>
+                  <span>model_id</span><strong class="mono">${esc(truncateMiddle(row.id, 8, 6))}</strong>
+                </div>
+                <div class="row-actions">
+                  <button class="primary" type="button" data-pick-task-model="${esc(row.id)}">选这版模型</button>
+                </div>
+              </article>
+            `).join('')}
+          </div>
+        `;
+        taskModelLibrary.querySelectorAll('[data-pick-task-model]').forEach((button) => {
+          button.addEventListener('click', () => fillTaskModelSelection(button.getAttribute('data-pick-task-model') || ''));
+        });
       }
 
       async function waitForQuickDetect(taskId) {
@@ -4556,6 +5239,20 @@ function pageTasks(route, rawCtx) {
           await new Promise((resolve) => window.setTimeout(resolve, 2000));
         }
         throw new Error(`快速识别超时，任务 ${taskId} 尚未产出结果`);
+      }
+
+      async function waitForTaskTerminal(taskId, { timeoutMs = 90_000 } = {}) {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+          const task = await ctx.get(`/tasks/${taskId}`);
+          const status = String(task?.status || '');
+          if (status === 'SUCCEEDED') return task;
+          if (['FAILED', 'CANCELLED'].includes(status)) {
+            throw new Error(task?.error_message || `任务执行失败：${status}`);
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 2000));
+        }
+        throw new Error(`任务 ${taskId} 执行超时，尚未产出结果`);
       }
 
       function syncQuickReviewResult(outcome, { dirty = outcome.reviewDirty } = {}) {
@@ -5543,10 +6240,26 @@ function pageTasks(route, rawCtx) {
             <div class="row-actions">
               <button class="primary" id="openTaskDetail">查看任务详情</button>
               <button class="ghost" id="openTaskResults">查看任务结果</button>
+              <button class="ghost" id="waitTaskResults">等待执行并打开结果页</button>
             </div>
           `;
           root.querySelector('#openTaskDetail')?.addEventListener('click', () => ctx.navigate(`tasks/${created.id}`));
           root.querySelector('#openTaskResults')?.addEventListener('click', () => ctx.navigate(`results/task/${created.id}`));
+          root.querySelector('#waitTaskResults')?.addEventListener('click', async (event) => {
+            const button = event.currentTarget;
+            button.disabled = true;
+            createMsg.textContent = '等待任务执行完成...';
+            try {
+              await waitForTaskTerminal(created.id);
+              createMsg.textContent = `任务 ${created.id} 已完成，正在打开结果页`;
+              ctx.navigate(`results/task/${created.id}`);
+            } catch (error) {
+              createMsg.textContent = error.message || '任务执行失败';
+              ctx.toast(error.message || '任务执行失败', 'error');
+            } finally {
+              button.disabled = false;
+            }
+          });
           localStorage.setItem(STORAGE_KEYS.lastTaskId, created.id);
           await loadTasks();
         } catch (error) {
@@ -5555,6 +6268,13 @@ function pageTasks(route, rawCtx) {
           submitBtn.disabled = false;
         }
       });
+
+      taskModelSearch?.addEventListener('input', () => {
+        taskModelQuery = taskModelSearch.value || '';
+        renderTaskModelLibrary();
+      });
+      createForm?.querySelector('select[name="task_type"]')?.addEventListener('change', renderTaskModelLibrary);
+      createForm?.querySelector('input[name="use_master_scheduler"]')?.addEventListener('change', renderTaskModelLibrary);
 
       await Promise.all([loadTasks(), loadAssistData()]);
     },
@@ -5769,7 +6489,7 @@ function pageResults(route, rawCtx) {
           <button class="primary" type="submit">查询结果</button>
           <button class="ghost" id="resultExportBtn" type="button">导出摘要</button>
         </form>
-        <div id="resultMeta" class="hint"></div>
+        <div id="resultMeta" class="hint">${esc(defaultTaskId ? '' : '训练后验证时，可从训练页点击“去任务中心验证候选模型”，再在任务创建成功后点击“等待执行并打开结果页”。')}</div>
       </section>
       <section class="card">
         <div id="resultListWrap">${defaultTaskId ? renderLoading('加载结果...') : renderEmpty('请输入 task_id 查询，或先在任务中心创建并执行任务')}</div>

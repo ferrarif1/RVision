@@ -28,6 +28,11 @@ export const STORAGE_KEYS = {
   prefillTrainingDatasetVersionId: namespacedStorageKey('prefill_training_dataset_version_id'),
   prefillTrainingTargetModelCode: namespacedStorageKey('prefill_training_target_model_code'),
   focusTrainingJobId: namespacedStorageKey('focus_training_job_id'),
+  prefillTaskModelId: namespacedStorageKey('prefill_task_model_id'),
+  prefillTaskAssetId: namespacedStorageKey('prefill_task_asset_id'),
+  prefillTaskType: namespacedStorageKey('prefill_task_type'),
+  prefillTaskDeviceCode: namespacedStorageKey('prefill_task_device_code'),
+  prefillTaskHint: namespacedStorageKey('prefill_task_hint'),
   lastTaskId: namespacedStorageKey('last_task_id'),
 };
 
@@ -47,6 +52,11 @@ const LEGACY_STORAGE_KEYS = {
   prefillTrainingDatasetVersionId: 'rv_prefill_training_dataset_version_id',
   prefillTrainingTargetModelCode: 'rv_prefill_training_target_model_code',
   focusTrainingJobId: 'rv_focus_training_job_id',
+  prefillTaskModelId: 'rv_prefill_task_model_id',
+  prefillTaskAssetId: 'rv_prefill_task_asset_id',
+  prefillTaskType: 'rv_prefill_task_type',
+  prefillTaskDeviceCode: 'rv_prefill_task_device_code',
+  prefillTaskHint: 'rv_prefill_task_hint',
   lastTaskId: 'rv_last_task_id',
 };
 
