@@ -906,6 +906,8 @@ label {
   background: #11120d;
   color: #ddd5bb;
   line-height: 1.5;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 .quick-detect-shot {
@@ -1007,13 +1009,37 @@ label {
   border-radius: 12px;
   background: #12130e;
   padding: 12px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .quick-detect-batch-head {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
+  flex-wrap: wrap;
+}
+
+.quick-detect-batch-title {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 260px;
+}
+
+.quick-detect-batch-title strong {
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.quick-detect-batch-meta {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.quick-detect-batch-meta strong {
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .quick-review-statuses {
@@ -1028,6 +1054,17 @@ label {
   gap: 12px;
   grid-template-columns: minmax(0, 1.3fr) minmax(320px, 1fr);
   align-items: start;
+}
+
+.quick-review-stage > * {
+  min-width: 0;
+}
+
+.quick-review-preview {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  align-content: start;
 }
 
 .quick-review-canvas {
@@ -1126,6 +1163,8 @@ label {
   border-radius: 12px;
   background: #10110c;
   padding: 12px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .quick-review-toolbar {
@@ -1145,11 +1184,34 @@ label {
   border-radius: 10px;
   padding: 10px;
   background: rgba(18, 19, 14, 0.92);
+  min-width: 0;
 }
 
 .quick-review-row.selected {
   border-color: rgba(244, 212, 107, 0.45);
   box-shadow: 0 0 0 1px rgba(244, 212, 107, 0.18);
+}
+
+.quick-review-row-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.quick-review-row-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+  flex: 1 1 240px;
+}
+
+.quick-review-row-summary strong {
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .quick-review-fields {
@@ -1169,6 +1231,7 @@ label {
   border-radius: 10px;
   padding: 10px 12px;
   background: rgba(102, 195, 161, 0.06);
+  min-width: 0;
 }
 
 .quick-detect-text-panel strong {
@@ -1268,6 +1331,12 @@ label {
   }
 }
 
+@media (max-width: 980px) {
+  .quick-review-fields {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 1360px) {
   .hero-panel,
   .grid-two {
@@ -1283,6 +1352,11 @@ label {
   .section-toolbar .hint {
     margin-left: 0;
     width: 100%;
+  }
+
+  .quick-review-row-head,
+  .quick-detect-batch-head {
+    align-items: stretch;
   }
 }
 
@@ -1325,11 +1399,35 @@ label {
   line-height: 1.4;
 }
 
+.selection-card-head--stack {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.selection-card-title {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 180px;
+}
+
+.selection-card-subtitle {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 .selection-card-meta {
   display: grid;
   gap: 6px 10px;
   grid-template-columns: minmax(0, 88px) 1fr;
   align-items: start;
+}
+
+.selection-card-meta--compact {
+  gap: 4px 10px;
+  grid-template-columns: minmax(0, 74px) 1fr;
 }
 
 .selection-card-meta span {
@@ -1353,6 +1451,67 @@ label {
   color: #e1d9c0;
   min-width: 0;
   overflow: hidden;
+}
+
+.task-create-success {
+  margin-bottom: 8px;
+}
+
+.task-create-advanced {
+  margin: 2px 0 4px;
+}
+
+.task-create-advanced .details-panel {
+  padding-top: 10px;
+}
+
+.task-list {
+  display: grid;
+  gap: 12px;
+}
+
+.task-list-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #13140f 0%, #10110c 100%);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.task-list-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.task-list-title {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 240px;
+}
+
+.task-list-title strong {
+  line-height: 1.4;
+}
+
+.task-list-title span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.task-detail-summary {
+  margin: 8px 0 0;
+}
+
+.task-detail-ribbon {
+  margin: 0;
 }
 
 .upload-result-panel {

@@ -5261,10 +5261,6 @@ function pageTasks(route, rawCtx) {
           <h3>创建任务</h3>
           <label>asset_id(资产ID)</label>
           <input name="asset_id" id="taskAssetInput" list="taskAssetsDatalist" placeholder="asset-id" required />
-          <label>pipeline_id(流水线ID，优先)</label>
-          <input name="pipeline_id" id="taskPipelineInput" list="taskPipelinesDatalist" placeholder="pipeline-id，可空" />
-          <label>model_id(模型ID，无 pipeline 时使用)</label>
-          <input name="model_id" id="taskModelInput" list="taskModelsDatalist" placeholder="model-id，可空" />
           <label>task_type(任务类型，可选)</label>
           <select name="task_type">
             <option value="">自动选择</option>
@@ -5277,8 +5273,18 @@ function pageTasks(route, rawCtx) {
           <input name="device_code" value="edge-01" />
           <label>intent_text(意图描述)</label>
           <input name="intent_text" placeholder="例如：优先识别车号" />
-          <label class="checkbox-row"><input type="checkbox" name="use_master_scheduler" /> 启用主调度器自动选模</label>
-          <div class="hint">如果你已经明确知道要用哪一版模型，建议直接从下方“可选模型”里点选，避免手输 model_id。</div>
+          <details class="inline-details task-create-advanced">
+            <summary>高级控制（模型 / 流水线 / 调度）</summary>
+            <div class="details-panel">
+              <label>pipeline_id(流水线ID，优先)</label>
+              <input name="pipeline_id" id="taskPipelineInput" list="taskPipelinesDatalist" placeholder="pipeline-id，可空" />
+              <label>model_id(模型ID，无 pipeline 时使用)</label>
+              <input name="model_id" id="taskModelInput" list="taskModelsDatalist" placeholder="model-id，可空" />
+              <label class="checkbox-row"><input type="checkbox" name="use_master_scheduler" /> 启用主调度器自动选模</label>
+              <div class="hint">如果你已经明确知道要用哪一版模型，建议直接从下方“可选模型”里点选，避免手输 model_id。</div>
+            </div>
+          </details>
+          <div id="taskCreateAssist" class="selection-summary">当前会根据你填写的资产、模型 / 流水线和任务类型生成一条推理任务。</div>
           <datalist id="taskAssetsDatalist"></datalist>
           <datalist id="taskPipelinesDatalist"></datalist>
           <datalist id="taskModelsDatalist"></datalist>
@@ -5318,6 +5324,7 @@ function pageTasks(route, rawCtx) {
       const createForm = root.querySelector('#taskCreateForm');
       const createMsg = root.querySelector('#taskCreateMsg');
       const createResult = root.querySelector('#taskCreateResult');
+      const taskCreateAssist = root.querySelector('#taskCreateAssist');
       const tableWrap = root.querySelector('#tasksTableWrap');
       const assetsDatalist = root.querySelector('#taskAssetsDatalist');
       const pipelinesDatalist = root.querySelector('#taskPipelinesDatalist');
@@ -5759,7 +5766,7 @@ function pageTasks(route, rawCtx) {
       if (createForm && (prefillTaskModelId || prefillTaskAssetId || prefillTaskType || prefillTaskDeviceCode || prefillTaskHint)) {
         const modelInput = createForm.querySelector('input[name="model_id"]');
         const assetInput = createForm.querySelector('input[name="asset_id"]');
-        const taskTypeInput = createForm.querySelector('input[name="task_type"]');
+        const taskTypeInput = createForm.querySelector('select[name="task_type"]');
         const deviceCodeInput = createForm.querySelector('input[name="device_code"]');
         if (modelInput && prefillTaskModelId) modelInput.value = prefillTaskModelId;
         if (assetInput && prefillTaskAssetId) assetInput.value = prefillTaskAssetId;
@@ -5799,6 +5806,7 @@ function pageTasks(route, rawCtx) {
           modelsDatalist.innerHTML = visibleModels.map((row) => `<option value="${esc(row.id)}">${esc(row.model_code)}:${esc(row.version)}</option>`).join('');
           renderTaskModelLibrary();
           renderQuickDetectModelOptions();
+          renderTaskCreateAssist();
         } catch {
           // Ignore suggestion loading failure.
         }
@@ -5806,11 +5814,49 @@ function pageTasks(route, rawCtx) {
 
       function taskCreateInputs() {
         return {
+          assetInput: createForm?.querySelector('input[name="asset_id"]'),
+          pipelineInput: createForm?.querySelector('input[name="pipeline_id"]'),
           modelInput: createForm?.querySelector('input[name="model_id"]'),
           taskTypeInput: createForm?.querySelector('select[name="task_type"]'),
           schedulerInput: createForm?.querySelector('input[name="use_master_scheduler"]'),
+          deviceInput: createForm?.querySelector('input[name="device_code"]'),
           intentInput: createForm?.querySelector('input[name="intent_text"]'),
         };
+      }
+
+      function renderTaskCreateAssist() {
+        if (!taskCreateAssist) return;
+        const {
+          assetInput,
+          pipelineInput,
+          modelInput,
+          taskTypeInput,
+          schedulerInput,
+          deviceInput,
+          intentInput,
+        } = taskCreateInputs();
+        const assetId = String(assetInput?.value || '').trim();
+        const pipelineId = String(pipelineInput?.value || '').trim();
+        const modelId = String(modelInput?.value || '').trim();
+        const taskType = String(taskTypeInput?.value || '').trim();
+        const deviceCode = String(deviceInput?.value || '').trim() || 'edge-01';
+        const intentText = String(intentInput?.value || '').trim();
+        const asset = assistAssets.find((row) => row.id === assetId);
+        const model = assistModels.find((row) => row.id === modelId);
+        const modeText = pipelineId
+          ? '优先按已选流水线执行'
+          : schedulerInput?.checked
+            ? '优先由主调度器自动选模'
+            : model
+              ? '直接使用已选模型执行'
+              : '按当前表单字段创建任务';
+        taskCreateAssist.innerHTML = `
+          <strong>${esc(modeText)}</strong>
+          <span>${esc(assetId ? `资产：${asset?.file_name || truncateMiddle(assetId, 10, 8)}` : '资产：尚未选择')}</span>
+          <span>${esc(model ? `模型：${model.model_code}:${model.version}` : pipelineId ? `流水线：${truncateMiddle(pipelineId, 10, 8)}` : '模型：未显式选择')}</span>
+          <span>${esc(`任务类型：${taskType ? enumText('task_type', taskType) : '自动判断'} · 设备：${deviceCode}`)}</span>
+          <span>${esc(intentText ? `意图：${intentText}` : '创建后可直接等待执行并打开结果页。')}</span>
+        `;
       }
 
       function fillTaskModelSelection(modelId) {
@@ -5826,6 +5872,7 @@ function pageTasks(route, rawCtx) {
         if (createMsg) {
           createMsg.textContent = `已选择具体模型 ${row.model_code}:${row.version}${row.task_type ? ` · ${row.task_type}` : ''}。创建任务时将直接使用这版模型，不走主调度器。`;
         }
+        renderTaskCreateAssist();
         renderTaskModelLibrary();
       }
 
@@ -6325,6 +6372,9 @@ function pageTasks(route, rawCtx) {
         outcomes.forEach((item, outcomeIndex) => {
           item._index = outcomeIndex;
           item.recognizedTexts = collectRecognizedTexts(item.predictions, item.summary || item.focus?.result_json?.summary || {});
+          if (typeof item.uiCollapsed !== 'boolean') {
+            item.uiCollapsed = outcomes.length > 1 && outcomeIndex > 0;
+          }
         });
         quickBatchTaskIds = outcomes.map((item) => item.task.id);
         const totalObjects = outcomes.reduce(
@@ -6405,6 +6455,7 @@ function pageTasks(route, rawCtx) {
                       <div class="quick-review-statuses">
                         <span class="badge">${esc(enumText('task_status', item.task.status))}</span>
                         <span class="badge">${esc(item.reviewDirty ? '修订未保存' : item.reviewStatus === 'revised' ? '已确认' : '自动结果')}</span>
+                        <button class="ghost" type="button" data-toggle-quick-batch="${outcomeIndex}">${item.uiCollapsed ? '展开详情' : '收起详情'}</button>
                       </div>
                     </div>
                     <div class="keyvals compact quick-detect-batch-meta">
@@ -6423,37 +6474,46 @@ function pageTasks(route, rawCtx) {
                           </div>`
                         : ''
                     }
-                    <div class="quick-review-stage">
-                      ${
-                        item.previewUrl
-                          ? `
-                              <div class="quick-review-canvas ${item.previewSource === 'screenshot' ? 'screenshot' : 'asset'} ${item.drawMode ? 'draw-active' : ''}" data-review-canvas="${outcomeIndex}">
-                                <img data-review-preview-index="${outcomeIndex}" class="quick-review-stage-image" src="${item.previewUrl}" alt="快速识别预览" />
-                                <div class="quick-review-overlay">${quickReviewBoxes(item)}</div>
+                    ${
+                      item.uiCollapsed
+                        ? `<div class="selection-summary quick-detect-collapsed-summary">
+                            <strong>已收起该条识别详情</strong>
+                            <span>${esc(item.predictions.length ? `当前有 ${item.predictions.length} 个框 / 文本，可点击“展开详情”继续修订。` : '当前没有框，可点击“展开详情”继续手工修订。')}</span>
+                          </div>`
+                        : `
+                          <div class="quick-review-stage">
+                            ${
+                              item.previewUrl
+                                ? `
+                                    <div class="quick-review-preview">
+                                      <div class="quick-review-canvas ${item.previewSource === 'screenshot' ? 'screenshot' : 'asset'} ${item.drawMode ? 'draw-active' : ''}" data-review-canvas="${outcomeIndex}">
+                                        <img data-review-preview-index="${outcomeIndex}" class="quick-review-stage-image" src="${item.previewUrl}" alt="快速识别预览" />
+                                        <div class="quick-review-overlay">${quickReviewBoxes(item)}</div>
+                                      </div>
+                                      <div class="hint">${esc(item.drawMode ? '拖拽图片区域即可新增手工框，松开鼠标后会写入修订列表。' : (item.previewSource === 'asset' ? '当前预览使用原始图片。可直接拖动框体移动，拖右下角缩放。' : '当前预览使用任务标注图。若原始资产不可预览，修订框会叠加显示在标注图上，并支持拖动/缩放。'))}</div>
+                                    </div>
+                                  `
+                                : renderEmpty('当前结果暂无可用预览图')
+                            }
+                            <div class="quick-review-editor">
+                              <div class="quick-review-toolbar">
+                                <strong>轻量标注修订</strong>
+                                <span class="hint">删掉误检、修正标签或坐标，也可以新增手工框后保存。</span>
                               </div>
-                              <div class="hint">${esc(item.drawMode ? '拖拽图片区域即可新增手工框，松开鼠标后会写入修订列表。' : (item.previewSource === 'asset' ? '当前预览使用原始图片。可直接拖动框体移动，拖右下角缩放。' : '当前预览使用任务标注图。若原始资产不可预览，修订框会叠加显示在标注图上，并支持拖动/缩放。'))}</div>
-                            `
-                          : renderEmpty('当前结果暂无可用预览图')
-                      }
-                      <div class="quick-review-editor">
-                        <div class="quick-review-toolbar">
-                          <strong>轻量标注修订</strong>
-                          <span class="hint">删掉误检、修正标签或坐标，也可以新增手工框后保存。</span>
-                        </div>
-                        <div class="quick-detect-preds">
-                          ${
-                            item.predictions.length
-                              ? item.predictions
-                                  .slice(0, 12)
-                                  .map((pred) => `<span class="badge">${esc(predictionBadgeText(pred))}</span>`)
-                                  .join('')
-                              : `<span class="hint">${esc(item.promptSupported === false ? '当前提示词不在模型可识别标签内，建议尝试 car / person / train / bus。' : '当前没有框，可手工新增。')}</span>`
-                          }
-                        </div>
-                        <div class="quick-review-rows">
-                          ${
-                            item.predictions.length
-                              ? item.predictions.map((pred) => `
+                              <div class="quick-detect-preds">
+                                ${
+                                  item.predictions.length
+                                    ? item.predictions
+                                        .slice(0, 12)
+                                        .map((pred) => `<span class="badge">${esc(predictionBadgeText(pred))}</span>`)
+                                        .join('')
+                                    : `<span class="hint">${esc(item.promptSupported === false ? '当前提示词不在模型可识别标签内，建议尝试 car / person / train / bus。' : '当前没有框，可手工新增。')}</span>`
+                                }
+                              </div>
+                              <div class="quick-review-rows">
+                                ${
+                                  item.predictions.length
+                                    ? item.predictions.map((pred) => `
                                   <div class="quick-review-row ${item.activePredictionId === pred._id ? 'selected' : ''}">
                                     <div class="quick-review-row-head">
                                       <div class="quick-review-row-summary">
@@ -6475,18 +6535,20 @@ function pageTasks(route, rawCtx) {
                                       <input data-review-index="${outcomeIndex}" data-review-pred="${esc(pred._id)}" data-review-field="y2" type="number" step="1" value="${esc(String(pred.bbox?.[3] ?? 0))}" />
                                     </div>
                                   </div>
-                                `).join('')
-                              : renderEmpty('当前没有检测框，可新增手工框')
-                          }
-                        </div>
-                        <div class="row-actions">
-                          <button class="ghost" type="button" data-review-draw="${outcomeIndex}">${item.drawMode ? '取消画框' : '开始画框'}</button>
-                          <button class="ghost" type="button" data-review-add="${outcomeIndex}">新增手工框</button>
-                          <button class="ghost" type="button" data-review-restore="${outcomeIndex}">恢复自动结果</button>
-                          <button class="primary" type="button" data-review-save="${outcomeIndex}">${item.reviewDirty ? '保存修订' : '确认当前结果'}</button>
-                        </div>
-                      </div>
-                    </div>
+                                  `).join('')
+                                    : renderEmpty('当前没有检测框，可新增手工框')
+                                }
+                              </div>
+                              <div class="row-actions">
+                                <button class="ghost" type="button" data-review-draw="${outcomeIndex}">${item.drawMode ? '取消画框' : '开始画框'}</button>
+                                <button class="ghost" type="button" data-review-add="${outcomeIndex}">新增手工框</button>
+                                <button class="ghost" type="button" data-review-restore="${outcomeIndex}">恢复自动结果</button>
+                                <button class="primary" type="button" data-review-save="${outcomeIndex}">${item.reviewDirty ? '保存修订' : '确认当前结果'}</button>
+                              </div>
+                            </div>
+                          </div>
+                        `
+                    }
                     <div class="row-actions">
                       <button class="primary" type="button" data-open-quick-result="${esc(item.task.id)}">查看结果页</button>
                       <button class="ghost" type="button" data-open-quick-task="${esc(item.task.id)}">查看任务详情</button>
@@ -6503,6 +6565,15 @@ function pageTasks(route, rawCtx) {
         });
         root.querySelectorAll('[data-open-quick-task]').forEach((btn) => {
           btn.addEventListener('click', () => ctx.navigate(`tasks/${btn.getAttribute('data-open-quick-task')}`));
+        });
+        root.querySelectorAll('[data-toggle-quick-batch]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const outcomeIndex = Number(btn.getAttribute('data-toggle-quick-batch'));
+            const outcome = outcomes[outcomeIndex];
+            if (!outcome) return;
+            outcome.uiCollapsed = !outcome.uiCollapsed;
+            renderQuickDetectBatchOutcome(outcomes);
+          });
         });
         root.querySelectorAll('[data-review-field]').forEach((input) => {
           input.addEventListener('change', () => {
@@ -6764,31 +6835,45 @@ function pageTasks(route, rawCtx) {
         tableWrap.innerHTML = renderLoading('加载任务列表...');
         try {
           const rows = await ctx.get('/tasks');
-          if (!rows.length) {
+          const focusedTaskId = String(localStorage.getItem(STORAGE_KEYS.lastTaskId) || '').trim();
+          const orderedRows = [...rows].sort((left, right) => {
+            const leftFocused = left.id === focusedTaskId ? 1 : 0;
+            const rightFocused = right.id === focusedTaskId ? 1 : 0;
+            if (leftFocused !== rightFocused) return rightFocused - leftFocused;
+            return String(right.created_at || '').localeCompare(String(left.created_at || ''));
+          });
+          if (!orderedRows.length) {
             tableWrap.innerHTML = renderEmpty('暂无任务，可先去资产中心上传资产，再回到这里创建推理任务');
             return;
           }
           tableWrap.innerHTML = `
-            <div class="table-wrap">
-              <table class="table">
-                <thead><tr><th>task_id(任务ID)</th><th>task_type(任务类型)</th><th>status(状态)</th><th>pipeline_id(流水线ID)</th><th>device(设备)</th><th>创建时间</th><th>操作</th></tr></thead>
-                <tbody>
-                  ${rows.map((row) => `
-                    <tr>
-                      <td class="mono">${esc(row.id)}</td>
-                      <td>${esc(enumText('task_type', row.task_type))}</td>
-                      <td>${esc(enumText('task_status', row.status))}</td>
-                      <td class="mono">${esc(row.pipeline_id || '-')}</td>
-                      <td>${esc(row.device_code || '-')}</td>
-                      <td>${formatDateTime(row.created_at)}</td>
-                      <td>
-                        <button class="ghost" data-task-detail="${esc(row.id)}">详情</button>
-                        <button class="ghost" data-task-results="${esc(row.id)}">结果</button>
-                      </td>
-                    </tr>
-                  `).join('')}
-                </tbody>
-              </table>
+            <div class="task-list">
+              ${orderedRows.map((row) => `
+                <article class="task-list-card ${row.id === focusedTaskId ? 'active-row' : ''}">
+                  <div class="task-list-head">
+                    <div class="task-list-title">
+                      <strong class="mono" title="${esc(row.id)}">${esc(truncateMiddle(row.id, 12, 10))}</strong>
+                      <span>${esc(enumText('task_type', row.task_type))}</span>
+                    </div>
+                    <div class="quick-review-statuses">
+                      <span class="badge">${esc(enumText('task_status', row.status))}</span>
+                      ${row.device_code ? `<span class="badge">${esc(row.device_code)}</span>` : ''}
+                    </div>
+                  </div>
+                  <div class="keyvals compact">
+                    <div><span>asset_id</span><strong class="mono" title="${esc(row.asset_id || '-')}">${esc(truncateMiddle(row.asset_id || '-', 10, 8))}</strong></div>
+                    <div><span>model_id</span><strong class="mono" title="${esc(row.model_id || '-')}">${esc(truncateMiddle(row.model_id || '-', 10, 8))}</strong></div>
+                    <div><span>pipeline_id</span><strong class="mono" title="${esc(row.pipeline_id || '-')}">${esc(truncateMiddle(row.pipeline_id || '-', 10, 8))}</strong></div>
+                    <div><span>创建时间</span><strong>${formatDateTime(row.created_at)}</strong></div>
+                  </div>
+                  ${row.error_message ? `<div class="quick-detect-recommend">${esc(row.error_message)}</div>` : `<div class="hint">当前任务可查看详情、查看结果，或等待执行完成后再进入结果页。</div>`}
+                  <div class="row-actions">
+                    <button class="primary" data-task-detail="${esc(row.id)}">详情</button>
+                    <button class="ghost" data-task-results="${esc(row.id)}">结果</button>
+                    <button class="ghost" data-task-wait="${esc(row.id)}">等待完成并打开结果</button>
+                  </div>
+                </article>
+              `).join('')}
             </div>
           `;
           tableWrap.querySelectorAll('[data-task-detail]').forEach((btn) => {
@@ -6796,6 +6881,20 @@ function pageTasks(route, rawCtx) {
           });
           tableWrap.querySelectorAll('[data-task-results]').forEach((btn) => {
             btn.addEventListener('click', () => ctx.navigate(`results/task/${btn.getAttribute('data-task-results')}`));
+          });
+          tableWrap.querySelectorAll('[data-task-wait]').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+              const taskId = btn.getAttribute('data-task-wait') || '';
+              btn.disabled = true;
+              try {
+                await waitForTaskTerminal(taskId);
+                ctx.navigate(`results/task/${taskId}`);
+              } catch (error) {
+                ctx.toast(error.message || '任务执行失败', 'error');
+              } finally {
+                btn.disabled = false;
+              }
+            });
           });
         } catch (error) {
           tableWrap.innerHTML = renderError(error.message);
@@ -6974,6 +7073,10 @@ function pageTasks(route, rawCtx) {
           const created = await ctx.post('/tasks/create', payload);
           createMsg.textContent = '创建成功';
           createResult.innerHTML = `
+            <div class="selection-summary task-create-success">
+              <strong>任务已创建</strong>
+              <span>${esc(`系统已生成 ${enumText('task_type', created.task_type)} 任务，可直接等待执行完成后打开结果页。`)}</span>
+            </div>
             <div class="keyvals">
               <div><span>task_id</span><strong class="mono">${esc(created.id)}</strong></div>
               <div><span>status</span><strong>${esc(enumText('task_status', created.status))}</strong></div>
@@ -7003,6 +7106,7 @@ function pageTasks(route, rawCtx) {
             }
           });
           localStorage.setItem(STORAGE_KEYS.lastTaskId, created.id);
+          renderTaskCreateAssist();
           await loadTasks();
         } catch (error) {
           createMsg.textContent = error.message || '创建失败';
@@ -7017,6 +7121,12 @@ function pageTasks(route, rawCtx) {
       });
       createForm?.querySelector('select[name="task_type"]')?.addEventListener('change', renderTaskModelLibrary);
       createForm?.querySelector('input[name="use_master_scheduler"]')?.addEventListener('change', renderTaskModelLibrary);
+      createForm?.querySelectorAll('input, select').forEach((input) => {
+        input.addEventListener('input', renderTaskCreateAssist);
+        input.addEventListener('change', renderTaskCreateAssist);
+      });
+
+      renderTaskCreateAssist();
 
       await Promise.all([loadTasks(), loadAssistData()]);
     },
@@ -7036,26 +7146,75 @@ function pageTaskDetail(route, rawCtx) {
     `,
     async mount(root) {
       const wrap = root.querySelector('#taskDetailWrap');
+      async function waitForDetailTaskTerminal(id, { timeoutMs = 90_000 } = {}) {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+          const task = await ctx.get(`/tasks/${id}`);
+          const status = String(task?.status || '');
+          if (status === 'SUCCEEDED') return task;
+          if (['FAILED', 'CANCELLED'].includes(status)) {
+            throw new Error(normalizeUiErrorMessage(task?.error_message || `任务执行失败：${status}`));
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 2000));
+        }
+        throw new Error(`任务 ${id} 等待超时，请稍后刷新重试`);
+      }
       try {
-        const data = await ctx.get(`/tasks/${taskId}`);
+        const [data, rows] = await Promise.all([
+          ctx.get(`/tasks/${taskId}`),
+          ctx.get(`/results${toQuery({ task_id: taskId })}`).catch(() => []),
+        ]);
+        const summaries = (rows || []).map((row) => summarizeResultRow(row));
+        const totalObjects = summaries.reduce((sum, item) => sum + Number(item.objectCount || 0), 0);
+        const recognizedTexts = [...new Set(summaries.flatMap((item) => item.recognizedTexts || []).filter(Boolean))];
         wrap.innerHTML = `
-          <div class="keyvals">
-            <div><span>task_id</span><strong class="mono">${esc(data.id)}</strong></div>
-            <div><span>status</span><strong>${esc(enumText('task_status', data.status))}</strong></div>
-            <div><span>task_type</span><strong>${esc(enumText('task_type', data.task_type))}</strong></div>
-            <div><span>model_id</span><strong class="mono">${esc(data.model_id || '-')}</strong></div>
-            <div><span>pipeline_id</span><strong class="mono">${esc(data.pipeline_id || '-')}</strong></div>
-            <div><span>created_at</span><strong>${formatDateTime(data.created_at)}</strong></div>
-            <div><span>started_at</span><strong>${formatDateTime(data.started_at)}</strong></div>
-            <div><span>finished_at</span><strong>${formatDateTime(data.finished_at)}</strong></div>
-            <div><span>error_message</span><strong>${esc(data.error_message || '-')}</strong></div>
+          <div class="task-list-card">
+            <div class="task-list-head">
+              <div class="task-list-title">
+                <strong class="mono" title="${esc(data.id)}">${esc(truncateMiddle(data.id, 12, 10))}</strong>
+                <span>${esc(enumText('task_type', data.task_type))}</span>
+              </div>
+              <div class="quick-review-statuses">
+                <span class="badge">${esc(enumText('task_status', data.status))}</span>
+                ${data.device_code ? `<span class="badge">${esc(data.device_code)}</span>` : ''}
+              </div>
+            </div>
+            <div class="keyvals compact">
+              <div><span>model_id</span><strong class="mono" title="${esc(data.model_id || '-')}">${esc(truncateMiddle(data.model_id || '-', 10, 8))}</strong></div>
+              <div><span>pipeline_id</span><strong class="mono" title="${esc(data.pipeline_id || '-')}">${esc(truncateMiddle(data.pipeline_id || '-', 10, 8))}</strong></div>
+              <div><span>asset_id</span><strong class="mono" title="${esc(data.asset_id || '-')}">${esc(truncateMiddle(data.asset_id || '-', 10, 8))}</strong></div>
+              <div><span>结果条数</span><strong>${esc(String((rows || []).length))}</strong></div>
+              <div><span>created_at</span><strong>${formatDateTime(data.created_at)}</strong></div>
+              <div><span>started_at</span><strong>${formatDateTime(data.started_at)}</strong></div>
+              <div><span>finished_at</span><strong>${formatDateTime(data.finished_at)}</strong></div>
+            </div>
+            ${data.error_message ? `<div class="quick-detect-recommend">${esc(data.error_message)}</div>` : '<div class="hint">如果任务还在执行中，可直接点“等待完成并打开结果页”。</div>'}
           </div>
+          <div class="selection-summary task-detail-summary">
+            <strong>执行摘要</strong>
+            <span>${esc(`当前已回查到 ${(rows || []).length} 条结果，累计命中 ${totalObjects} 个对象 / 文本。`)}</span>
+            <span>${esc(recognizedTexts.length ? `识别文本：${recognizedTexts.slice(0, 6).join(' / ')}` : '当前还没有 OCR 文本摘要。')}</span>
+          </div>
+          ${recognizedTexts.length ? `<div class="result-text-ribbon task-detail-ribbon">${recognizedTexts.slice(0, 10).map((text) => `<span class="badge">${esc(text)}</span>`).join('')}</div>` : ''}
           <div class="row-actions">
             <button class="primary" id="goTaskResult">查看结果</button>
+            <button class="ghost" id="waitTaskResult">等待完成并打开结果页</button>
           </div>
           <details><summary>Advanced</summary><pre>${esc(safeJson(data))}</pre></details>
         `;
         root.querySelector('#goTaskResult')?.addEventListener('click', () => ctx.navigate(`results/task/${taskId}`));
+        root.querySelector('#waitTaskResult')?.addEventListener('click', async (event) => {
+          const button = event.currentTarget;
+          button.disabled = true;
+          try {
+            await waitForDetailTaskTerminal(taskId);
+            ctx.navigate(`results/task/${taskId}`);
+          } catch (error) {
+            ctx.toast(error.message || '任务执行失败', 'error');
+          } finally {
+            button.disabled = false;
+          }
+        });
       } catch (error) {
         wrap.innerHTML = renderError(error.message);
       }
@@ -7230,6 +7389,8 @@ function pageResults(route, rawCtx) {
         <form id="resultQueryForm" class="inline-form">
           <input id="resultTaskId" name="task_id" placeholder="输入 task_id" value="${esc(defaultTaskId)}" required />
           <button class="primary" type="submit">查询结果</button>
+          <button class="ghost" id="resultBackTasksBtn" type="button">返回任务中心</button>
+          <button class="ghost" id="resultOpenTaskBtn" type="button">打开任务详情</button>
           <button class="ghost" id="resultExportBtn" type="button">导出摘要</button>
         </form>
         <div id="resultMeta" class="hint">${esc(defaultTaskId ? '' : '训练后验证时，可从训练页点击“去任务中心验证候选模型”，再在任务创建成功后点击“等待执行并打开结果页”。')}</div>
