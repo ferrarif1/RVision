@@ -1528,6 +1528,18 @@ label {
   word-break: break-word;
 }
 
+.workspace-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.model-panel-stack {
+  display: grid;
+  gap: 16px;
+}
+
 .selection-summary {
   display: grid;
   gap: 4px;
@@ -1640,6 +1652,14 @@ label {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.task-list-card .inline-details {
+  margin: 0;
+}
+
+.task-list-card .inline-details .details-panel {
+  padding-top: 10px;
 }
 
 .task-detail-summary {
@@ -2464,6 +2484,36 @@ label {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.result-next-steps {
+  display: grid;
+  gap: 8px;
+}
+
+.result-next-step {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.result-next-step strong {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(156, 128, 52, 0.16);
+  border: 1px solid rgba(156, 128, 52, 0.3);
+  color: #efe3bf;
+  font-size: 12px;
+}
+
+.result-next-step span {
+  color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 .result-dataset-workbench {

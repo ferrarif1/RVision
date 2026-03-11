@@ -87,6 +87,8 @@
   对应执行清单与阶段验收标准（V1）。
 - [product/current_execution_backlog_2026-03-10.md](./product/current_execution_backlog_2026-03-10.md)
   当前真实执行清单：已完成、半完成、中断项与下一步顺序。
+- [product/dynamic_execution_todo_2026-03-11.md](./product/dynamic_execution_todo_2026-03-11.md)
+  动态维护的执行面板：记录当前正在做、下一步、排队中和最近完成项，供持续迭代时实时更新。
 - [product/vistral_positioning_and_role_onboarding.md](./product/vistral_positioning_and_role_onboarding.md)
   Vistral 的产品定位、核心价值和角色上手路径。
 - [project_organization.md](./project_organization.md)

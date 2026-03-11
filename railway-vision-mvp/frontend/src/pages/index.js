@@ -910,6 +910,11 @@ function renderResultActionWorkbench(taskId, summaries, exported = null) {
         <button class="ghost" type="button" data-result-action="open-task-detail">打开任务详情</button>
         <button class="ghost" type="button" data-result-action="back-tasks">返回任务中心</button>
       </div>
+      <div class="result-next-steps">
+        <span class="result-next-step"><strong>1</strong><span>${esc(lowConfidenceCount > 0 ? '先复核低置信度结果和截图，再决定是否回灌训练。' : '当前结果已经比较稳定，可直接进入训练或验收。')}</span></span>
+        <span class="result-next-step"><strong>2</strong><span>${esc(exported?.asset?.id ? '训练中心已经预填当前导出的数据集版本。' : '需要时在下方把当前结果导出成训练或验证数据集版本。')}</span></span>
+        <span class="result-next-step"><strong>3</strong><span>${esc('若需追溯执行过程，可随时打开任务详情查看设备、模型和证据截图。')}</span></span>
+      </div>
     </div>
   `;
 }
@@ -1513,13 +1518,103 @@ function pageDashboard(route, rawCtx) {
         const models = data?.recent?.models || [];
         const tasks = data?.recent?.tasks || [];
         recentAssets.innerHTML = assets.length
-          ? `<ul class="compact-list">${assets.map((row) => `<li><strong>${esc(row.file_name)}</strong><span>${esc(row.asset_type)} · ${formatDateTime(row.created_at)}</span></li>`).join('')}</ul>`
+          ? `
+            <div class="selection-grid">
+              ${assets.slice(0, 6).map((row) => `
+                <article class="selection-card">
+                  <div class="selection-card-head selection-card-head--stack">
+                    <div class="selection-card-title">
+                      <strong>${esc(row.file_name)}</strong>
+                      <span class="selection-card-subtitle">${esc(enumText('asset_purpose', row.asset_purpose || 'inference'))}</span>
+                    </div>
+                    <span class="badge">${esc(enumText('sensitivity_level', row.sensitivity_level || 'L2'))}</span>
+                  </div>
+                  <div class="selection-card-meta selection-card-meta--compact">
+                    <span>资源类型</span><strong>${esc(row.asset_type || '-')}</strong>
+                    <span>创建时间</span><strong>${formatDateTime(row.created_at)}</strong>
+                    <span>资源数</span><strong>${esc(row.resource_count ?? '-')}</strong>
+                    <span>下一步</span><strong>用于任务 / 训练 / 验证</strong>
+                  </div>
+                  <details class="inline-details">
+                    <summary>技术详情</summary>
+                    <div class="details-panel">
+                      <div class="selection-card-meta selection-card-meta--compact">
+                        <span>asset_id</span><strong class="mono">${esc(truncateMiddle(row.id || '-', 10, 8))}</strong>
+                        <span>dataset_label</span><strong>${esc(row.dataset_label || '-')}</strong>
+                        <span>目标模型</span><strong>${esc(row.intended_model_code || '-')}</strong>
+                      </div>
+                    </div>
+                  </details>
+                </article>
+              `).join('')}
+            </div>
+          `
           : renderEmpty('暂无资产');
         recentModels.innerHTML = models.length
-          ? `<ul class="compact-list">${models.map((row) => `<li><strong>${esc(row.model_code)}:${esc(row.version)}</strong><span>${esc(enumText('model_status', row.status))} · ${formatDateTime(row.created_at)}</span></li>`).join('')}</ul>`
+          ? `
+            <div class="selection-grid">
+              ${models.slice(0, 6).map((row) => `
+                <article class="selection-card">
+                  <div class="selection-card-head selection-card-head--stack">
+                    <div class="selection-card-title">
+                      <strong>${esc(row.model_code || '-')}</strong>
+                      <span class="selection-card-subtitle">${esc(row.version || '-')}</span>
+                    </div>
+                    <span class="badge">${esc(enumText('model_status', row.status || '-'))}</span>
+                  </div>
+                  <div class="selection-card-meta selection-card-meta--compact">
+                    <span>任务类型</span><strong>${esc(enumText('task_type', row.task_type || '-'))}</strong>
+                    <span>来源</span><strong>${esc(enumText('model_type', row.model_type || '-') || row.model_type || '-')}</strong>
+                    <span>创建时间</span><strong>${formatDateTime(row.created_at)}</strong>
+                    <span>下一步</span><strong>${row.status === 'RELEASED' ? '可验证 / 可执行' : '审批 / 发布'}</strong>
+                  </div>
+                  <details class="inline-details">
+                    <summary>技术详情</summary>
+                    <div class="details-panel">
+                      <div class="selection-card-meta selection-card-meta--compact">
+                        <span>model_id</span><strong class="mono">${esc(truncateMiddle(row.id || '-', 10, 8))}</strong>
+                        <span>状态</span><strong>${esc(row.status || '-')}</strong>
+                        <span>编码</span><strong>${esc(row.model_code || '-')}</strong>
+                      </div>
+                    </div>
+                  </details>
+                </article>
+              `).join('')}
+            </div>
+          `
           : renderEmpty('暂无模型');
         recentTasks.innerHTML = tasks.length
-          ? `<ul class="compact-list">${tasks.map((row) => `<li><strong>${esc(row.id)}</strong><span>${esc(enumText('task_type', row.task_type))} · ${esc(enumText('task_status', row.status))} · ${formatDateTime(row.created_at)}</span></li>`).join('')}</ul>`
+          ? `
+            <div class="selection-grid">
+              ${tasks.slice(0, 6).map((row) => `
+                <article class="selection-card">
+                  <div class="selection-card-head selection-card-head--stack">
+                    <div class="selection-card-title">
+                      <strong>${esc(enumText('task_type', row.task_type || '-'))}</strong>
+                      <span class="selection-card-subtitle">${formatDateTime(row.created_at)}</span>
+                    </div>
+                    <span class="badge">${esc(enumText('task_status', row.status || '-'))}</span>
+                  </div>
+                  <div class="selection-card-meta selection-card-meta--compact">
+                    <span>执行方式</span><strong>${row.model_id ? '按显式模型' : row.pipeline_id ? '按流水线' : '按调度器'}</strong>
+                    <span>设备</span><strong>${esc(row.device_code || '-')}</strong>
+                    <span>资产</span><strong class="mono">${esc(truncateMiddle(row.asset_id || '-', 10, 8))}</strong>
+                    <span>下一步</span><strong>${row.status === 'SUCCEEDED' ? '查看结果' : '继续等待 / 查看详情'}</strong>
+                  </div>
+                  <details class="inline-details">
+                    <summary>技术详情</summary>
+                    <div class="details-panel">
+                      <div class="selection-card-meta selection-card-meta--compact">
+                        <span>task_id</span><strong class="mono">${esc(truncateMiddle(row.id || '-', 10, 8))}</strong>
+                        <span>pipeline_id</span><strong class="mono">${esc(truncateMiddle(row.pipeline_id || '-', 10, 8))}</strong>
+                        <span>model_id</span><strong class="mono">${esc(truncateMiddle(row.model_id || '-', 10, 8))}</strong>
+                      </div>
+                    </div>
+                  </details>
+                </article>
+              `).join('')}
+            </div>
+          `
           : renderEmpty('暂无任务');
       } catch (error) {
         laneGrid.innerHTML = renderError(error.message);
@@ -1814,7 +1909,15 @@ function pageAssets(route, rawCtx) {
           { path: 'training', label: '去训练中心' },
         ],
       })}
-      <section class="grid-two">
+      <section class="card">
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-asset-panel-tab="overview">资产总览</button>
+          <button class="ghost" type="button" data-asset-panel-tab="upload">上传资产</button>
+          <button class="ghost" type="button" data-asset-panel-tab="guide">使用建议</button>
+        </div>
+        <div id="assetPanelMeta" class="hint">默认先看资产总览；上传和使用说明按工作区展开。</div>
+      </section>
+      <section class="grid-two" data-asset-panel="upload" hidden>
         <form id="assetUploadForm" class="card form-grid">
           <h3>上传资产</h3>
           <label>文件</label>
@@ -1847,7 +1950,7 @@ function pageAssets(route, rawCtx) {
           <div id="assetUploadResult">${renderEmpty('上传后会生成 asset_id、资源摘要和下一步入口')}</div>
         </section>
       </section>
-      <section class="card">
+      <section class="card" data-asset-panel="guide" hidden>
         <h3>使用建议</h3>
         <ul class="focus-list">
           <li>训练 / 微调 / 验证优先使用 ZIP 数据集包，便于一次性提交多层文件夹和多资源样本。</li>
@@ -1855,7 +1958,7 @@ function pageAssets(route, rawCtx) {
           <li>推理任务优先使用单图或单视频资产；训练链路可组合 0-n 个单文件资产或多个 ZIP 数据集包。</li>
         </ul>
       </section>
-      <section class="card">
+      <section class="card" data-asset-panel="overview">
         <form id="assetFilterForm" class="inline-form">
           <input name="q" placeholder="搜索 file_name(文件名) / use_case(业务场景) / intended_model_code(目标模型编码)" />
           <select name="asset_purpose">
@@ -1874,6 +1977,9 @@ function pageAssets(route, rawCtx) {
     `,
     async mount(root) {
       bindPageNavButtons(root, ctx);
+      const assetPanelMeta = root.querySelector('#assetPanelMeta');
+      const assetPanelTabs = [...root.querySelectorAll('[data-asset-panel-tab]')];
+      const assetPanels = [...root.querySelectorAll('[data-asset-panel]')];
       const uploadForm = root.querySelector('#assetUploadForm');
       const uploadMsg = root.querySelector('#assetUploadMsg');
       const uploadResult = root.querySelector('#assetUploadResult');
@@ -1882,6 +1988,27 @@ function pageAssets(route, rawCtx) {
       const assetShowHistoryExports = root.querySelector('#assetShowHistoryExports');
       const assetListMeta = root.querySelector('#assetListMeta');
       const assetListFilters = { showExportHistory: false };
+      let activeAssetPanel = 'overview';
+
+      function setAssetPanel(panel) {
+        activeAssetPanel = ['overview', 'upload', 'guide'].includes(panel) ? panel : 'overview';
+        assetPanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-asset-panel') !== activeAssetPanel;
+        });
+        assetPanelTabs.forEach((button) => {
+          const active = button.getAttribute('data-asset-panel-tab') === activeAssetPanel;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (assetPanelMeta) {
+          assetPanelMeta.textContent = activeAssetPanel === 'overview'
+            ? '先看资产列表和用途分布。'
+            : activeAssetPanel === 'upload'
+              ? '集中处理新资产上传和结果回跳。'
+              : '快速确认训练、验证、推理三类资产的推荐用法。';
+        }
+      }
 
       function prefillTrainingAssets(assetIds) {
         const merged = [...new Set([...splitCsv(localStorage.getItem(STORAGE_KEYS.prefillTrainingAssetIds) || ''), ...assetIds])];
@@ -1910,38 +2037,50 @@ function pageAssets(route, rawCtx) {
             return;
           }
           tableWrap.innerHTML = `
-            <div class="table-wrap">
-              <table class="table">
-                <thead><tr><th>asset_id(资产ID)</th><th>file_name(文件名)</th><th>type(类型)</th><th>resource_count(资源数)</th><th>purpose(用途)</th><th>sensitivity(敏感等级)</th><th>创建时间</th><th>操作</th></tr></thead>
-                <tbody>
-                  ${visibleRows.map((row) => {
-                    const datasetMeta = row.dataset_version_meta || null;
-                    const datasetBadge = isCarNumberOcrExportAsset(row)
-                      ? `<span class="badge">${esc(datasetMeta?.is_latest ? `OCR 最新 ${datasetMeta?.version || ''}`.trim() : `OCR 历史 ${datasetMeta?.version || ''}`.trim())}</span>`
-                      : '';
-                    return `
-                    <tr>
-                      <td class="mono">${esc(row.id)}</td>
-                      <td>
-                        ${esc(row.file_name)}
+            <div class="selection-grid">
+              ${visibleRows.map((row) => {
+                const datasetMeta = row.dataset_version_meta || null;
+                const datasetBadge = isCarNumberOcrExportAsset(row)
+                  ? `<span class="badge">${esc(datasetMeta?.is_latest ? `OCR 最新 ${datasetMeta?.version || ''}`.trim() : `OCR 历史 ${datasetMeta?.version || ''}`.trim())}</span>`
+                  : '';
+                return `
+                  <article class="selection-card">
+                    <div class="selection-card-head selection-card-head--stack">
+                      <div class="selection-card-title">
+                        <strong title="${esc(row.file_name)}">${esc(row.file_name)}</strong>
+                        <span class="selection-card-subtitle mono">${esc(truncateMiddle(row.id, 10, 8))}</span>
+                      </div>
+                      <div class="quick-review-statuses">
+                        <span class="badge">${esc(enumText('asset_type', row.asset_type))}</span>
                         ${datasetBadge}
-                      </td>
-                      <td>${esc(enumText('asset_type', row.asset_type))}</td>
-                      <td>${archiveResourceCount(row.meta || {}) || 1}</td>
-                      <td>${esc(enumText('asset_purpose', (row.meta || {}).asset_purpose || '-'))}</td>
-                      <td>${esc(enumText('sensitivity_level', row.sensitivity_level))}</td>
-                      <td>${formatDateTime(row.created_at)}</td>
-                      <td class="row-actions">
-                        <button class="ghost" data-copy-asset="${esc(row.id)}">复制ID</button>
-                        <button class="ghost" data-use-training-asset="${esc(row.id)}">用于训练</button>
-                        ${isTaskAsset(row) ? `<button class="primary" data-quick-detect-asset="${esc(row.id)}">快速识别</button>` : ''}
-                        ${isTaskAsset(row) ? `<button class="ghost" data-use-asset="${esc(row.id)}">用于任务</button>` : ''}
-                      </td>
-                    </tr>
-                  `;
-                  }).join('')}
-                </tbody>
-              </table>
+                      </div>
+                    </div>
+                    <div class="selection-card-meta selection-card-meta--compact">
+                      <span>用途</span><strong>${esc(enumText('asset_purpose', (row.meta || {}).asset_purpose || '-'))}</strong>
+                      <span>敏感等级</span><strong>${esc(enumText('sensitivity_level', row.sensitivity_level))}</strong>
+                      <span>资源数</span><strong>${archiveResourceCount(row.meta || {}) || 1}</strong>
+                      <span>创建时间</span><strong>${formatDateTime(row.created_at)}</strong>
+                    </div>
+                    <div class="row-actions">
+                      <button class="ghost" data-copy-asset="${esc(row.id)}">复制ID</button>
+                      <button class="ghost" data-use-training-asset="${esc(row.id)}">用于训练</button>
+                      ${isTaskAsset(row) ? `<button class="primary" data-quick-detect-asset="${esc(row.id)}">快速识别</button>` : ''}
+                      ${isTaskAsset(row) ? `<button class="ghost" data-use-asset="${esc(row.id)}">用于任务</button>` : ''}
+                    </div>
+                    <details class="inline-details">
+                      <summary>技术详情</summary>
+                      <div class="details-panel">
+                        <div class="selection-card-meta selection-card-meta--compact">
+                          <span>asset_id</span><strong class="mono">${esc(row.id)}</strong>
+                          <span>dataset_label</span><strong>${esc((row.meta || {}).dataset_label || '-')}</strong>
+                          <span>use_case</span><strong>${esc((row.meta || {}).use_case || '-')}</strong>
+                          <span>intended_model</span><strong>${esc((row.meta || {}).intended_model_code || '-')}</strong>
+                        </div>
+                      </div>
+                    </details>
+                  </article>
+                `;
+              }).join('')}
             </div>
           `;
           tableWrap.querySelectorAll('[data-copy-asset]').forEach((btn) => {
@@ -2027,6 +2166,7 @@ function pageAssets(route, rawCtx) {
             prefillTrainingAssets([data.id]);
             ctx.navigate('training');
           });
+          setAssetPanel('overview');
           await loadAssets();
           uploadForm.reset();
         } catch (error) {
@@ -2044,7 +2184,13 @@ function pageAssets(route, rawCtx) {
         assetListFilters.showExportHistory = assetShowHistoryExports.checked;
         loadAssets();
       });
+      assetPanelTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setAssetPanel(button.getAttribute('data-asset-panel-tab') || 'overview');
+        });
+      });
 
+      setAssetPanel('overview');
       await loadAssets();
     },
   };
@@ -2080,7 +2226,36 @@ function pageModels(route, rawCtx) {
         <h3>模型工作台概览</h3>
         <div id="modelWorkbenchOverviewWrap">${renderEmpty('先从模型列表选择一版候选模型，这里会汇总当前状态和推荐下一步动作。')}</div>
       </section>
-      <section class="grid-two">
+      <section class="card">
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-model-panel-tab="overview">模型总览</button>
+          <button class="ghost" type="button" data-model-panel-tab="build">提交与训练协作</button>
+          <button class="ghost" type="button" data-model-panel-tab="governance">审批与发布</button>
+        </div>
+        <div id="modelPanelMeta" class="hint">默认先看模型总览；低频操作按工作区展开。</div>
+      </section>
+      <section class="card" data-model-panel="overview">
+        <h3>模型列表</h3>
+        <div class="section-toolbar">
+          <input id="modelListSearch" placeholder="搜索 model_code / version / 插件 / 租户" />
+          <select id="modelStatusFilter">
+            <option value="">全部状态</option>
+            <option value="SUBMITTED">${enumText('model_status', 'SUBMITTED')}</option>
+            <option value="APPROVED">${enumText('model_status', 'APPROVED')}</option>
+            <option value="RELEASED">${enumText('model_status', 'RELEASED')}</option>
+          </select>
+          <select id="modelSourceFilter">
+            <option value="">全部来源</option>
+            <option value="delivery_candidate">${enumText('model_source_type', 'delivery_candidate')}</option>
+            <option value="finetuned_candidate">${enumText('model_source_type', 'finetuned_candidate')}</option>
+            <option value="initial_algorithm">${enumText('model_source_type', 'initial_algorithm')}</option>
+            <option value="pretrained_seed">${enumText('model_source_type', 'pretrained_seed')}</option>
+          </select>
+          <div id="modelListMeta" class="hint"></div>
+        </div>
+        <div id="modelsTableWrap">${renderLoading('加载模型列表...')}</div>
+      </section>
+      <section class="grid-two" data-model-panel="build" hidden>
         <form id="modelRegisterForm" class="card form-grid">
           <h3>提交模型包</h3>
           <label>模型包(.zip)</label>
@@ -2115,48 +2290,11 @@ function pageModels(route, rawCtx) {
           <div id="modelRegisterResult">${renderEmpty('提交模型后会在这里显示 model_id、版本和下一步动作')}</div>
         </form>
         <section class="card">
-          <h3>模型时间线</h3>
-          <div id="modelTimelineWrap">${renderEmpty('在模型列表点击“时间线”，查看提交、审批、发布和回收轨迹')}</div>
-          <div class="readiness-block">
-            <h3>评估与风险</h3>
-            <div id="modelReadinessWrap">${renderEmpty('在模型列表点击“评估”，查看自动验证结论和发布前风险摘要')}</div>
-          </div>
-          <div class="readiness-block">
-            <h3>审批工作台</h3>
-            <div id="modelApprovalWorkbenchWrap">${renderEmpty('先在模型列表里选一版候选模型，这里会自动推荐验证样本、汇总验证结果，并在满足门禁后给出一键审批。')}</div>
-          </div>
-          <div class="readiness-block">
-            <h3>发布工作台</h3>
-            <div id="modelReleaseWorkbenchWrap">${renderEmpty('审批通过后，在这里选择设备、买家和交付方式。系统会先做发布前评估，再确认发布。')}</div>
-          </div>
-        </section>
-      </section>
-      <section class="card">
-        <h3>模型列表</h3>
-        <div class="section-toolbar">
-          <input id="modelListSearch" placeholder="搜索 model_code / version / 插件 / 租户" />
-          <select id="modelStatusFilter">
-            <option value="">全部状态</option>
-            <option value="SUBMITTED">${enumText('model_status', 'SUBMITTED')}</option>
-            <option value="APPROVED">${enumText('model_status', 'APPROVED')}</option>
-            <option value="RELEASED">${enumText('model_status', 'RELEASED')}</option>
-          </select>
-          <select id="modelSourceFilter">
-            <option value="">全部来源</option>
-            <option value="delivery_candidate">${enumText('model_source_type', 'delivery_candidate')}</option>
-            <option value="finetuned_candidate">${enumText('model_source_type', 'finetuned_candidate')}</option>
-            <option value="initial_algorithm">${enumText('model_source_type', 'initial_algorithm')}</option>
-            <option value="pretrained_seed">${enumText('model_source_type', 'pretrained_seed')}</option>
-          </select>
-          <div id="modelListMeta" class="hint"></div>
-        </div>
-        <div id="modelsTableWrap">${renderLoading('加载模型列表...')}</div>
-      </section>
-      <section class="grid-two">
-        <section class="card">
           <h3>训练作业协作</h3>
           <div id="trainingJobsWrap">${canViewTrainingJob ? renderLoading('加载训练作业...') : renderEmpty('当前角色无训练作业查看权限')}</div>
         </section>
+      </section>
+      <section class="grid-two" data-model-panel="build" hidden>
         <section class="card">
           <h3>创建训练作业</h3>
           ${
@@ -2188,6 +2326,26 @@ function pageModels(route, rawCtx) {
           }
         </section>
       </section>
+      <section class="grid-two" data-model-panel="governance" hidden>
+        <section class="card">
+          <h3>模型时间线</h3>
+          <div id="modelTimelineWrap">${renderEmpty('在模型列表点击“时间线”，查看提交、审批、发布和回收轨迹')}</div>
+        </section>
+        <section class="card">
+          <h3>评估与风险</h3>
+          <div id="modelReadinessWrap">${renderEmpty('在模型列表点击“评估”，查看自动验证结论和发布前风险摘要')}</div>
+        </section>
+      </section>
+      <section class="grid-two" data-model-panel="governance" hidden>
+        <section class="card">
+          <h3>审批工作台</h3>
+          <div id="modelApprovalWorkbenchWrap">${renderEmpty('先在模型列表里选一版候选模型，这里会自动推荐验证样本、汇总验证结果，并在满足门禁后给出一键审批。')}</div>
+        </section>
+        <section class="card">
+          <h3>发布工作台</h3>
+          <div id="modelReleaseWorkbenchWrap">${renderEmpty('审批通过后，在这里选择设备、买家和交付方式。系统会先做发布前评估，再确认发布。')}</div>
+        </section>
+      </section>
     `,
     async mount(root) {
       bindPageNavButtons(root, ctx);
@@ -2196,6 +2354,9 @@ function pageModels(route, rawCtx) {
       const registerMsg = root.querySelector('#modelRegisterMsg');
       const registerResult = root.querySelector('#modelRegisterResult');
       const modelWorkbenchOverviewWrap = root.querySelector('#modelWorkbenchOverviewWrap');
+      const modelPanelMeta = root.querySelector('#modelPanelMeta');
+      const modelPanelTabs = [...root.querySelectorAll('[data-model-panel-tab]')];
+      const modelPanels = [...root.querySelectorAll('[data-model-panel]')];
       const timelineWrap = root.querySelector('#modelTimelineWrap');
       const readinessWrap = root.querySelector('#modelReadinessWrap');
       const approvalWorkbenchWrap = root.querySelector('#modelApprovalWorkbenchWrap');
@@ -2213,7 +2374,28 @@ function pageModels(route, rawCtx) {
       const requestedFocusModelId = localStorage.getItem(STORAGE_KEYS.focusModelId);
       const requestedOpenModelTimeline = localStorage.getItem(STORAGE_KEYS.focusModelTimeline) === '1';
       let activeModelId = requestedFocusModelId || '';
+      let activeModelPanel = requestedFocusModelId ? 'governance' : 'overview';
       const modelListFilters = { q: '', status: '', source: '' };
+
+      function setModelPanel(panel) {
+        activeModelPanel = ['overview', 'build', 'governance'].includes(panel) ? panel : 'overview';
+        modelPanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-model-panel') !== activeModelPanel;
+        });
+        modelPanelTabs.forEach((button) => {
+          const active = button.getAttribute('data-model-panel-tab') === activeModelPanel;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (modelPanelMeta) {
+          modelPanelMeta.textContent = activeModelPanel === 'overview'
+            ? '先看模型状态、风险和下一步动作。'
+            : activeModelPanel === 'build'
+              ? '把模型提交和训练协作放在同一处，减少审批信息干扰。'
+              : '把时间线、评估、审批和发布集中处理。';
+        }
+      }
 
       function selectedModelRecord() {
         return cachedModels.find((row) => row.id === activeModelId) || null;
@@ -2267,6 +2449,7 @@ function pageModels(route, rawCtx) {
           });
         }
         modelWorkbenchOverviewWrap.querySelector('[data-workbench-action="model-open-list"]')?.addEventListener('click', () => {
+          setModelPanel('overview');
           modelsWrap?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
         modelWorkbenchOverviewWrap.querySelector('[data-workbench-action="model-open-training"]')?.addEventListener('click', () => {
@@ -2275,6 +2458,7 @@ function pageModels(route, rawCtx) {
         modelWorkbenchOverviewWrap.querySelector('[data-workbench-action="model-open-readiness"]')?.addEventListener('click', async () => {
           if (!activeModelId) return;
           try {
+            setModelPanel('governance');
             await openModelReadiness(activeModelId);
             readinessWrap?.scrollIntoView({ behavior: 'smooth', block: 'center' });
           } catch (error) {
@@ -2283,12 +2467,14 @@ function pageModels(route, rawCtx) {
         });
         modelWorkbenchOverviewWrap.querySelector('[data-workbench-action="model-open-timeline"]')?.addEventListener('click', async () => {
           if (!activeModelId) return;
+          setModelPanel('governance');
           await openModelTimeline(activeModelId);
           timelineWrap?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         });
         modelWorkbenchOverviewWrap.querySelector('[data-workbench-action="model-open-approval"]')?.addEventListener('click', async () => {
           if (!activeModelId) return;
           try {
+            setModelPanel('governance');
             await openModelReadiness(activeModelId);
             await openModelApprovalWorkbench(activeModelId);
             approvalWorkbenchWrap?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -2299,6 +2485,7 @@ function pageModels(route, rawCtx) {
         modelWorkbenchOverviewWrap.querySelector('[data-workbench-action="model-open-release"]')?.addEventListener('click', async () => {
           if (!activeModelId) return;
           try {
+            setModelPanel('governance');
             await openModelReleaseWorkbench(activeModelId);
             releaseWorkbenchWrap?.scrollIntoView({ behavior: 'smooth', block: 'center' });
           } catch (error) {
@@ -2944,6 +3131,7 @@ function pageModels(route, rawCtx) {
         modelsWrap.querySelectorAll('[data-model-timeline]').forEach((btn) => {
           btn.addEventListener('click', async () => {
             const modelId = btn.getAttribute('data-model-timeline');
+            setModelPanel('governance');
             await openModelTimeline(modelId);
           });
         });
@@ -2952,6 +3140,7 @@ function pageModels(route, rawCtx) {
           btn.addEventListener('click', async () => {
             const modelId = btn.getAttribute('data-model-readiness');
             try {
+              setModelPanel('governance');
               await openModelReadiness(modelId);
             } catch (error) {
               ctx.toast(error.message || '模型评估失败', 'error');
@@ -2963,6 +3152,7 @@ function pageModels(route, rawCtx) {
           btn.addEventListener('click', async () => {
             const modelId = btn.getAttribute('data-model-approve');
             try {
+              setModelPanel('governance');
               await openModelReadiness(modelId);
               await openModelApprovalWorkbench(modelId);
               approvalWorkbenchWrap?.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -2976,6 +3166,7 @@ function pageModels(route, rawCtx) {
           btn.addEventListener('click', async () => {
             const modelId = btn.getAttribute('data-model-release');
             try {
+              setModelPanel('governance');
               await openModelReleaseWorkbench(modelId);
               releaseWorkbenchWrap?.scrollIntoView({ block: 'center', behavior: 'smooth' });
             } catch (error) {
@@ -3070,10 +3261,12 @@ function pageModels(route, rawCtx) {
             }
           });
           root.querySelector('#openModelTimelineBtn')?.addEventListener('click', async () => {
+            setModelPanel('governance');
             await openModelTimeline(created.id);
           });
           root.querySelector('#openModelReadinessBtn')?.addEventListener('click', async () => {
             try {
+              setModelPanel('governance');
               await openModelReadiness(created.id);
             } catch (error) {
               ctx.toast(error.message || '模型评估失败', 'error');
@@ -3081,6 +3274,7 @@ function pageModels(route, rawCtx) {
           });
           ctx.toast('模型提交成功');
           registerForm.reset();
+          setModelPanel('overview');
           await loadModels();
         } catch (error) {
           registerMsg.textContent = error.message || '提交失败';
@@ -3126,6 +3320,13 @@ function pageModels(route, rawCtx) {
         renderModelsTable(cachedModels);
       });
 
+      modelPanelTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setModelPanel(button.getAttribute('data-model-panel-tab') || 'overview');
+        });
+      });
+
+      setModelPanel(activeModelPanel);
       await Promise.all([loadModels(), loadTrainingJobs()]);
       if (cachedModels.length && trainingJobForm && !trainingJobForm.querySelector('[data-helper]')) {
         const hint = document.createElement('div');
@@ -3167,7 +3368,19 @@ function pageTraining(route, rawCtx) {
         <h3>训练工作台概览</h3>
         <div id="trainingWorkbenchOverviewWrap">${renderEmpty('选择一条训练作业后，这里会汇总当前状态、Worker 健康和推荐下一步动作。')}</div>
       </section>
-      <section class="grid-two">
+      <section class="card">
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-training-panel-tab="overview">训练总览</button>
+          <button class="ghost" type="button" data-training-panel-tab="create">创建训练</button>
+          <button class="ghost" type="button" data-training-panel-tab="workers">Worker 运维</button>
+        </div>
+        <div id="trainingPanelMeta" class="hint">默认先看训练总览；创建和 Worker 运维按工作区展开。</div>
+      </section>
+      <section class="card" data-training-panel="overview">
+        <h3>运行告警</h3>
+        <div id="trainingRuntimeAlertWrap">${renderLoading('加载训练运行健康状态...')}</div>
+      </section>
+      <section class="grid-two" data-training-panel="overview">
         <section class="card">
           <h3>训练作业</h3>
           <form id="trainingFilterForm" class="inline-form">
@@ -3190,44 +3403,44 @@ function pageTraining(route, rawCtx) {
           </form>
           <div id="trainingJobsTableWrap">${renderLoading('加载训练作业...')}</div>
         </section>
-        <section class="card">
-          <h3>训练 Worker</h3>
-          <div id="trainingWorkersWrap">${renderLoading('加载 worker...')}</div>
-          ${
-            canManageWorkers
-              ? `
-                <details class="inline-details training-worker-register">
-                  <summary>注册 / 刷新 Worker</summary>
-                  <form id="registerWorkerForm" class="details-panel form-grid">
-                    <label>worker_code(Worker 编码)</label><input name="worker_code" placeholder="train-worker-01" required />
-                    <label>name(名称)</label><input name="name" placeholder="GPU Worker 01" required />
-                    <label>host(主机地址)</label><input name="host" placeholder="10.0.0.31" />
-                    <label>status(状态)</label>
-                    <select name="status">
-                      <option value="ACTIVE">${enumText('worker_status', 'ACTIVE')}</option>
-                      <option value="INACTIVE">${enumText('worker_status', 'INACTIVE')}</option>
-                      <option value="UNHEALTHY">${enumText('worker_status', 'UNHEALTHY')}</option>
-                    </select>
-                    <label>labels(JSON 标签)</label><textarea name="labels" rows="2">{}</textarea>
-                    <label>resources(JSON 资源)</label><textarea name="resources" rows="2">{}</textarea>
-                    <button class="primary" type="submit">注册 Worker</button>
-                    <div id="registerWorkerMsg" class="hint"></div>
-                  </form>
-                </details>
-              `
-              : renderEmpty('当前角色无 worker 管理权限')
-          }
-        </section>
       </section>
-      <section class="card">
+      <section class="card" data-training-panel="overview">
         <h3>训练结果摘要</h3>
         <p class="hint">把基础模型、数据规模、关键指标和后续动作放在一屏里，方便快速判断这轮训练是否值得进入审批、发布或继续迭代。</p>
         <div id="trainingRunSummaryWrap">${renderLoading('加载训练摘要...')}</div>
       </section>
+      <section class="card" data-training-panel="workers" hidden>
+        <h3>训练 Worker</h3>
+        <div id="trainingWorkersWrap">${renderLoading('加载 worker...')}</div>
+        ${
+          canManageWorkers
+            ? `
+              <details class="inline-details training-worker-register">
+                <summary>注册 / 刷新 Worker</summary>
+                <form id="registerWorkerForm" class="details-panel form-grid">
+                  <label>worker_code(Worker 编码)</label><input name="worker_code" placeholder="train-worker-01" required />
+                  <label>name(名称)</label><input name="name" placeholder="GPU Worker 01" required />
+                  <label>host(主机地址)</label><input name="host" placeholder="10.0.0.31" />
+                  <label>status(状态)</label>
+                  <select name="status">
+                    <option value="ACTIVE">${enumText('worker_status', 'ACTIVE')}</option>
+                    <option value="INACTIVE">${enumText('worker_status', 'INACTIVE')}</option>
+                    <option value="UNHEALTHY">${enumText('worker_status', 'UNHEALTHY')}</option>
+                  </select>
+                  <label>labels(JSON 标签)</label><textarea name="labels" rows="2">{}</textarea>
+                  <label>resources(JSON 资源)</label><textarea name="resources" rows="2">{}</textarea>
+                  <button class="primary" type="submit">注册 Worker</button>
+                  <div id="registerWorkerMsg" class="hint"></div>
+                </form>
+              </details>
+            `
+            : renderEmpty('当前角色无 worker 管理权限')
+        }
+      </section>
       ${
         canCreateTrainingJob
           ? `
-            <section class="card">
+            <section class="card" data-training-panel="create" hidden>
               <h3>创建训练作业</h3>
               <div class="grid-two">
                 <section class="lane-card">
@@ -3342,6 +3555,9 @@ function pageTraining(route, rawCtx) {
       const createForm = root.querySelector('#trainingCreateForm');
       const createMsg = root.querySelector('#trainingCreateMsg');
       const createResultWrap = root.querySelector('#trainingCreateResultWrap');
+      const trainingPanelMeta = root.querySelector('#trainingPanelMeta');
+      const trainingPanelTabs = [...root.querySelectorAll('[data-training-panel-tab]')];
+      const trainingPanels = [...root.querySelectorAll('[data-training-panel]')];
       const trainingRuntimeAlertWrap = root.querySelector('#trainingRuntimeAlertWrap');
       const trainingWorkbenchOverviewWrap = root.querySelector('#trainingWorkbenchOverviewWrap');
       const trainingRunSummaryWrap = root.querySelector('#trainingRunSummaryWrap');
@@ -3394,6 +3610,7 @@ function pageTraining(route, rawCtx) {
       let datasetPreviewBlobUrls = [];
       let cachedTrainingJobs = [];
       let activeTrainingJobId = '';
+      let activeTrainingPanel = 'overview';
       let lastAutoSpecSerialized = '{}';
       const trainingLibraryFilters = {
         modelQuery: '',
@@ -3430,6 +3647,26 @@ function pageTraining(route, rawCtx) {
           preprocessing: { resize: [320, 96] },
         },
       };
+
+      function setTrainingPanel(panel) {
+        activeTrainingPanel = ['overview', 'create', 'workers'].includes(panel) ? panel : 'overview';
+        trainingPanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-training-panel') !== activeTrainingPanel;
+        });
+        trainingPanelTabs.forEach((button) => {
+          const active = button.getAttribute('data-training-panel-tab') === activeTrainingPanel;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (trainingPanelMeta) {
+          trainingPanelMeta.textContent = activeTrainingPanel === 'overview'
+            ? '先看训练作业状态、运行告警和训练摘要。'
+            : activeTrainingPanel === 'create'
+              ? '把训练参数、数据集和训练机选择集中在一处。'
+              : '集中处理 Worker 健康、历史异常和节点注册。';
+        }
+      }
 
       async function waitForTaskTerminal(taskId, { timeoutMs = 90_000 } = {}) {
         const startedAt = Date.now();
@@ -3521,12 +3758,14 @@ function pageTraining(route, rawCtx) {
           });
         }
         trainingWorkbenchOverviewWrap.querySelector('[data-workbench-action="training-open-create"]')?.addEventListener('click', () => {
+          setTrainingPanel('create');
           createForm?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
         trainingWorkbenchOverviewWrap.querySelector('[data-workbench-action="training-open-review"]')?.addEventListener('click', () => {
           ctx.navigate('training/car-number-labeling');
         });
         trainingWorkbenchOverviewWrap.querySelector('[data-workbench-action="training-open-summary"]')?.addEventListener('click', () => {
+          setTrainingPanel('overview');
           trainingRunSummaryWrap?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
         trainingWorkbenchOverviewWrap.querySelector('[data-workbench-action="training-open-candidate-model"]')?.addEventListener('click', () => {
@@ -3537,6 +3776,7 @@ function pageTraining(route, rawCtx) {
         });
         trainingWorkbenchOverviewWrap.querySelector('[data-workbench-action="training-open-validation"]')?.addEventListener('click', () => {
           if (!job?.candidate_model?.id) return;
+          setTrainingPanel('overview');
           trainingRunSummaryWrap?.querySelector('[data-launch-candidate-validation-open]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         });
       }
@@ -4345,10 +4585,12 @@ function pageTraining(route, rawCtx) {
         `;
         createResultWrap.querySelector('[data-focus-created-job]')?.addEventListener('click', async () => {
           activeTrainingJobId = job.id || activeTrainingJobId;
+          setTrainingPanel('overview');
           await loadJobTable();
           trainingRunSummaryWrap?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
         createResultWrap.querySelector('[data-scroll-training-summary]')?.addEventListener('click', () => {
+          setTrainingPanel('overview');
           trainingRunSummaryWrap?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
         createResultWrap.querySelector('[data-open-car-number-review]')?.addEventListener('click', () => {
@@ -5199,11 +5441,17 @@ function pageTraining(route, rawCtx) {
         trainingLibraryFilters.datasetShowHistory = trainingDatasetShowHistory.checked;
         renderDatasetVersionLibrary();
       });
+      trainingPanelTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setTrainingPanel(button.getAttribute('data-training-panel-tab') || 'overview');
+        });
+      });
 
       await Promise.all([loadJobTable(), loadWorkers(), loadFormAssistData()]);
       ensureDefaultWorkerSelection();
       applyTrainingPreset({ force: String(specInput?.value || '').trim() === '{}' });
       refreshSelectionSummary();
+      setTrainingPanel('overview');
       renderTrainingCreateResult(null);
     },
   };
@@ -5753,7 +6001,19 @@ function pagePipelines(route, rawCtx) {
         <h3>流水线工作台概览</h3>
         <div id="pipelineWorkbenchOverviewWrap">${renderEmpty('先从流水线列表选择一版配置，这里会汇总当前状态和推荐的发布动作。')}</div>
       </section>
-      <section class="grid-two">
+      <section class="card">
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-pipeline-panel-tab="overview">流水线总览</button>
+          <button class="ghost" type="button" data-pipeline-panel-tab="build">注册配置</button>
+          <button class="ghost" type="button" data-pipeline-panel-tab="release">发布管理</button>
+        </div>
+        <div id="pipelinePanelMeta" class="hint">默认先看流水线总览；注册和发布按工作区展开。</div>
+      </section>
+      <section class="card" data-pipeline-panel="overview">
+        <h3>流水线列表</h3>
+        <div id="pipelinesTableWrap">${renderLoading('加载流水线列表...')}</div>
+      </section>
+      <section class="grid-two" data-pipeline-panel="build" hidden>
         <form id="pipelineRegisterForm" class="card form-grid">
           <h3>注册流水线</h3>
           <label>pipeline_code(流水线编码)</label><input name="pipeline_code" placeholder="railway-mainline" required />
@@ -5788,11 +6048,7 @@ function pagePipelines(route, rawCtx) {
           </details>
         </section>
       </section>
-      <section class="card">
-        <h3>流水线列表</h3>
-        <div id="pipelinesTableWrap">${renderLoading('加载流水线列表...')}</div>
-      </section>
-      <section class="card">
+      <section class="card" data-pipeline-panel="release" hidden>
         <h3>流水线发布工作台</h3>
         <div id="pipelineReleaseWorkbenchWrap">${renderEmpty('在流水线列表里点“发布工作台”，这里会自动带出推荐设备、买家范围和最近发布配置。')}</div>
       </section>
@@ -5803,10 +6059,34 @@ function pagePipelines(route, rawCtx) {
       const registerMsg = root.querySelector('#pipelineRegisterMsg');
       const tableWrap = root.querySelector('#pipelinesTableWrap');
       const pipelineWorkbenchOverviewWrap = root.querySelector('#pipelineWorkbenchOverviewWrap');
+      const pipelinePanelMeta = root.querySelector('#pipelinePanelMeta');
+      const pipelinePanelTabs = [...root.querySelectorAll('[data-pipeline-panel-tab]')];
+      const pipelinePanels = [...root.querySelectorAll('[data-pipeline-panel]')];
       const releaseWorkbenchWrap = root.querySelector('#pipelineReleaseWorkbenchWrap');
       let activePipelineReleaseId = '';
       let activePipelineId = '';
+      let activePipelinePanel = 'overview';
       let cachedPipelines = [];
+
+      function setPipelinePanel(panel) {
+        activePipelinePanel = ['overview', 'build', 'release'].includes(panel) ? panel : 'overview';
+        pipelinePanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-pipeline-panel') !== activePipelinePanel;
+        });
+        pipelinePanelTabs.forEach((button) => {
+          const active = button.getAttribute('data-pipeline-panel-tab') === activePipelinePanel;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (pipelinePanelMeta) {
+          pipelinePanelMeta.textContent = activePipelinePanel === 'overview'
+            ? '先看流水线状态、路由模型和下一步动作。'
+            : activePipelinePanel === 'build'
+              ? '把注册和路由配置集中处理。'
+              : '把发布范围、设备和买家配置放在同一处。';
+        }
+      }
 
       function selectedPipelineRecord() {
         return cachedPipelines.find((row) => row.id === activePipelineId) || null;
@@ -5849,6 +6129,7 @@ function pagePipelines(route, rawCtx) {
           });
         }
         pipelineWorkbenchOverviewWrap.querySelector('[data-workbench-action="pipeline-open-register"]')?.addEventListener('click', () => {
+          setPipelinePanel('build');
           registerForm?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
         pipelineWorkbenchOverviewWrap.querySelector('[data-workbench-action="pipeline-open-tasks"]')?.addEventListener('click', () => {
@@ -5857,6 +6138,7 @@ function pagePipelines(route, rawCtx) {
         pipelineWorkbenchOverviewWrap.querySelector('[data-workbench-action="pipeline-open-release"]')?.addEventListener('click', async () => {
           if (!activePipelineId) return;
           try {
+            setPipelinePanel('release');
             await openPipelineReleaseWorkbench(activePipelineId);
             releaseWorkbenchWrap?.scrollIntoView({ behavior: 'smooth', block: 'center' });
           } catch (error) {
@@ -5928,6 +6210,7 @@ function pagePipelines(route, rawCtx) {
         if (!releaseWorkbenchWrap) return null;
         activePipelineReleaseId = pipelineId;
         activePipelineId = pipelineId;
+        setPipelinePanel('release');
         renderPipelineWorkbenchOverview();
         releaseWorkbenchWrap.innerHTML = renderLoading('加载流水线发布工作台...');
         try {
@@ -6022,6 +6305,7 @@ function pagePipelines(route, rawCtx) {
               btn.addEventListener('click', async () => {
                 const pipelineId = btn.getAttribute('data-release-pipeline');
                 try {
+                  setPipelinePanel('release');
                   await openPipelineReleaseWorkbench(pipelineId);
                   releaseWorkbenchWrap?.scrollIntoView({ block: 'center', behavior: 'smooth' });
                 } catch (error) {
@@ -6056,6 +6340,7 @@ function pagePipelines(route, rawCtx) {
           const result = await ctx.post('/pipelines/register', payload);
           registerMsg.textContent = `注册成功：${result.pipeline_code}:${result.version}`;
           ctx.toast('流水线注册成功');
+          setPipelinePanel('overview');
           await loadPipelines();
           if (canRelease && result.id) {
             await openPipelineReleaseWorkbench(result.id);
@@ -6067,6 +6352,13 @@ function pagePipelines(route, rawCtx) {
         }
       });
 
+      pipelinePanelTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setPipelinePanel(button.getAttribute('data-pipeline-panel-tab') || 'overview');
+        });
+      });
+
+      setPipelinePanel('overview');
       await loadPipelines();
       if (activePipelineReleaseId) {
         await openPipelineReleaseWorkbench(activePipelineReleaseId);
@@ -6715,6 +7007,15 @@ function pageTasks(route, rawCtx) {
         const intentText = String(intentInput?.value || '').trim();
         const asset = assistAssets.find((row) => row.id === assetId);
         const model = assistModels.find((row) => row.id === modelId);
+        const assetText = assetId ? (asset?.file_name || '已选 1 个资产') : '尚未选择';
+        const executionText = model
+          ? `${model.model_code}:${model.version}`
+          : pipelineId
+            ? '按已选流水线执行'
+            : schedulerInput?.checked
+              ? '由主调度器自动选模'
+              : '尚未显式指定';
+        const taskTypeText = taskType ? enumText('task_type', taskType) : '自动判断';
         const modeText = pipelineId
           ? '优先按已选流水线执行'
           : schedulerInput?.checked
@@ -6724,10 +7025,10 @@ function pageTasks(route, rawCtx) {
               : '按当前表单字段创建任务';
         taskCreateAssist.innerHTML = `
           <strong>${esc(modeText)}</strong>
-          <span>${esc(assetId ? `资产：${asset?.file_name || truncateMiddle(assetId, 10, 8)}` : '资产：尚未选择')}</span>
-          <span>${esc(model ? `模型：${model.model_code}:${model.version}` : pipelineId ? `流水线：${truncateMiddle(pipelineId, 10, 8)}` : '模型：未显式选择')}</span>
-          <span>${esc(`任务类型：${taskType ? enumText('task_type', taskType) : '自动判断'} · 设备：${deviceCode}`)}</span>
-          <span>${esc(intentText ? `意图：${intentText}` : '创建后可直接等待执行并打开结果页。')}</span>
+          <span>${esc(`本次识别：${taskTypeText}`)}</span>
+          <span>${esc(`资产：${assetText}`)}</span>
+          <span>${esc(`执行方式：${executionText} · 设备 ${deviceCode}`)}</span>
+          <span>${esc(intentText ? `识别意图：${intentText}` : '创建后可直接等待执行并打开结果页。')}</span>
         `;
       }
 
@@ -7787,12 +8088,23 @@ function pageTasks(route, rawCtx) {
                     </div>
                   </div>
                   <div class="keyvals compact">
-                    <div><span>asset_id</span><strong class="mono" title="${esc(row.asset_id || '-')}">${esc(truncateMiddle(row.asset_id || '-', 10, 8))}</strong></div>
-                    <div><span>model_id</span><strong class="mono" title="${esc(row.model_id || '-')}">${esc(truncateMiddle(row.model_id || '-', 10, 8))}</strong></div>
-                    <div><span>pipeline_id</span><strong class="mono" title="${esc(row.pipeline_id || '-')}">${esc(truncateMiddle(row.pipeline_id || '-', 10, 8))}</strong></div>
                     <div><span>创建时间</span><strong>${formatDateTime(row.created_at)}</strong></div>
+                    <div><span>执行方式</span><strong>${esc(row.model_id ? '显式模型' : row.pipeline_id ? '流水线' : '自动调度')}</strong></div>
+                    <div><span>结果入口</span><strong>${esc(['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(String(row.status || '')) ? '可直接查看' : '等待执行完成')}</strong></div>
+                    <div><span>当前设备</span><strong>${esc(row.device_code || '-')}</strong></div>
                   </div>
                   ${row.error_message ? `<div class="quick-detect-recommend">${esc(row.error_message)}</div>` : `<div class="hint">当前任务可查看详情、查看结果，或等待执行完成后再进入结果页。</div>`}
+                  <details class="inline-details">
+                    <summary>技术详情</summary>
+                    <div class="details-panel">
+                      <div class="keyvals compact">
+                        <div><span>asset_id</span><strong class="mono" title="${esc(row.asset_id || '-')}">${esc(truncateMiddle(row.asset_id || '-', 10, 8))}</strong></div>
+                        <div><span>model_id</span><strong class="mono" title="${esc(row.model_id || '-')}">${esc(truncateMiddle(row.model_id || '-', 10, 8))}</strong></div>
+                        <div><span>pipeline_id</span><strong class="mono" title="${esc(row.pipeline_id || '-')}">${esc(truncateMiddle(row.pipeline_id || '-', 10, 8))}</strong></div>
+                        <div><span>task_id</span><strong class="mono" title="${esc(row.id)}">${esc(truncateMiddle(row.id, 12, 10))}</strong></div>
+                      </div>
+                    </div>
+                  </details>
                   <div class="row-actions">
                     <button class="primary" data-task-detail="${esc(row.id)}">详情</button>
                     <button class="ghost" data-task-results="${esc(row.id)}">结果</button>
@@ -8615,7 +8927,10 @@ function pageResults(route, rawCtx) {
             bindResultDatasetWorkbench(clean);
           }
           const modelCount = [...new Set((enrichedRows || []).map((row) => String(row.model_id || '').trim()).filter(Boolean))].length;
-          resultMeta.textContent = `task_id=${clean} · 结果条数=${enrichedRows.length} · 关联模型=${modelCount}`;
+          const recognizedTexts = [...new Set(currentSummaries.flatMap((item) => item.recognizedTexts || []).filter(Boolean))];
+          resultMeta.textContent = recognizedTexts.length
+            ? `当前查询到 ${enrichedRows.length} 条结果 · 关联模型 ${modelCount} 个 · 识别文本 ${recognizedTexts.slice(0, 3).join(' / ')}`
+            : `当前查询到 ${enrichedRows.length} 条结果 · 关联模型 ${modelCount} 个`;
           localStorage.setItem(STORAGE_KEYS.lastTaskId, clean);
           await bindScreenshotButtons();
         } catch (error) {
@@ -8683,6 +8998,16 @@ function pageAudit(route, rawCtx) {
         ],
       })}
       <section class="card">
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-audit-panel-tab="overview">审计总览</button>
+          <button class="ghost" type="button" data-audit-panel-tab="search">检索日志</button>
+        </div>
+        <div id="auditPanelMeta" class="hint">默认先看审计总览；按需展开检索日志。</div>
+      </section>
+      <section class="card" data-audit-panel="overview">
+        <div id="auditOverviewWrap">${renderLoading('加载审计概览...')}</div>
+      </section>
+      <section class="card" data-audit-panel="search" hidden>
         <form id="auditFilterForm" class="inline-form">
           <input name="action" placeholder="action(动作)，例如 MODEL_RELEASE" />
           <input name="resource_type" placeholder="resource_type(资源类型)，例如 task" />
@@ -8695,11 +9020,35 @@ function pageAudit(route, rawCtx) {
     `,
     async mount(root) {
       bindPageNavButtons(root, ctx);
+      const auditPanelMeta = root.querySelector('#auditPanelMeta');
+      const auditPanelTabs = [...root.querySelectorAll('[data-audit-panel-tab]')];
+      const auditPanels = [...root.querySelectorAll('[data-audit-panel]')];
+      const overviewWrap = root.querySelector('#auditOverviewWrap');
       const filterForm = root.querySelector('#auditFilterForm');
       const tableWrap = root.querySelector('#auditTableWrap');
+      let activeAuditPanel = 'overview';
+
+      function setAuditPanel(panel) {
+        activeAuditPanel = ['overview', 'search'].includes(panel) ? panel : 'overview';
+        auditPanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-audit-panel') !== activeAuditPanel;
+        });
+        auditPanelTabs.forEach((button) => {
+          const active = button.getAttribute('data-audit-panel-tab') === activeAuditPanel;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (auditPanelMeta) {
+          auditPanelMeta.textContent = activeAuditPanel === 'overview'
+            ? '先看审计总量、最近动作和资源类型分布。'
+            : '按动作、资源或操作者检索完整留痕。';
+        }
+      }
 
       async function loadAudit() {
         tableWrap.innerHTML = renderLoading('加载审计日志...');
+        if (overviewWrap) overviewWrap.innerHTML = renderLoading('加载审计概览...');
         try {
           const fd = new FormData(filterForm);
           const query = toQuery({
@@ -8710,26 +9059,60 @@ function pageAudit(route, rawCtx) {
             limit: 100,
           });
           const rows = await ctx.get(`/audit${query}`);
+          if (overviewWrap) {
+            const actionKinds = new Set(rows.map((row) => String(row.action || '').trim()).filter(Boolean)).size;
+            const resourceKinds = new Set(rows.map((row) => String(row.resource_type || '').trim()).filter(Boolean)).size;
+            const latestAction = rows[0]?.action || '暂无';
+            overviewWrap.innerHTML = renderWorkbenchOverview({
+              title: '审计总览',
+              summary: '统一查看模型审批发布、训练执行、任务创建和结果导出的留痕。',
+              metrics: [
+                { label: '日志条数', value: rows.length, note: '当前检索结果' },
+                { label: '动作类型', value: actionKinds, note: 'action' },
+                { label: '资源类型', value: resourceKinds, note: 'resource_type' },
+              ],
+              actions: [
+                { id: 'audit-open-search', label: '打开检索日志', primary: true },
+                { id: 'audit-open-devices', label: '查看设备状态' },
+              ],
+            });
+            overviewWrap.querySelector('[data-workbench-action="audit-open-search"]')?.addEventListener('click', () => {
+              setAuditPanel('search');
+              filterForm?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            });
+            overviewWrap.querySelector('[data-workbench-action="audit-open-devices"]')?.addEventListener('click', () => {
+              ctx.navigate('devices');
+            });
+          }
           if (!rows.length) {
             tableWrap.innerHTML = renderEmpty('暂无审计日志。完成模型审批、任务创建、结果导出或设备拉取后会在这里留痕');
             return;
           }
           tableWrap.innerHTML = `
-            <div class="table-wrap">
-              <table class="table">
-                <thead><tr><th>时间</th><th>action(动作)</th><th>actor(操作者)</th><th>resource(资源)</th><th>detail(详情)</th></tr></thead>
-                <tbody>
-                  ${rows.map((row) => `
-                    <tr>
-                      <td>${formatDateTime(row.created_at)}</td>
-                      <td>${esc(row.action)}</td>
-                      <td>${esc(row.actor_username || row.actor_role || '-')}</td>
-                      <td>${esc(row.resource_type)} / <span class="mono">${esc(row.resource_id || '-')}</span></td>
-                      <td><details><summary>查看</summary><pre>${esc(safeJson(row.detail))}</pre></details></td>
-                    </tr>
-                  `).join('')}
-                </tbody>
-              </table>
+            <div class="selection-grid">
+              ${rows.map((row) => `
+                <article class="selection-card">
+                  <div class="selection-card-head selection-card-head--stack">
+                    <div class="selection-card-title">
+                      <strong>${esc(row.action)}</strong>
+                      <span class="selection-card-subtitle">${formatDateTime(row.created_at)}</span>
+                    </div>
+                    <span class="badge">${esc(row.resource_type || '-')}</span>
+                  </div>
+                  <div class="selection-card-meta selection-card-meta--compact">
+                    <span>操作者</span><strong>${esc(row.actor_username || row.actor_role || '-')}</strong>
+                    <span>资源</span><strong>${esc(row.resource_type || '-')}</strong>
+                    <span>资源ID</span><strong class="mono">${esc(truncateMiddle(row.resource_id || '-', 10, 8))}</strong>
+                    <span>影响</span><strong>${esc(row.detail?.status || row.detail?.decision || '已留痕')}</strong>
+                  </div>
+                  <details class="inline-details">
+                    <summary>查看详情</summary>
+                    <div class="details-panel">
+                      <pre>${esc(safeJson(row.detail))}</pre>
+                    </div>
+                  </details>
+                </article>
+              `).join('')}
             </div>
           `;
         } catch (error) {
@@ -8742,6 +9125,12 @@ function pageAudit(route, rawCtx) {
         await loadAudit();
       });
 
+      auditPanelTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setAuditPanel(button.getAttribute('data-audit-panel-tab') || 'overview');
+        });
+      });
+      setAuditPanel('overview');
       await loadAudit();
     },
   };
@@ -8766,41 +9155,114 @@ function pageDevices(route, rawCtx) {
         ],
       })}
       <section class="card">
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-device-panel-tab="overview">设备总览</button>
+          <button class="ghost" type="button" data-device-panel-tab="list">设备列表</button>
+        </div>
+        <div id="devicePanelMeta" class="hint">默认先看设备总览；按需展开设备列表。</div>
+      </section>
+      <section class="card" data-device-panel="overview">
+        <div id="devicesOverviewWrap">${renderLoading('加载设备概览...')}</div>
+      </section>
+      <section class="card" data-device-panel="list" hidden>
         <div id="devicesTableWrap">${renderLoading('加载设备列表...')}</div>
       </section>
     `,
     async mount(root) {
       bindPageNavButtons(root, ctx);
+      const devicePanelMeta = root.querySelector('#devicePanelMeta');
+      const devicePanelTabs = [...root.querySelectorAll('[data-device-panel-tab]')];
+      const devicePanels = [...root.querySelectorAll('[data-device-panel]')];
+      const overviewWrap = root.querySelector('#devicesOverviewWrap');
       const wrap = root.querySelector('#devicesTableWrap');
+      let activeDevicePanel = 'overview';
+
+      function setDevicePanel(panel) {
+        activeDevicePanel = ['overview', 'list'].includes(panel) ? panel : 'overview';
+        devicePanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-device-panel') !== activeDevicePanel;
+        });
+        devicePanelTabs.forEach((button) => {
+          const active = button.getAttribute('data-device-panel-tab') === activeDevicePanel;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (devicePanelMeta) {
+          devicePanelMeta.textContent = activeDevicePanel === 'overview'
+            ? '先看在线状态、最近心跳和设备规模。'
+            : '展开完整设备列表查看 buyer、状态和 Agent 版本。';
+        }
+      }
+      devicePanelTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setDevicePanel(button.getAttribute('data-device-panel-tab') || 'overview');
+        });
+      });
+      setDevicePanel('overview');
       try {
         const rows = await ctx.get('/devices');
         if (!rows.length) {
+          if (overviewWrap) overviewWrap.innerHTML = renderEmpty('暂无设备概览。');
           wrap.innerHTML = renderEmpty('暂无设备。请先接入边缘 Agent，或确认当前角色拥有设备查看权限');
           return;
         }
+        if (overviewWrap) {
+          const online = rows.filter((row) => String(row.status || '').toUpperCase() === 'ONLINE').length;
+          const buyers = new Set(rows.map((row) => String(row.buyer || '').trim()).filter(Boolean)).size;
+          const latestHeartbeat = rows
+            .map((row) => row.last_heartbeat)
+            .filter(Boolean)
+            .sort((a, b) => String(b).localeCompare(String(a)))[0];
+          overviewWrap.innerHTML = renderWorkbenchOverview({
+            title: '设备总览',
+            summary: '统一查看当前授权设备的在线状态、客户范围和最近心跳。',
+            metrics: [
+              { label: '设备总数', value: rows.length, note: '当前可见' },
+              { label: '在线设备', value: online, note: rows.length ? `${Math.round((online / rows.length) * 100)}%` : '-' },
+              { label: '买家范围', value: buyers, note: latestHeartbeat ? `最近心跳 ${formatDateTime(latestHeartbeat)}` : '暂无心跳' },
+            ],
+            actions: [
+              { id: 'device-open-list', label: '打开设备列表', primary: true },
+              { id: 'device-open-audit', label: '查看审计' },
+            ],
+          });
+          overviewWrap.querySelector('[data-workbench-action="device-open-list"]')?.addEventListener('click', () => {
+            setDevicePanel('list');
+            wrap?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          });
+          overviewWrap.querySelector('[data-workbench-action="device-open-audit"]')?.addEventListener('click', () => {
+            ctx.navigate('audit');
+          });
+        }
         wrap.innerHTML = `
-          <div class="table-wrap">
-            <table class="table">
-              <thead><tr><th>device_id(设备ID)</th><th>buyer(客户)</th><th>status(状态)</th><th>last_heartbeat(最近心跳)</th><th>agent_version(Agent 版本)</th></tr></thead>
-              <tbody>
-                ${rows.map((row) => `
-                  <tr>
-                    <td class="mono">${esc(row.device_id)}</td>
-                    <td>${esc(row.buyer || '-')}</td>
-                    <td>${esc(enumText('device_status', row.status))}</td>
-                    <td>${formatDateTime(row.last_heartbeat)}</td>
-                    <td>${esc(row.agent_version || '-')}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
+          <div class="selection-grid">
+            ${rows.map((row) => `
+              <article class="selection-card">
+                <div class="selection-card-head selection-card-head--stack">
+                  <div class="selection-card-title">
+                    <strong>${esc(row.device_id)}</strong>
+                    <span class="selection-card-subtitle">${esc(row.buyer || '-')}</span>
+                  </div>
+                  <span class="badge">${esc(enumText('device_status', row.status))}</span>
+                </div>
+                <div class="selection-card-meta selection-card-meta--compact">
+                  <span>最近心跳</span><strong>${formatDateTime(row.last_heartbeat)}</strong>
+                  <span>Agent</span><strong>${esc(row.agent_version || '-')}</strong>
+                  <span>客户</span><strong>${esc(row.buyer || '-')}</strong>
+                  <span>状态</span><strong>${esc(enumText('device_status', row.status))}</strong>
+                </div>
+              </article>
+            `).join('')}
           </div>
         `;
       } catch (error) {
         if (String(error.message || '').includes('404')) {
+          if (overviewWrap) overviewWrap.innerHTML = renderEmpty('设备概览暂不可用。');
           wrap.innerHTML = renderEmpty('设备接口尚未接通，请先确认中心端 /devices 接口状态');
           return;
         }
+        if (overviewWrap) overviewWrap.innerHTML = renderError(error.message);
         wrap.innerHTML = renderError(error.message);
       }
     },
@@ -8821,33 +9283,176 @@ function pageSettings(route, rawCtx) {
           { path: 'guide', label: '查看使用指南' },
         ],
       })}
-      <section class="card" id="settingsWrap">${renderLoading('加载用户信息...')}</section>
+      <section class="card">
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-settings-panel-tab="overview">账号总览</button>
+          <button class="ghost" type="button" data-settings-panel-tab="access">权限范围</button>
+          <button class="ghost" type="button" data-settings-panel-tab="tech">技术详情</button>
+        </div>
+        <div id="settingsPanelMeta" class="hint">默认先看账号总览；权限和技术细节按工作区展开。</div>
+      </section>
+      <section class="card" data-settings-panel="overview">
+        <div id="settingsOverviewWrap">${renderLoading('加载账号总览...')}</div>
+      </section>
+      <section class="card" data-settings-panel="access" hidden>
+        <div id="settingsAccessWrap">${renderLoading('加载权限范围...')}</div>
+      </section>
+      <section class="card" data-settings-panel="tech" hidden>
+        <div id="settingsTechWrap">${renderLoading('加载技术详情...')}</div>
+      </section>
     `,
     async mount(root) {
       bindPageNavButtons(root, ctx);
-      const wrap = root.querySelector('#settingsWrap');
+      const panelMeta = root.querySelector('#settingsPanelMeta');
+      const panelTabs = [...root.querySelectorAll('[data-settings-panel-tab]')];
+      const panels = [...root.querySelectorAll('[data-settings-panel]')];
+      const overviewWrap = root.querySelector('#settingsOverviewWrap');
+      const accessWrap = root.querySelector('#settingsAccessWrap');
+      const techWrap = root.querySelector('#settingsTechWrap');
+      let activePanel = 'overview';
+
+      function setSettingsPanel(panel) {
+        activePanel = ['overview', 'access', 'tech'].includes(panel) ? panel : 'overview';
+        panels.forEach((section) => {
+          section.hidden = section.getAttribute('data-settings-panel') !== activePanel;
+        });
+        panelTabs.forEach((button) => {
+          const active = button.getAttribute('data-settings-panel-tab') === activePanel;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (panelMeta) {
+          panelMeta.textContent = activePanel === 'overview'
+            ? '先看当前账号、租户边界和默认工作路径。'
+            : activePanel === 'access'
+              ? '查看当前角色可执行范围和能力标签。'
+              : '仅在排障或核对权限细项时查看原始技术信息。';
+        }
+      }
+
+      panelTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setSettingsPanel(button.getAttribute('data-settings-panel-tab') || 'overview');
+        });
+      });
       try {
         const me = await ctx.get('/users/me');
         const preset = rolePreset(me);
-        wrap.innerHTML = `
-          <div class="keyvals">
-            <div><span>username</span><strong>${esc(me.username)}</strong></div>
-            <div><span>roles</span><strong>${esc((me.roles || []).map((item) => roleLabel(item)).join(' / '))}</strong></div>
-            <div><span>tenant_code</span><strong>${esc(me.tenant_code || '-')}</strong></div>
-            <div><span>tenant_type</span><strong>${esc(me.tenant_type || '-')}</strong></div>
+        const roleNames = (me.roles || []).map((item) => roleLabel(item)).filter(Boolean);
+        const permissions = Array.isArray(me.permissions) ? me.permissions.filter(Boolean) : [];
+        const capabilities = me.capabilities && typeof me.capabilities === 'object' ? me.capabilities : {};
+        const enabledCapabilities = Object.entries(capabilities).filter(([, value]) => value).map(([key]) => key);
+        overviewWrap.innerHTML = `
+          ${renderWorkbenchOverview({
+            title: '账号总览',
+            summary: '先确认当前是谁、归属哪个租户、默认应该从哪个工作区开始操作。',
+            status: roleNames[0] || '未识别角色',
+            metrics: [
+              { label: '当前账号', value: me.username || '-', note: '登录身份' },
+              { label: '租户边界', value: me.tenant_code || me.tenant_id || '-', note: me.tenant_type || 'tenant' },
+              { label: '角色数量', value: roleNames.length || 0, note: roleNames.join(' / ') || '无角色' },
+              { label: '默认路径', value: preset.pathHint || '-', note: '推荐从这里开始' },
+            ],
+            actions: [
+              { id: 'settings-open-dashboard', label: '返回工作台', primary: true },
+              { id: 'settings-open-guide', label: '查看使用指南' },
+              { id: 'settings-open-access', label: '查看权限范围' },
+            ],
+          })}
+          <div class="selection-grid">
+            <article class="selection-card">
+              <div class="selection-card-head selection-card-head--stack">
+                <div class="selection-card-title">
+                  <strong>${esc(me.username || '-')}</strong>
+                  <span class="selection-card-subtitle">${esc(roleNames.join(' / ') || '未分配角色')}</span>
+                </div>
+                <span class="badge">${esc(me.tenant_type || 'tenant')}</span>
+              </div>
+              <div class="selection-card-meta selection-card-meta--compact">
+                <span>租户编码</span><strong>${esc(me.tenant_code || '-')}</strong>
+                <span>默认入口</span><strong>${esc(preset.title || '-')}</strong>
+                <span>权限条数</span><strong>${permissions.length}</strong>
+                <span>能力标签</span><strong>${enabledCapabilities.length}</strong>
+              </div>
+            </article>
           </div>
-          <div class="hint">默认路径：${esc(preset.pathHint)}</div>
-          <details open>
-            <summary>permissions</summary>
-            <pre>${esc(safeJson(me.permissions || []))}</pre>
-          </details>
-          <details>
-            <summary>capabilities</summary>
-            <pre>${esc(safeJson(me.capabilities || {}))}</pre>
+        `;
+        overviewWrap.querySelector('[data-workbench-action="settings-open-dashboard"]')?.addEventListener('click', () => ctx.navigate('dashboard'));
+        overviewWrap.querySelector('[data-workbench-action="settings-open-guide"]')?.addEventListener('click', () => ctx.navigate('guide'));
+        overviewWrap.querySelector('[data-workbench-action="settings-open-access"]')?.addEventListener('click', () => setSettingsPanel('access'));
+
+        accessWrap.innerHTML = `
+          <div class="selection-grid">
+            <article class="selection-card">
+              <div class="selection-card-head">
+                <strong>角色范围</strong>
+              </div>
+              <div class="page-hero-highlights">
+                ${roleNames.length ? roleNames.map((item) => `<span class="page-hero-pill">${esc(item)}</span>`).join('') : '<span class="page-hero-pill">暂无角色</span>'}
+              </div>
+            </article>
+            <article class="selection-card">
+              <div class="selection-card-head">
+                <strong>能力标签</strong>
+              </div>
+              <div class="page-hero-highlights">
+                ${enabledCapabilities.length ? enabledCapabilities.slice(0, 12).map((item) => `<span class="page-hero-pill">${esc(item)}</span>`).join('') : '<span class="page-hero-pill">暂无能力标签</span>'}
+              </div>
+              <div class="hint">已启用 ${enabledCapabilities.length} 项能力；完整明细见技术详情。</div>
+            </article>
+            <article class="selection-card">
+              <div class="selection-card-head">
+                <strong>权限摘要</strong>
+              </div>
+              <div class="selection-card-meta selection-card-meta--compact">
+                <span>权限总数</span><strong>${permissions.length}</strong>
+                <span>高频入口</span><strong>${esc(preset.pathHint || '-')}</strong>
+                <span>推荐动作</span><strong>${esc((preset.actions || []).map((item) => item.label).slice(0, 2).join(' / ') || '返回工作台')}</strong>
+                <span>权限预览</span><strong>${esc(permissions.slice(0, 3).join(' / ') || '无')}</strong>
+              </div>
+            </article>
+          </div>
+          <details class="inline-details">
+            <summary>查看全部权限</summary>
+            <div class="details-panel">
+              <div class="page-hero-highlights">
+                ${permissions.length ? permissions.map((item) => `<span class="page-hero-pill mono">${esc(item)}</span>`).join('') : '<span class="page-hero-pill">暂无权限</span>'}
+              </div>
+            </div>
           </details>
         `;
+
+        techWrap.innerHTML = `
+          <details class="inline-details" open>
+            <summary>账号原始信息</summary>
+            <div class="details-panel">
+              <div class="keyvals compact">
+                <div><span>username</span><strong>${esc(me.username)}</strong></div>
+                <div><span>tenant_code</span><strong>${esc(me.tenant_code || '-')}</strong></div>
+                <div><span>tenant_type</span><strong>${esc(me.tenant_type || '-')}</strong></div>
+                <div><span>tenant_id</span><strong class="mono">${esc(me.tenant_id || '-')}</strong></div>
+              </div>
+            </div>
+          </details>
+          <details class="inline-details">
+            <summary>permissions</summary>
+            <div class="details-panel">
+              <pre>${esc(safeJson(permissions))}</pre>
+            </div>
+          </details>
+          <details class="inline-details">
+            <summary>capabilities</summary>
+            <div class="details-panel">
+              <pre>${esc(safeJson(capabilities))}</pre>
+            </div>
+          </details>
+        `;
+        setSettingsPanel('overview');
       } catch (error) {
-        wrap.innerHTML = renderError(error.message);
+        overviewWrap.innerHTML = renderError(error.message);
+        accessWrap.innerHTML = renderError(error.message);
+        techWrap.innerHTML = renderError(error.message);
       }
     },
   };

@@ -5,6 +5,7 @@
 - Last Updated: 2026-03-10
 - Scope: 基于当前代码与最近连续迭代，对“已完成 / 半完成 / 中断 / 下一步”做一次真实盘点
 - Supersedes: `platform_user_centric_execution_backlog_v1.md` 仅保留历史分阶段目标；当前执行判断以本文件为准
+- Dynamic Todo: 日常持续推进与插入新需求时，优先维护 [dynamic_execution_todo_2026-03-11.md](./dynamic_execution_todo_2026-03-11.md)
 
 ## 1. 当前已打通的主链路
 
