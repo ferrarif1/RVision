@@ -89,6 +89,8 @@
   当前真实执行清单：已完成、半完成、中断项与下一步顺序。
 - [product/dynamic_execution_todo_2026-03-11.md](./product/dynamic_execution_todo_2026-03-11.md)
   动态维护的执行面板：记录当前正在做、下一步、排队中和最近完成项，供持续迭代时实时更新。
+- [product/novice_user_usability_audit_2026-03-11.md](./product/novice_user_usability_audit_2026-03-11.md)
+  从“只懂少量概念的新用户”视角记录哪里不好用、哪里不明白，以及后续该优先优化什么。
 - [product/vistral_positioning_and_role_onboarding.md](./product/vistral_positioning_and_role_onboarding.md)
   Vistral 的产品定位、核心价值和角色上手路径。
 - [project_organization.md](./project_organization.md)
@@ -97,6 +99,8 @@
   发布 GO/NO-GO 执行手册。
 - [qa/browser_walkthrough_checklist_2026-03-11.md](./qa/browser_walkthrough_checklist_2026-03-11.md)
   页面级人工走查清单，覆盖任务、结果、训练、模型、流水线等关键控制台页。
+- [qa/browser_walkthrough_report_2026-03-12.md](./qa/browser_walkthrough_report_2026-03-12.md)
+  页面级走查结果与修复结论，记录本轮导航拆分、术语减负、回跳链路和布局稳定性收口情况。
 - [references.md](./references.md)
   文档体系参考的公开方法论来源。
 

@@ -136,6 +136,34 @@ cp docker/.env.example docker/.env
 docker compose --env-file docker/.env -f docker/docker-compose.yml up -d --build
 ```
 
+## 历史数据清理
+
+如果你希望像当前演示环境一样，只保留：
+
+- 当前车号 OCR 示例主链
+- 当前目标检测模型
+- 当前演示流水线与必要路由模型
+- 与当前车号模型直接相关的训练素材
+
+可以先做 dry-run，再执行真实清理：
+
+```bash
+cd <repo-root>
+python3 docker/scripts/cleanup_keep_current_demo_chain.py
+python3 docker/scripts/cleanup_keep_current_demo_chain.py --apply
+```
+
+该脚本会：
+
+- 保留当前已发布 `car_number_ocr / object_detect / bolt_missing_detect / scene_router`
+- 保留当前车号模型来源训练作业与原始本地训练素材作业
+- 保留当前 `local-car-number-ocr-text-{train,validation}` 数据集版本
+- 删除旧候选模型、历史重复训练导出、`api-*` 回归残留、重复任务与截图
+
+当前真实清理结果记录在：
+
+- [docs/qa/live_chain_audit_2026-03-10.md](docs/qa/live_chain_audit_2026-03-10.md)
+
 ### 方式B2：一键启动脚本（开发/联调推荐）
 
 ```bash
@@ -339,6 +367,26 @@ python3 docker/scripts/db_migrate.py --apply
 - 当前采用 snapshot-at-tip 策略：最新迁移文件必须是 `*_schema.sql` 或 `*_snapshot.sql`，用于表达当前完整 schema
 - `python3 docker/scripts/db_migrate.py --apply` 成功后会自动同步 `backend/app/db/schema.sql`
 - 如需只补跑迁移而不改写本地 schema 快照，可额外传 `--no-sync-schema`
+
+### 方式G：设置页数据治理工作区（推荐）
+
+平台管理员现在可以直接在控制台里完成安全数据治理，不必再手动记脚本名：
+
+- 设置 -> `数据治理`
+- 可先预览，再执行：
+  - 只保留当前车号演示主链
+  - 清理 synthetic 运行残留
+  - 裁剪旧 OCR 导出历史
+
+对应接口：
+
+- `GET /settings/data-governance`
+- `POST /settings/data-governance/run`
+
+说明：
+- 平台管理员可执行
+- 买家等角色只读预览
+- 预览和执行都会写入审计日志
 
 ## 默认账号
 

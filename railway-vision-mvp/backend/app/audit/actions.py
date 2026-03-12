@@ -8,6 +8,8 @@ from app.core.constants import AUDIT_ACTION_ASSET_UPLOAD as ASSET_UPLOAD
 from app.core.constants import AUDIT_ACTION_EDGE_PULL_MODEL as EDGE_PULL_MODEL
 from app.core.constants import AUDIT_ACTION_EDGE_PULL_TASKS as EDGE_PULL_TASKS
 from app.core.constants import AUDIT_ACTION_EDGE_PUSH_RESULTS as EDGE_PUSH_RESULTS
+from app.core.constants import AUDIT_ACTION_DATA_GOVERNANCE_EXECUTE as DATA_GOVERNANCE_EXECUTE
+from app.core.constants import AUDIT_ACTION_DATA_GOVERNANCE_PREVIEW as DATA_GOVERNANCE_PREVIEW
 from app.core.constants import AUDIT_ACTION_LOGIN as LOGIN
 from app.core.constants import AUDIT_ACTION_MODEL_APPROVE as MODEL_APPROVE
 from app.core.constants import AUDIT_ACTION_MODEL_DOWNLOAD as MODEL_DOWNLOAD
@@ -82,4 +84,6 @@ ALL_AUDIT_ACTIONS = (
     EDGE_PULL_TASKS,
     EDGE_PULL_MODEL,
     EDGE_PUSH_RESULTS,
+    DATA_GOVERNANCE_PREVIEW,
+    DATA_GOVERNANCE_EXECUTE,
 )

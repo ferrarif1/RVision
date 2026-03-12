@@ -1,8 +1,9 @@
-from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.audit import actions
+from app.core.ui_errors import build_ui_error
 from app.db.database import get_db
 from app.db.models import User
 from app.security.auth import create_access_token, verify_password
@@ -30,7 +31,14 @@ class LoginResponse(BaseModel):
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == payload.username, User.is_active.is_(True)).first()
     if not user or not verify_password(payload.password, user.password_hash):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=build_ui_error(
+                "login_invalid_credentials",
+                "用户名或密码不正确。",
+                next_step="请重新输入账号密码后再登录；如果忘记密码，请联系平台管理员。",
+            ),
+        )
 
     roles = [role.name for role in user.roles]
     token = create_access_token(subject=user.username, roles=roles)

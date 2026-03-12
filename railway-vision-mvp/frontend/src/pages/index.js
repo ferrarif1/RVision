@@ -517,8 +517,8 @@ function renderBestCheckpointCard(bestCheckpoint, history, trainer) {
       <article class="training-checkpoint-card">
         <div class="training-history-head">
           <div>
-            <strong>Best Checkpoint</strong>
-            <p>${esc(String(trainer || '受控训练 Worker'))}</p>
+            <strong>最佳检查点</strong>
+            <p>${esc(String(trainer || '受控训练机'))}</p>
           </div>
           <span class="badge">待生成</span>
         </div>
@@ -532,7 +532,7 @@ function renderBestCheckpointCard(bestCheckpoint, history, trainer) {
     <article class="training-checkpoint-card">
       <div class="training-history-head">
         <div>
-          <strong>Best Checkpoint</strong>
+            <strong>最佳检查点</strong>
           <p>${esc('训练过程中当前最优的一次 checkpoint，适合做回归和精调参考。')}</p>
         </div>
         <span class="badge">${esc(`epoch ${bestCheckpoint.epoch}`)}</span>
@@ -762,9 +762,9 @@ function renderResultOcrSignal(item) {
       </div>
       <div class="result-ocr-grid">
         <div><span>文本</span><strong>${esc(item.ocrText || '-')}</strong></div>
-        <div><span>confidence</span><strong>${esc(formatMetricValue(item.ocrConfidence, { percent: true }))}</strong></div>
-        <div><span>engine</span><strong>${esc(item.ocrEngine || '-')}</strong></div>
-        <div><span>bbox</span><strong>${esc(item.ocrBBox?.join(', ') || '-')}</strong></div>
+        <div><span>识别置信度</span><strong>${esc(formatMetricValue(item.ocrConfidence, { percent: true }))}</strong></div>
+        <div><span>识别引擎</span><strong>${esc(item.ocrEngine || '-')}</strong></div>
+        <div><span>定位框</span><strong>${esc(item.ocrBBox?.join(', ') || '-')}</strong></div>
         <div><span>合法校验</span><strong>${esc(item.ocrValidation ? (item.ocrValidation.valid ? '合法' : '不合法') : '-')}</strong></div>
         <div><span>规则</span><strong>${esc(item.ocrRule?.label || item.ocrValidation?.label || '-')}</strong></div>
       </div>
@@ -801,16 +801,16 @@ function renderModelInsightBlock(modelId, readiness) {
         <summary>查看训练曲线与技术指标</summary>
         <div class="details-panel">
           <div class="keyvals compact result-tech-keyvals">
-            <div><span>model_id</span><strong class="mono">${esc(truncateMiddle(modelId, 12, 10))}</strong></div>
-            <div><span>val_loss</span><strong>${esc(formatMetricValue(metrics.val_loss))}</strong></div>
-            <div><span>history_count</span><strong>${esc(formatMetricValue(metrics.history_count ?? history.length))}</strong></div>
+            <div><span>模型编号</span><strong class="mono">${esc(truncateMiddle(modelId, 12, 10))}</strong></div>
+            <div><span>验证损失</span><strong>${esc(formatMetricValue(metrics.val_loss))}</strong></div>
+            <div><span>历史点数</span><strong>${esc(formatMetricValue(metrics.history_count ?? history.length))}</strong></div>
           </div>
           ${
             history.length
               ? `
                   <div class="grid-two training-history-grid-wrap result-model-history-grid">
                     ${renderTrainingHistoryChart({
-                      title: 'Accuracy Curve',
+                      title: '准确率曲线',
                       description: '复用训练作业回写的 epoch 历史，快速判断该识别结果背后的模型泛化水平。',
                       history,
                       percent: true,
@@ -820,7 +820,7 @@ function renderModelInsightBlock(modelId, readiness) {
                       ],
                     })}
                     ${renderTrainingHistoryChart({
-                      title: 'Loss Curve',
+                      title: '损失曲线',
                       description: '对比 train / val loss，观察训练是否收敛以及是否存在过拟合迹象。',
                       history,
                       lowerIsBetter: true,
@@ -871,7 +871,7 @@ function renderResultValidationConclusion(rows, summaries, modelInsights = {}) {
         <div><span>低置信度</span><strong>${esc(lowConfidenceCount)}</strong></div>
         <div><span>识别文本</span><strong>${esc(recognizedTexts.length || 0)}</strong></div>
         <div><span>平均耗时</span><strong>${esc(avgDuration ?? '-')}</strong></div>
-        <div><span>val_accuracy</span><strong>${esc(formatMetricValue(valMetrics.val_accuracy, { percent: true }))}</strong></div>
+        <div><span>验证准确率</span><strong>${esc(formatMetricValue(valMetrics.val_accuracy, { percent: true }))}</strong></div>
         <div><span>门禁结论</span><strong>${esc(validationReport.decision || '-')}</strong></div>
       </div>
       <div class="result-validation-notes">
@@ -906,12 +906,12 @@ function renderResultActionWorkbench(taskId, summaries, exported = null) {
         <span class="badge">${esc(exported?.asset?.id ? '已回灌' : (lowConfidenceCount > 0 ? '建议复核' : '可继续推进'))}</span>
       </div>
       <div class="result-action-grid">
-        <button class="primary" type="button" data-result-action="open-training">${esc(exported?.asset?.id ? '打开训练中心' : '导出并送训练中心')}</button>
+        <button class="primary" type="button" data-result-action="open-training">${esc(exported?.asset?.id ? '去训练中心' : '整理好并带去训练中心')}</button>
         <button class="ghost" type="button" data-result-action="open-task-detail">打开任务详情</button>
         <button class="ghost" type="button" data-result-action="back-tasks">返回任务中心</button>
       </div>
       <div class="result-next-steps">
-        <span class="result-next-step"><strong>1</strong><span>${esc(lowConfidenceCount > 0 ? '先复核低置信度结果和截图，再决定是否回灌训练。' : '当前结果已经比较稳定，可直接进入训练或验收。')}</span></span>
+        <span class="result-next-step"><strong>1</strong><span>${esc(lowConfidenceCount > 0 ? '先复核低置信度结果和截图，再决定是否把它整理成训练数据。' : '当前结果已经比较稳定，可直接进入训练或验收。')}</span></span>
         <span class="result-next-step"><strong>2</strong><span>${esc(exported?.asset?.id ? '训练中心已经预填当前导出的数据集版本。' : '需要时在下方把当前结果导出成训练或验证数据集版本。')}</span></span>
         <span class="result-next-step"><strong>3</strong><span>${esc('若需追溯执行过程，可随时打开任务详情查看设备、模型和证据截图。')}</span></span>
       </div>
@@ -958,7 +958,7 @@ function renderResultOverviewCards(rows, summaries) {
       <article class="metric-card">
         <h4>结果条数</h4>
         <p class="metric">${esc(total)}</p>
-        <span>当前 task_id 下已回查到的结果记录</span>
+        <span>当前任务编号下已回查到的结果记录</span>
       </article>
       <article class="metric-card">
         <h4>识别对象</h4>
@@ -1139,8 +1139,8 @@ const DASHBOARD_ROLE_PRESETS = {
   platform_admin: {
     eyebrow: '平台治理控制面',
     title: '掌握模型审批、发布授权与审计闭环',
-    subtitle: '优先处理候选模型、训练作业与设备授权，确保成果模型只在受控范围内交付。',
-    focus: ['待审模型与候选训练结果', '租户 / 设备授权范围', '审计证据与结果追溯'],
+    subtitle: '优先处理待验证模型、训练作业与设备授权，确保成果模型只在受控范围内交付。',
+    focus: ['待审模型与待验证训练结果', '租户 / 设备授权范围', '审计证据与结果追溯'],
     pathHint: '模型审批 -> 发布授权 -> 审计追踪',
     actions: [
       { label: '进入模型中心', path: 'models', permission: 'model.view' },
@@ -1153,7 +1153,7 @@ const DASHBOARD_ROLE_PRESETS = {
     eyebrow: '平台运营控制面',
     title: '推进资产、任务与模型交付节奏',
     subtitle: '围绕资产准备、任务执行和发布协同，保证客户测试与交付节奏顺畅推进。',
-    focus: ['资产准备与任务执行状态', '候选模型协同与发布准备', '客户联调与结果回查'],
+    focus: ['资产准备与任务执行状态', '新模型协同与发布准备', '客户联调与结果回查'],
     pathHint: '资产准备 -> 任务执行 -> 协同发布',
     actions: [
       { label: '进入资产中心', path: 'assets', permission: 'asset.upload' },
@@ -1176,10 +1176,10 @@ const DASHBOARD_ROLE_PRESETS = {
   },
   supplier_engineer: {
     eyebrow: '供应商协作入口',
-    title: '提交算法能力并跟踪受控训练与候选交付',
-    subtitle: '在受控环境里提交模型、参与微调协作，并持续跟踪候选模型和审批反馈。',
-    focus: ['模型提交与版本状态', '训练协作与候选回收', '审批反馈与补充说明'],
-    pathHint: '提交模型 -> 训练协作 -> 候选交付',
+    title: '提交算法能力并跟踪受控训练与新模型交付',
+    subtitle: '在受控环境里提交模型、参与微调协作，并持续跟踪待验证模型和审批反馈。',
+    focus: ['模型提交与版本状态', '训练协作与新模型生成', '审批反馈与补充说明'],
+    pathHint: '提交模型 -> 训练协作 -> 新模型交付',
     actions: [
       { label: '提交模型包', path: 'models', permission: 'model.view' },
       { label: '查看训练中心', path: 'training', permission: 'training.job.view' },
@@ -1438,19 +1438,33 @@ function pageDashboard(route, rawCtx) {
           </ul>
         </div>
       </section>
-      <section class="lane-grid" id="laneGrid">${renderLoading('加载主线指标...')}</section>
-      <section class="lane-grid" id="realDataGrid">${renderLoading('加载真实数据来源...')}</section>
-      <section class="grid-two">
-        <div class="card">
-          <h3>最近资产</h3>
-          <div id="recentAssets">${renderLoading()}</div>
-        </div>
-        <div class="card">
-          <h3>最近模型</h3>
-          <div id="recentModels">${renderLoading()}</div>
-        </div>
-      </section>
       <section class="card">
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-dashboard-panel-tab="overview">工作台总览</button>
+          <button class="ghost" type="button" data-dashboard-panel-tab="assets">最近资产</button>
+          <button class="ghost" type="button" data-dashboard-panel-tab="models">最近模型</button>
+          <button class="ghost" type="button" data-dashboard-panel-tab="tasks">最近任务</button>
+        </div>
+        <div id="dashboardPanelMeta" class="hint">默认先看工作台总览；最近资产、模型、任务按需进入，不再一次性全铺开。</div>
+      </section>
+      <section class="card" data-dashboard-panel="overview">
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-dashboard-overview-tab="lanes">主线指标</button>
+          <button class="ghost" type="button" data-dashboard-overview-tab="real-data">真实数据盘</button>
+        </div>
+        <div id="dashboardOverviewMeta" class="hint">默认先看四条主线指标；需要确认真实资产和车号数据基础盘时，再进入真实数据盘。</div>
+      </section>
+      <section class="lane-grid" id="laneGrid" data-dashboard-panel="overview" data-dashboard-overview-panel="lanes">${renderLoading('加载主线指标...')}</section>
+      <section class="lane-grid" id="realDataGrid" data-dashboard-panel="overview" data-dashboard-overview-panel="real-data" hidden>${renderLoading('加载真实数据来源...')}</section>
+      <section class="card" data-dashboard-panel="assets" hidden>
+        <h3>最近资产</h3>
+        <div id="recentAssets">${renderLoading()}</div>
+      </section>
+      <section class="card" data-dashboard-panel="models" hidden>
+        <h3>最近模型</h3>
+        <div id="recentModels">${renderLoading()}</div>
+      </section>
+      <section class="card" data-dashboard-panel="tasks" hidden>
         <h3>最近任务</h3>
         <div id="recentTasks">${renderLoading()}</div>
       </section>
@@ -1459,11 +1473,76 @@ function pageDashboard(route, rawCtx) {
       root.querySelectorAll('[data-dashboard-nav]').forEach((btn) => {
         btn.addEventListener('click', () => ctx.navigate(btn.getAttribute('data-dashboard-nav')));
       });
+      const dashboardPanelMeta = root.querySelector('#dashboardPanelMeta');
+      const dashboardPanelTabs = Array.from(root.querySelectorAll('[data-dashboard-panel-tab]'));
+      const dashboardPanels = Array.from(root.querySelectorAll('[data-dashboard-panel]'));
+      const dashboardOverviewMeta = root.querySelector('#dashboardOverviewMeta');
+      const dashboardOverviewTabs = Array.from(root.querySelectorAll('[data-dashboard-overview-tab]'));
+      const dashboardOverviewPanels = Array.from(root.querySelectorAll('[data-dashboard-overview-panel]'));
       const laneGrid = root.querySelector('#laneGrid');
       const realDataGrid = root.querySelector('#realDataGrid');
       const recentAssets = root.querySelector('#recentAssets');
       const recentModels = root.querySelector('#recentModels');
       const recentTasks = root.querySelector('#recentTasks');
+      let activeDashboardPanel = 'overview';
+      let activeDashboardOverviewPanel = 'lanes';
+
+      function setDashboardOverviewPanel(panel) {
+        activeDashboardOverviewPanel = ['lanes', 'real-data'].includes(panel) ? panel : 'lanes';
+        dashboardOverviewPanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-dashboard-overview-panel') !== activeDashboardOverviewPanel;
+        });
+        dashboardOverviewTabs.forEach((btn) => {
+          const active = btn.getAttribute('data-dashboard-overview-tab') === activeDashboardOverviewPanel;
+          btn.classList.toggle('primary', active);
+          btn.classList.toggle('ghost', !active);
+          btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (dashboardOverviewMeta) {
+          dashboardOverviewMeta.textContent = activeDashboardOverviewPanel === 'lanes'
+            ? '先看四条主线指标，确认资产、模型、执行和设备运行面。'
+            : '需要确认真实演示资产、车号样本和 OCR 训练包时，再进入真实数据盘。';
+        }
+      }
+
+      function setDashboardPanel(panel) {
+        activeDashboardPanel = panel;
+        dashboardPanelTabs.forEach((btn) => {
+          const active = btn.getAttribute('data-dashboard-panel-tab') === panel;
+          btn.classList.toggle('primary', active);
+          btn.classList.toggle('ghost', !active);
+        });
+        dashboardPanels.forEach((section) => {
+          if (section.hasAttribute('data-dashboard-overview-panel')) return;
+          section.hidden = section.getAttribute('data-dashboard-panel') !== panel;
+        });
+        if (panel === 'overview') {
+          setDashboardOverviewPanel(activeDashboardOverviewPanel);
+        } else {
+          dashboardOverviewPanels.forEach((section) => {
+            section.hidden = true;
+          });
+        }
+        if (dashboardPanelMeta) {
+          dashboardPanelMeta.textContent = ({
+            overview: '先看当前角色重点、主线指标和真实数据基础盘。',
+            assets: '聚焦最近准备好的真实资产，适合继续去任务、训练或验证。',
+            models: '查看最近模型状态，决定是继续验证、审批还是发布。',
+            tasks: '查看最近任务执行情况，快速进入结果或任务详情。',
+          })[panel] || '按当前工作区继续查看。';
+        }
+      }
+
+      dashboardPanelTabs.forEach((btn) => {
+        btn.addEventListener('click', () => {
+          setDashboardPanel(btn.getAttribute('data-dashboard-panel-tab') || 'overview');
+        });
+      });
+      dashboardOverviewTabs.forEach((btn) => {
+        btn.addEventListener('click', () => {
+          setDashboardOverviewPanel(btn.getAttribute('data-dashboard-overview-tab') || 'lanes');
+        });
+      });
       try {
         const data = await ctx.get('/dashboard/summary');
         const lanes = data?.lanes || {};
@@ -1539,8 +1618,8 @@ function pageDashboard(route, rawCtx) {
                     <summary>技术详情</summary>
                     <div class="details-panel">
                       <div class="selection-card-meta selection-card-meta--compact">
-                        <span>asset_id</span><strong class="mono">${esc(truncateMiddle(row.id || '-', 10, 8))}</strong>
-                        <span>dataset_label</span><strong>${esc(row.dataset_label || '-')}</strong>
+                        <span>资产编号</span><strong class="mono">${esc(truncateMiddle(row.id || '-', 10, 8))}</strong>
+                        <span>数据集标签</span><strong>${esc(row.dataset_label || '-')}</strong>
                         <span>目标模型</span><strong>${esc(row.intended_model_code || '-')}</strong>
                       </div>
                     </div>
@@ -1572,7 +1651,7 @@ function pageDashboard(route, rawCtx) {
                     <summary>技术详情</summary>
                     <div class="details-panel">
                       <div class="selection-card-meta selection-card-meta--compact">
-                        <span>model_id</span><strong class="mono">${esc(truncateMiddle(row.id || '-', 10, 8))}</strong>
+                        <span>模型编号</span><strong class="mono">${esc(truncateMiddle(row.id || '-', 10, 8))}</strong>
                         <span>状态</span><strong>${esc(row.status || '-')}</strong>
                         <span>编码</span><strong>${esc(row.model_code || '-')}</strong>
                       </div>
@@ -1605,9 +1684,9 @@ function pageDashboard(route, rawCtx) {
                     <summary>技术详情</summary>
                     <div class="details-panel">
                       <div class="selection-card-meta selection-card-meta--compact">
-                        <span>task_id</span><strong class="mono">${esc(truncateMiddle(row.id || '-', 10, 8))}</strong>
-                        <span>pipeline_id</span><strong class="mono">${esc(truncateMiddle(row.pipeline_id || '-', 10, 8))}</strong>
-                        <span>model_id</span><strong class="mono">${esc(truncateMiddle(row.model_id || '-', 10, 8))}</strong>
+                        <span>任务编号</span><strong class="mono">${esc(truncateMiddle(row.id || '-', 10, 8))}</strong>
+                        <span>流水线编号</span><strong class="mono">${esc(truncateMiddle(row.pipeline_id || '-', 10, 8))}</strong>
+                        <span>模型编号</span><strong class="mono">${esc(truncateMiddle(row.model_id || '-', 10, 8))}</strong>
                       </div>
                     </div>
                   </details>
@@ -1618,10 +1697,12 @@ function pageDashboard(route, rawCtx) {
           : renderEmpty('暂无任务');
       } catch (error) {
         laneGrid.innerHTML = renderError(error.message);
+        realDataGrid.innerHTML = renderError(error.message);
         recentAssets.innerHTML = renderError(error.message);
         recentModels.innerHTML = renderError(error.message);
         recentTasks.innerHTML = renderError(error.message);
       }
+      setDashboardPanel(activeDashboardPanel);
     },
   };
 }
@@ -1634,16 +1715,16 @@ function pageGuide(route, rawCtx) {
     '结果复核',
     '数据集回灌',
     '训练作业',
-    '候选模型审批',
+    '待验证模型审批',
     '发布到设备',
   ];
   const quickLinks = [
     { path: 'assets', label: '上传真实资产', hint: '先准备训练 / 验证 / 推理用的图片、视频或数据集包。' },
     { path: 'tasks', label: '创建在线验证任务', hint: '用现有模型先跑一轮真实样本验证。' },
     { path: 'training/car-number-labeling', label: '车号文本复核', hint: '逐条确认 OCR 真值，再回灌训练。' },
-    { path: 'training', label: '创建训练作业', hint: '让本机或指定 worker 执行训练 / 微调。' },
+    { path: 'training', label: '创建训练作业', hint: '让本机或指定训练机器执行训练 / 微调。' },
     { path: 'models', label: '审批与发布模型', hint: '在审批工作台和发布工作台完成晋级。' },
-    { path: 'results', label: '结果回灌训练', hint: '把复核后的结果导出成训练 / 验证数据集版本。' },
+    { path: 'results', label: '把结果变成训练数据', hint: '把复核后的结果整理成训练 / 验证数据集版本。' },
   ];
   const roleCards = [
     {
@@ -1653,20 +1734,20 @@ function pageGuide(route, rawCtx) {
     },
     {
       title: '供应商工程师',
-      summary: '负责组织训练数据、创建训练作业、产出候选模型并提交审批。',
-      steps: ['先确认 worker 为 ACTIVE', '创建训练作业', '训练成功后去模型中心走审批验证'],
+      summary: '负责组织训练数据、创建训练作业、产出待验证模型并提交审批。',
+      steps: ['先确认训练机器在线', '创建训练作业', '训练成功后去模型中心走审批验证'],
     },
     {
       title: '平台管理员',
-      summary: '负责挑样本验证候选模型、审批通过、配置发布范围与交付方式。',
+      summary: '负责挑样本验证新模型、审批通过、配置发布范围与交付方式。',
       steps: ['先看审批工作台', '再看发布工作台', '最后用已发布模型做任务回归验证'],
     },
   ];
   const featureCards = [
     ['工作台', '只用于看全局状态与推荐动作，不建议在这里做复杂编辑。'],
     ['资产', '上传和筛选图片 / 视频 / ZIP 数据集，建议按 training / validation / inference 分用途管理。'],
-    ['训练', '创建训练作业、查看 worker 和候选模型；车号 OCR 建议先走“车号文本复核”。'],
-    ['模型', '统一查看模型状态、审批工作台、发布工作台和 readiness。'],
+    ['训练', '创建训练作业、查看训练机器和待验证模型；车号 OCR 建议先走“车号文本复核”。'],
+    ['模型', '统一查看模型状态、审批工作台、发布工作台和验证门禁。'],
     ['任务', '创建在线推理任务；明确目标后优先直接选模型，不明确时再做预检。'],
     ['结果', '查看文本、框、截图和验证结论；确认后可回灌训练。'],
     ['设备 / 审计', '核对设备授权、在线状态与关键操作证据。'],
@@ -1688,18 +1769,18 @@ function pageGuide(route, rawCtx) {
       path: 'training',
       title: '训练页',
       eyebrow: '训练闭环',
-      bullets: ['查看 worker 是否 ACTIVE', '创建训练作业', '训练成功后直达候选模型验证'],
+      bullets: ['查看训练机器是否在线', '创建训练作业', '训练成功后直达新模型验证'],
     },
     {
       path: 'models',
       title: '模型页',
       eyebrow: '审批发布',
-      bullets: ['审批工作台挑样本验证', '发布工作台配置设备 / 买家', '统一看 readiness 与状态'],
+      bullets: ['审批工作台挑样本验证', '发布工作台配置设备 / 买家', '统一看验证门禁与状态'],
     },
     {
       path: 'results',
       title: '结果页',
-      eyebrow: '复核回灌',
+      eyebrow: '复核与训练数据',
       bullets: ['查看文本 / 框 / 截图', '确认验证结论', '导出训练 / 验证数据集版本'],
     },
   ];
@@ -1751,7 +1832,7 @@ function pageGuide(route, rawCtx) {
             </div>
           `).join('')}
         </div>
-        <div class="hint">先用真实资产验证现有模型，再把结果沉淀成训练数据，训练出候选模型后进入审批与发布。</div>
+        <div class="hint">先用真实资产验证现有模型，再把结果沉淀成训练数据，训练出新模型后进入审批与发布。</div>
       </section>
 
       <section class="guide-grid">
@@ -1762,7 +1843,7 @@ function pageGuide(route, rawCtx) {
             <div><strong>2. 准备真实资产</strong><span>按 training / validation / inference 分用途整理样本，避免测试文件混入正式资产。</span></div>
             <div><strong>3. 明确目标与验收标准</strong><span>先定义任务是检测还是 OCR，以及什么输出才算达标。</span></div>
             <div><strong>4. 先跑小闭环</strong><span>上传 1 张真实图片，创建 1 条任务，确认结果页输出正常后再进入训练和审批。</span></div>
-            <div><strong>5. 再做训练与发布</strong><span>结果真值确认后回灌数据集，创建训练作业，验证候选模型并进入审批发布。</span></div>
+            <div><strong>5. 再做训练与发布</strong><span>结果真值确认后整理成数据集，创建训练作业，验证新模型并进入审批发布。</span></div>
           </div>
         </article>
 
@@ -1893,7 +1974,7 @@ function pageAssets(route, rawCtx) {
   const ctx = makeContext(route, rawCtx);
   const role = primaryRole(ctx.state.user);
   const heroSummary = role.startsWith('buyer_')
-    ? '把现场图片、视频和 ZIP 数据集包收成受控资产，后续任务、训练、验证都直接复用 asset_id。'
+    ? '把现场图片、视频和 ZIP 数据集包收成受控资产，后续任务、训练、验证都直接复用同一个资产编号。'
     : role.startsWith('platform_')
       ? '统一管理客户资产、用途标记和敏感等级，保证训练、验证和审批都基于同一份可信输入。'
       : '查看资产输入、用途标记和数据集包摘要。';
@@ -1903,7 +1984,7 @@ function pageAssets(route, rawCtx) {
         eyebrow: '真实资产输入',
         title: '资产中心',
         summary: heroSummary,
-        highlights: ['单图 / 视频用于任务', 'ZIP 数据集包用于训练', 'asset_id 全流程复用'],
+        highlights: ['单图 / 视频用于任务', 'ZIP 数据集包用于训练', '资产编号全流程复用'],
         actions: [
           { path: 'tasks', label: '去任务中心', primary: true },
           { path: 'training', label: '去训练中心' },
@@ -1936,31 +2017,41 @@ function pageAssets(route, rawCtx) {
             <option value="L1">${enumText('sensitivity_level', 'L1')}</option>
             <option value="L3">${enumText('sensitivity_level', 'L3')}</option>
           </select>
-          <label>dataset_label(数据集标签)</label>
+          <label>数据集标签</label>
           <input name="dataset_label" placeholder="demo-dataset-001" />
-          <label>use_case(业务场景)</label>
+          <label>业务场景</label>
           <input name="use_case" placeholder="railway-defect-inspection" />
-          <label>intended_model_code(目标模型编码)</label>
-          <input name="intended_model_code" placeholder="scene_router" />
+          <label>希望适配的模型</label>
+          <input name="intended_model_code" placeholder="例如 car_number_ocr" />
           <button class="primary" type="submit">上传资产</button>
           <div id="assetUploadMsg" class="hint"></div>
         </form>
         <section class="card">
           <h3>上传结果</h3>
-          <div id="assetUploadResult">${renderEmpty('上传后会生成 asset_id、资源摘要和下一步入口')}</div>
+          <div id="assetUploadResult">${renderEmpty('上传后会生成资产编号、资源摘要和下一步入口')}</div>
         </section>
       </section>
       <section class="card" data-asset-panel="guide" hidden>
         <h3>使用建议</h3>
         <ul class="focus-list">
           <li>训练 / 微调 / 验证优先使用 ZIP 数据集包，便于一次性提交多层文件夹和多资源样本。</li>
-          <li>上传成功后会固定生成 asset_id，后续训练作业、验证流程和任务执行都直接引用该记录。</li>
+          <li>上传成功后会固定生成资产编号，后续训练作业、验证流程和任务执行都直接引用该记录。</li>
           <li>推理任务优先使用单图或单视频资产；训练链路可组合 0-n 个单文件资产或多个 ZIP 数据集包。</li>
         </ul>
       </section>
       <section class="card" data-asset-panel="overview">
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-asset-overview-tab="summary">使用概览</button>
+          <button class="ghost" type="button" data-asset-overview-tab="list">资产列表</button>
+        </div>
+        <div id="assetOverviewPanelMeta" class="hint">默认先看这批资产适合怎么用；需要复制资产编号或挑选具体资产时再进入资产列表。</div>
+      </section>
+      <section class="card" data-asset-panel="overview" data-asset-overview-panel="summary" hidden>
+        <div id="assetOverviewWorkbenchWrap">${renderLoading('加载资产概览...')}</div>
+      </section>
+      <section class="card" data-asset-panel="overview" data-asset-overview-panel="list" hidden>
         <form id="assetFilterForm" class="inline-form">
-          <input name="q" placeholder="搜索 file_name(文件名) / use_case(业务场景) / intended_model_code(目标模型编码)" />
+          <input name="q" placeholder="搜索文件名 / 业务场景 / 希望适配的模型" />
           <select name="asset_purpose">
             <option value="">全部用途</option>
             <option value="inference">${enumText('asset_purpose', 'inference')}</option>
@@ -1980,6 +2071,10 @@ function pageAssets(route, rawCtx) {
       const assetPanelMeta = root.querySelector('#assetPanelMeta');
       const assetPanelTabs = [...root.querySelectorAll('[data-asset-panel-tab]')];
       const assetPanels = [...root.querySelectorAll('[data-asset-panel]')];
+      const assetOverviewPanelMeta = root.querySelector('#assetOverviewPanelMeta');
+      const assetOverviewTabs = [...root.querySelectorAll('[data-asset-overview-tab]')];
+      const assetOverviewPanels = [...root.querySelectorAll('[data-asset-overview-panel]')];
+      const assetOverviewWorkbenchWrap = root.querySelector('#assetOverviewWorkbenchWrap');
       const uploadForm = root.querySelector('#assetUploadForm');
       const uploadMsg = root.querySelector('#assetUploadMsg');
       const uploadResult = root.querySelector('#assetUploadResult');
@@ -1989,11 +2084,36 @@ function pageAssets(route, rawCtx) {
       const assetListMeta = root.querySelector('#assetListMeta');
       const assetListFilters = { showExportHistory: false };
       let activeAssetPanel = 'overview';
+      let activeAssetOverviewPanel = 'summary';
+
+      function setAssetOverviewPanel(panel) {
+        activeAssetOverviewPanel = ['summary', 'list'].includes(panel) ? panel : 'summary';
+        assetOverviewPanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-asset-overview-panel') !== activeAssetOverviewPanel || activeAssetPanel !== 'overview';
+        });
+        assetOverviewTabs.forEach((button) => {
+          const active = button.getAttribute('data-asset-overview-tab') === activeAssetOverviewPanel;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (assetOverviewPanelMeta) {
+          assetOverviewPanelMeta.textContent = activeAssetOverviewPanel === 'summary'
+            ? '先看当前资产池的用途分布和推荐下一步动作。'
+            : '需要复制资产编号、指定资产去任务或训练时，再进入资产列表。';
+        }
+      }
 
       function setAssetPanel(panel) {
         activeAssetPanel = ['overview', 'upload', 'guide'].includes(panel) ? panel : 'overview';
         assetPanels.forEach((section) => {
-          section.hidden = section.getAttribute('data-asset-panel') !== activeAssetPanel;
+          const panelName = section.getAttribute('data-asset-panel');
+          if (panelName !== activeAssetPanel) {
+            section.hidden = true;
+            return;
+          }
+          if (panelName === 'overview' && section.hasAttribute('data-asset-overview-panel')) return;
+          section.hidden = false;
         });
         assetPanelTabs.forEach((button) => {
           const active = button.getAttribute('data-asset-panel-tab') === activeAssetPanel;
@@ -2008,6 +2128,7 @@ function pageAssets(route, rawCtx) {
               ? '集中处理新资产上传和结果回跳。'
               : '快速确认训练、验证、推理三类资产的推荐用法。';
         }
+        if (activeAssetPanel === 'overview') setAssetOverviewPanel(activeAssetOverviewPanel);
       }
 
       function prefillTrainingAssets(assetIds) {
@@ -2017,6 +2138,7 @@ function pageAssets(route, rawCtx) {
 
       async function loadAssets() {
         tableWrap.innerHTML = renderLoading('加载资产列表...');
+        if (assetOverviewWorkbenchWrap) assetOverviewWorkbenchWrap.innerHTML = renderLoading('加载资产概览...');
         try {
           const fd = new FormData(filterForm);
           const query = toQuery({
@@ -2031,6 +2153,45 @@ function pageAssets(route, rawCtx) {
             assetListMeta.textContent = assetListFilters.showExportHistory
               ? `显示 ${visibleRows.length} 条真实资产`
               : `显示 ${visibleRows.length} 条真实资产，收起 OCR 导出历史 ${collapsed.hiddenCount} 条`;
+          }
+          if (assetOverviewWorkbenchWrap) {
+            const counts = {
+              inference: visibleRows.filter((row) => (row.meta || {}).asset_purpose === 'inference').length,
+              training: visibleRows.filter((row) => (row.meta || {}).asset_purpose === 'training').length,
+              validation: visibleRows.filter((row) => (row.meta || {}).asset_purpose === 'validation').length,
+            };
+            const primaryNext = counts.inference ? '去任务中心验证' : counts.training ? '去训练中心准备训练' : '先上传资产';
+            assetOverviewWorkbenchWrap.innerHTML = renderWorkbenchOverview({
+              title: '当前资产池',
+              summary: counts.inference
+                ? '当前已有可直接用于识别验证的图片或视频资产。优先去任务中心创建任务。'
+                : counts.training
+                  ? '当前主要是训练/验证资产，适合直接进入训练中心准备训练。'
+                  : '当前资产以整理和归档为主，建议先补充真实图片或视频，再进入任务或训练链路。',
+              metrics: [
+                { label: '总资产', value: visibleRows.length, note: '当前筛选结果' },
+                { label: '推理资产', value: counts.inference, note: '可直接用于任务' },
+                { label: '训练资产', value: counts.training, note: '可用于训练 / 微调' },
+                { label: '验证资产', value: counts.validation, note: '可用于回归验证' },
+              ],
+              actions: [
+                { id: 'asset-open-upload', label: '上传新资产', primary: true },
+                { id: 'asset-open-list', label: '查看资产列表' },
+                { id: 'asset-open-next', label: primaryNext },
+              ],
+            });
+            assetOverviewWorkbenchWrap.querySelector('[data-workbench-action="asset-open-upload"]')?.addEventListener('click', () => {
+              setAssetPanel('upload');
+            });
+            assetOverviewWorkbenchWrap.querySelector('[data-workbench-action="asset-open-list"]')?.addEventListener('click', () => {
+              setAssetPanel('overview');
+              setAssetOverviewPanel('list');
+            });
+            assetOverviewWorkbenchWrap.querySelector('[data-workbench-action="asset-open-next"]')?.addEventListener('click', () => {
+              if (counts.inference) ctx.navigate('tasks');
+              else if (counts.training) ctx.navigate('training');
+              else setAssetPanel('upload');
+            });
           }
           if (!visibleRows.length) {
             tableWrap.innerHTML = renderEmpty('暂无资产。建议先上传一条单图 / 单视频资产用于推理，或上传 ZIP 数据集包用于训练准备');
@@ -2062,7 +2223,7 @@ function pageAssets(route, rawCtx) {
                       <span>创建时间</span><strong>${formatDateTime(row.created_at)}</strong>
                     </div>
                     <div class="row-actions">
-                      <button class="ghost" data-copy-asset="${esc(row.id)}">复制ID</button>
+                      <button class="ghost" data-copy-asset="${esc(row.id)}">复制资产编号</button>
                       <button class="ghost" data-use-training-asset="${esc(row.id)}">用于训练</button>
                       ${isTaskAsset(row) ? `<button class="primary" data-quick-detect-asset="${esc(row.id)}">快速识别</button>` : ''}
                       ${isTaskAsset(row) ? `<button class="ghost" data-use-asset="${esc(row.id)}">用于任务</button>` : ''}
@@ -2071,10 +2232,10 @@ function pageAssets(route, rawCtx) {
                       <summary>技术详情</summary>
                       <div class="details-panel">
                         <div class="selection-card-meta selection-card-meta--compact">
-                          <span>asset_id</span><strong class="mono">${esc(row.id)}</strong>
-                          <span>dataset_label</span><strong>${esc((row.meta || {}).dataset_label || '-')}</strong>
-                          <span>use_case</span><strong>${esc((row.meta || {}).use_case || '-')}</strong>
-                          <span>intended_model</span><strong>${esc((row.meta || {}).intended_model_code || '-')}</strong>
+                          <span>资产编号</span><strong class="mono">${esc(row.id)}</strong>
+                          <span>数据集标签</span><strong>${esc((row.meta || {}).dataset_label || '-')}</strong>
+                          <span>业务场景</span><strong>${esc((row.meta || {}).use_case || '-')}</strong>
+                          <span>希望适配的模型</span><strong>${esc((row.meta || {}).intended_model_code || '-')}</strong>
                         </div>
                       </div>
                     </details>
@@ -2088,9 +2249,9 @@ function pageAssets(route, rawCtx) {
               const assetId = btn.getAttribute('data-copy-asset') || '';
               try {
                 await navigator.clipboard.writeText(assetId);
-                ctx.toast('资产ID已复制');
+                ctx.toast('资产编号已复制');
               } catch {
-                ctx.toast(`资产ID: ${assetId}`);
+                ctx.toast(`资产编号: ${assetId}`);
               }
             });
           });
@@ -2129,17 +2290,17 @@ function pageAssets(route, rawCtx) {
           uploadResult.innerHTML = renderInfoPanel(
             '上传结果',
             [
-              { label: 'asset_id', value: data.id, mono: true },
-              { label: 'file_name', value: data.file_name },
-              { label: 'asset_type', value: enumText('asset_type', data.asset_type) },
-              { label: 'sensitivity', value: enumText('sensitivity_level', data.sensitivity_level) },
+              { label: '资产编号', value: data.id, mono: true },
+              { label: '文件名', value: data.file_name },
+              { label: '资源类型', value: enumText('asset_type', data.asset_type) },
+              { label: '敏感等级', value: enumText('sensitivity_level', data.sensitivity_level) },
               archiveResourceCount(data.meta || {})
-                ? { label: 'resource_count', value: archiveResourceCount(data.meta || {}) }
+                ? { label: '资源数', value: archiveResourceCount(data.meta || {}) }
                 : null,
             ],
             `
               <div class="row-actions">
-                <button class="ghost" id="copyAssetIdBtn">复制资产ID</button>
+                <button class="ghost" id="copyAssetIdBtn">复制资产编号</button>
                 ${isTaskAsset(data) ? `<button class="primary" id="gotoQuickDetectFromAsset">快速识别</button>` : ''}
                 ${isTaskAsset(data) ? `<button class="primary" id="gotoTaskFromAsset">用该资产创建任务</button>` : ''}
                 <button class="ghost" id="gotoTrainingFromAsset">用于训练</button>
@@ -2189,6 +2350,11 @@ function pageAssets(route, rawCtx) {
           setAssetPanel(button.getAttribute('data-asset-panel-tab') || 'overview');
         });
       });
+      assetOverviewTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setAssetOverviewPanel(button.getAttribute('data-asset-overview-tab') || 'summary');
+        });
+      });
 
       setAssetPanel('overview');
       await loadAssets();
@@ -2205,9 +2371,9 @@ function pageModels(route, rawCtx) {
   const canViewTrainingJob = hasPermission(ctx.state, 'training.job.view');
   const canCreateTask = hasPermission(ctx.state, 'task.create');
   const heroSummary = role.startsWith('supplier')
-    ? '提交基础算法和候选模型，持续看审批反馈、验证表现和训练协作状态。'
+    ? '提交基础算法和待验证模型，持续看审批反馈、验证表现和训练协作状态。'
     : role.startsWith('platform_')
-      ? '统一完成候选模型验证、审批和发布，把成果模型收进受控交付链路。'
+      ? '统一完成新模型验证、审批和发布，把成果模型收进受控交付链路。'
       : '查看已授权模型、候选状态与交付进度。';
 
   return {
@@ -2222,9 +2388,16 @@ function pageModels(route, rawCtx) {
           { path: 'tasks', label: '去任务中心验证', primary: true },
         ],
       })}
-      <section class="card">
+      <section class="card" data-model-panel="overview">
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-model-overview-tab="workbench">工作台概览</button>
+          <button class="ghost" type="button" data-model-overview-tab="list">模型列表</button>
+        </div>
+        <div id="modelOverviewPanelMeta" class="hint">默认先看模型工作台概览；需要批量筛选或切换模型时再进入模型列表。</div>
+      </section>
+      <section class="card" data-model-panel="overview" data-model-overview-panel="workbench" hidden>
         <h3>模型工作台概览</h3>
-        <div id="modelWorkbenchOverviewWrap">${renderEmpty('先从模型列表选择一版候选模型，这里会汇总当前状态和推荐下一步动作。')}</div>
+        <div id="modelWorkbenchOverviewWrap">${renderEmpty('先从模型列表选择一版待验证模型，这里会汇总当前状态、验证结论和推荐下一步动作。')}</div>
       </section>
       <section class="card">
         <div class="workspace-switcher">
@@ -2234,10 +2407,25 @@ function pageModels(route, rawCtx) {
         </div>
         <div id="modelPanelMeta" class="hint">默认先看模型总览；低频操作按工作区展开。</div>
       </section>
-      <section class="card" data-model-panel="overview">
+      <section class="card" data-model-panel="build" hidden>
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-model-build-tab="submit">提交与协作</button>
+          <button class="ghost" type="button" data-model-build-tab="create-job">创建训练</button>
+        </div>
+        <div id="modelBuildPanelMeta" class="hint">默认先看模型提交和训练协作；需要继续训练时再切到创建训练。</div>
+      </section>
+      <section class="card" data-model-panel="governance" hidden>
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-model-governance-tab="timeline">时间线与评估</button>
+          <button class="ghost" type="button" data-model-governance-tab="approval">审批工作台</button>
+          <button class="ghost" type="button" data-model-governance-tab="release">发布工作台</button>
+        </div>
+        <div id="modelGovernancePanelMeta" class="hint">默认先看时间线和评估；审批、发布按当前阶段进入。</div>
+      </section>
+      <section class="card" data-model-panel="overview" data-model-overview-panel="list" hidden>
         <h3>模型列表</h3>
         <div class="section-toolbar">
-          <input id="modelListSearch" placeholder="搜索 model_code / version / 插件 / 租户" />
+          <input id="modelListSearch" placeholder="搜索模型名称 / 版本 / 插件 / 租户" />
           <select id="modelStatusFilter">
             <option value="">全部状态</option>
             <option value="SUBMITTED">${enumText('model_status', 'SUBMITTED')}</option>
@@ -2255,19 +2443,19 @@ function pageModels(route, rawCtx) {
         </div>
         <div id="modelsTableWrap">${renderLoading('加载模型列表...')}</div>
       </section>
-      <section class="grid-two" data-model-panel="build" hidden>
+      <section class="grid-two" data-model-panel="build" data-model-build-panel="submit" hidden>
         <form id="modelRegisterForm" class="card form-grid">
           <h3>提交模型包</h3>
           <label>模型包(.zip)</label>
           <input type="file" name="package" accept=".zip" required />
-          <label>model_source_type(模型来源类型)</label>
+          <label>模型来源</label>
           <select name="model_source_type">
             <option value="delivery_candidate">${enumText('model_source_type', 'delivery_candidate')}</option>
             <option value="finetuned_candidate">${enumText('model_source_type', 'finetuned_candidate')}</option>
             <option value="initial_algorithm">${enumText('model_source_type', 'initial_algorithm')}</option>
             <option value="pretrained_seed">${enumText('model_source_type', 'pretrained_seed')}</option>
           </select>
-          <label>model_type(模型类型)</label>
+          <label>模型类型</label>
           <select name="model_type">
             <option value="expert">${enumText('model_type', 'expert')}</option>
             <option value="router">${enumText('model_type', 'router')}</option>
@@ -2275,48 +2463,48 @@ function pageModels(route, rawCtx) {
           <details>
             <summary>高级元信息（可选）</summary>
             <div class="details-panel form-grid">
-              <label>plugin_name(插件名称)</label>
-              <input name="plugin_name" placeholder="scene_router" />
-              <label>training_round(训练轮次)</label>
+              <label>插件名称</label>
+              <input name="plugin_name" placeholder="例如 car_number_ocr_plugin" />
+              <label>训练轮次</label>
               <input name="training_round" placeholder="round-1" />
-              <label>dataset_label(数据集标签)</label>
+              <label>数据集标签</label>
               <input name="dataset_label" placeholder="buyer-demo-v1" />
-              <label>training_summary(训练摘要)</label>
+              <label>训练摘要</label>
               <textarea name="training_summary" rows="2" placeholder="微调摘要"></textarea>
             </div>
           </details>
           <button class="primary" type="submit">提交模型</button>
           <div id="modelRegisterMsg" class="hint"></div>
-          <div id="modelRegisterResult">${renderEmpty('提交模型后会在这里显示 model_id、版本和下一步动作')}</div>
+          <div id="modelRegisterResult">${renderEmpty('提交模型后会在这里显示模型编号、版本和下一步动作')}</div>
         </form>
         <section class="card">
           <h3>训练作业协作</h3>
           <div id="trainingJobsWrap">${canViewTrainingJob ? renderLoading('加载训练作业...') : renderEmpty('当前角色无训练作业查看权限')}</div>
         </section>
       </section>
-      <section class="grid-two" data-model-panel="build" hidden>
+      <section class="grid-two" data-model-panel="build" data-model-build-panel="create-job" hidden>
         <section class="card">
           <h3>创建训练作业</h3>
           ${
             canCreateTrainingJob
               ? `
                 <form id="trainingJobForm" class="form-grid">
-                  <label>training_kind(训练类型)</label>
+                  <label>训练类型</label>
                   <select name="training_kind">
                     <option value="finetune">${enumText('training_kind', 'finetune')}</option>
                     <option value="train">${enumText('training_kind', 'train')}</option>
                     <option value="evaluate">${enumText('training_kind', 'evaluate')}</option>
                   </select>
-                  <label>asset_ids(训练资产ID，0-n，支持逗号/空格分隔)</label>
-                  <input name="asset_ids" placeholder="asset-1, asset-2" />
-                  <div class="hint">支持单图/单视频资产，也支持 ZIP 数据集包；一个 ZIP 包对应 1 个 asset_id。</div>
-                  <label>validation_asset_ids(验证资产ID，0-n，支持逗号/空格分隔)</label>
-                  <input name="validation_asset_ids" placeholder="asset-3,asset-4" />
-                  <label>base_model_id(基础模型ID，可选)</label>
-                  <input name="base_model_id" placeholder="model-id" />
-                  <label>target_model_code(目标模型编码)</label>
+                  <label>训练数据（资产编号，可多个）</label>
+                  <input name="asset_ids" placeholder="资产编号-1, 资产编号-2" />
+                  <div class="hint">支持单图/单视频资产，也支持 ZIP 数据集包；一个 ZIP 包对应 1 个资产编号。</div>
+                  <label>验证数据（资产编号，可多个）</label>
+                  <input name="validation_asset_ids" placeholder="资产编号-3, 资产编号-4" />
+                  <label>基础模型编号（可选）</label>
+                  <input name="base_model_id" placeholder="模型编号" />
+                  <label>训练后模型名称</label>
                   <input name="target_model_code" placeholder="car_number_ocr" required />
-                  <label>target_version(目标版本)</label>
+                  <label>训练后版本号</label>
                   <input name="target_version" placeholder="v2.0.0" required />
                   <button class="primary" type="submit">创建训练作业</button>
                   <div id="trainingJobMsg" class="hint"></div>
@@ -2326,7 +2514,7 @@ function pageModels(route, rawCtx) {
           }
         </section>
       </section>
-      <section class="grid-two" data-model-panel="governance" hidden>
+      <section class="grid-two" data-model-panel="governance" data-model-governance-panel="timeline" hidden>
         <section class="card">
           <h3>模型时间线</h3>
           <div id="modelTimelineWrap">${renderEmpty('在模型列表点击“时间线”，查看提交、审批、发布和回收轨迹')}</div>
@@ -2336,11 +2524,13 @@ function pageModels(route, rawCtx) {
           <div id="modelReadinessWrap">${renderEmpty('在模型列表点击“评估”，查看自动验证结论和发布前风险摘要')}</div>
         </section>
       </section>
-      <section class="grid-two" data-model-panel="governance" hidden>
+      <section class="card" data-model-panel="governance" data-model-governance-panel="approval" hidden>
         <section class="card">
           <h3>审批工作台</h3>
-          <div id="modelApprovalWorkbenchWrap">${renderEmpty('先在模型列表里选一版候选模型，这里会自动推荐验证样本、汇总验证结果，并在满足门禁后给出一键审批。')}</div>
+          <div id="modelApprovalWorkbenchWrap">${renderEmpty('先在模型列表里选一版待验证模型，这里会自动推荐验证样本、汇总验证结果，并在满足门禁后给出一键审批。')}</div>
         </section>
+      </section>
+      <section class="card" data-model-panel="governance" data-model-governance-panel="release" hidden>
         <section class="card">
           <h3>发布工作台</h3>
           <div id="modelReleaseWorkbenchWrap">${renderEmpty('审批通过后，在这里选择设备、买家和交付方式。系统会先做发布前评估，再确认发布。')}</div>
@@ -2357,6 +2547,15 @@ function pageModels(route, rawCtx) {
       const modelPanelMeta = root.querySelector('#modelPanelMeta');
       const modelPanelTabs = [...root.querySelectorAll('[data-model-panel-tab]')];
       const modelPanels = [...root.querySelectorAll('[data-model-panel]')];
+      const modelOverviewPanelMeta = root.querySelector('#modelOverviewPanelMeta');
+      const modelOverviewTabs = [...root.querySelectorAll('[data-model-overview-tab]')];
+      const modelOverviewPanels = [...root.querySelectorAll('[data-model-overview-panel]')];
+      const modelBuildPanelMeta = root.querySelector('#modelBuildPanelMeta');
+      const modelBuildTabs = [...root.querySelectorAll('[data-model-build-tab]')];
+      const modelBuildPanels = [...root.querySelectorAll('[data-model-build-panel]')];
+      const modelGovernancePanelMeta = root.querySelector('#modelGovernancePanelMeta');
+      const modelGovernanceTabs = [...root.querySelectorAll('[data-model-governance-tab]')];
+      const modelGovernancePanels = [...root.querySelectorAll('[data-model-governance-panel]')];
       const timelineWrap = root.querySelector('#modelTimelineWrap');
       const readinessWrap = root.querySelector('#modelReadinessWrap');
       const approvalWorkbenchWrap = root.querySelector('#modelApprovalWorkbenchWrap');
@@ -2375,12 +2574,79 @@ function pageModels(route, rawCtx) {
       const requestedOpenModelTimeline = localStorage.getItem(STORAGE_KEYS.focusModelTimeline) === '1';
       let activeModelId = requestedFocusModelId || '';
       let activeModelPanel = requestedFocusModelId ? 'governance' : 'overview';
+      let activeModelOverviewPanel = 'workbench';
+      let activeModelBuildPanel = 'submit';
+      let activeModelGovernancePanel = requestedFocusModelId ? 'timeline' : 'timeline';
       const modelListFilters = { q: '', status: '', source: '' };
+
+      function setModelOverviewPanel(panel) {
+        activeModelOverviewPanel = ['workbench', 'list'].includes(panel) ? panel : 'workbench';
+        modelOverviewPanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-model-overview-panel') !== activeModelOverviewPanel || activeModelPanel !== 'overview';
+        });
+        modelOverviewTabs.forEach((button) => {
+          const active = button.getAttribute('data-model-overview-tab') === activeModelOverviewPanel;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (modelOverviewPanelMeta) {
+          modelOverviewPanelMeta.textContent = activeModelOverviewPanel === 'workbench'
+            ? '先看当前焦点模型的风险、验证结论和推荐下一步动作。'
+            : '需要批量筛选、切换模型或查看全量状态时，再进入模型列表。';
+        }
+      }
+
+      function setModelBuildPanel(panel) {
+        activeModelBuildPanel = ['submit', 'create-job'].includes(panel) ? panel : 'submit';
+        modelBuildPanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-model-build-panel') !== activeModelBuildPanel || activeModelPanel !== 'build';
+        });
+        modelBuildTabs.forEach((button) => {
+          const active = button.getAttribute('data-model-build-tab') === activeModelBuildPanel;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (modelBuildPanelMeta) {
+          modelBuildPanelMeta.textContent = activeModelBuildPanel === 'submit'
+            ? '先提交新模型，或查看训练协作记录。'
+            : '当你已经准备好训练数据和基础算法时，再创建训练作业。';
+        }
+      }
+
+      function setModelGovernancePanel(panel) {
+        activeModelGovernancePanel = ['timeline', 'approval', 'release'].includes(panel) ? panel : 'timeline';
+        modelGovernancePanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-model-governance-panel') !== activeModelGovernancePanel || activeModelPanel !== 'governance';
+        });
+        modelGovernanceTabs.forEach((button) => {
+          const active = button.getAttribute('data-model-governance-tab') === activeModelGovernancePanel;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (modelGovernancePanelMeta) {
+          modelGovernancePanelMeta.textContent = activeModelGovernancePanel === 'timeline'
+            ? '先看时间线和评估，再决定是否进入审批或发布。'
+            : activeModelGovernancePanel === 'approval'
+              ? '集中处理验证样本、审批判断和批准动作。'
+              : '集中处理设备范围、买家范围和正式发布。';
+        }
+      }
 
       function setModelPanel(panel) {
         activeModelPanel = ['overview', 'build', 'governance'].includes(panel) ? panel : 'overview';
         modelPanels.forEach((section) => {
-          section.hidden = section.getAttribute('data-model-panel') !== activeModelPanel;
+          const panelName = section.getAttribute('data-model-panel');
+          if (panelName !== activeModelPanel) {
+            section.hidden = true;
+            return;
+          }
+          if (panelName === 'overview' && section.hasAttribute('data-model-overview-panel')) return;
+          if (panelName === 'build' && section.hasAttribute('data-model-build-panel')) return;
+          if (panelName === 'governance' && section.hasAttribute('data-model-governance-panel')) return;
+          section.hidden = false;
         });
         modelPanelTabs.forEach((button) => {
           const active = button.getAttribute('data-model-panel-tab') === activeModelPanel;
@@ -2395,6 +2661,9 @@ function pageModels(route, rawCtx) {
               ? '把模型提交和训练协作放在同一处，减少审批信息干扰。'
               : '把时间线、评估、审批和发布集中处理。';
         }
+        if (activeModelPanel === 'overview') setModelOverviewPanel(activeModelOverviewPanel);
+        if (activeModelPanel === 'build') setModelBuildPanel(activeModelBuildPanel);
+        if (activeModelPanel === 'governance') setModelGovernancePanel(activeModelGovernancePanel);
       }
 
       function selectedModelRecord() {
@@ -2407,9 +2676,9 @@ function pageModels(route, rawCtx) {
         if (!model) {
           modelWorkbenchOverviewWrap.innerHTML = renderWorkbenchOverview({
             title: '还没有选中模型',
-            summary: '先从下方模型列表选一版候选模型。系统会把时间线、门禁、审批和发布动作聚合到同一屏。',
+            summary: '先从下方模型列表选一版待验证模型。系统会把时间线、门禁、审批和发布动作聚合到同一屏。',
             metrics: [
-              { label: '候选模型', value: filteredModels(cachedModels).filter((row) => row.status === 'SUBMITTED').length, note: '待审批' },
+              { label: '待验证模型', value: filteredModels(cachedModels).filter((row) => row.status === 'SUBMITTED').length, note: '待审批' },
               { label: '已审批', value: filteredModels(cachedModels).filter((row) => row.status === 'APPROVED').length, note: '可进入发布工作台' },
               { label: '已发布', value: filteredModels(cachedModels).filter((row) => row.status === 'RELEASED').length, note: '可直接授权使用' },
             ],
@@ -2436,7 +2705,7 @@ function pageModels(route, rawCtx) {
             title: `${model.model_code}:${model.version}`,
             status: enumText('model_status', model.status),
             summary: model.status === 'SUBMITTED'
-              ? '这版候选模型还在审批前验证阶段。建议先检查门禁，再批量创建验证任务。'
+              ? '这版待验证模型还在审批前验证阶段。建议先检查门禁，再批量创建验证任务。'
               : model.status === 'APPROVED'
                 ? '模型已审批通过，下一步进入发布工作台，确认设备范围、买家范围和交付方式。'
                 : '模型已进入正式交付链路，可回看发布前评估和最近风险摘要。',
@@ -2450,6 +2719,7 @@ function pageModels(route, rawCtx) {
         }
         modelWorkbenchOverviewWrap.querySelector('[data-workbench-action="model-open-list"]')?.addEventListener('click', () => {
           setModelPanel('overview');
+          setModelOverviewPanel('list');
           modelsWrap?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
         modelWorkbenchOverviewWrap.querySelector('[data-workbench-action="model-open-training"]')?.addEventListener('click', () => {
@@ -2459,6 +2729,7 @@ function pageModels(route, rawCtx) {
           if (!activeModelId) return;
           try {
             setModelPanel('governance');
+            setModelGovernancePanel('timeline');
             await openModelReadiness(activeModelId);
             readinessWrap?.scrollIntoView({ behavior: 'smooth', block: 'center' });
           } catch (error) {
@@ -2468,6 +2739,7 @@ function pageModels(route, rawCtx) {
         modelWorkbenchOverviewWrap.querySelector('[data-workbench-action="model-open-timeline"]')?.addEventListener('click', async () => {
           if (!activeModelId) return;
           setModelPanel('governance');
+          setModelGovernancePanel('timeline');
           await openModelTimeline(activeModelId);
           timelineWrap?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         });
@@ -2475,6 +2747,7 @@ function pageModels(route, rawCtx) {
           if (!activeModelId) return;
           try {
             setModelPanel('governance');
+            setModelGovernancePanel('approval');
             await openModelReadiness(activeModelId);
             await openModelApprovalWorkbench(activeModelId);
             approvalWorkbenchWrap?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -2486,6 +2759,7 @@ function pageModels(route, rawCtx) {
           if (!activeModelId) return;
           try {
             setModelPanel('governance');
+            setModelGovernancePanel('release');
             await openModelReleaseWorkbench(activeModelId);
             releaseWorkbenchWrap?.scrollIntoView({ behavior: 'smooth', block: 'center' });
           } catch (error) {
@@ -2546,16 +2820,16 @@ function pageModels(route, rawCtx) {
             </article>
           </div>
           <div class="keyvals compact">
-            <div><span>val_score</span><strong>${esc(formatMetricValue(metrics.val_score, { digits: 4 }))}</strong></div>
-            <div><span>val_accuracy</span><strong>${esc(formatMetricValue(metrics.val_accuracy, { percent: true, digits: 4 }))}</strong></div>
-            <div><span>val_loss</span><strong>${esc(formatMetricValue(metrics.val_loss, { digits: 4 }))}</strong></div>
-            <div><span>history</span><strong>${esc(metrics.history_count ?? 0)}</strong></div>
-            <div><span>best_checkpoint</span><strong>${esc(metrics.best_checkpoint?.path || metrics.best_checkpoint?.metric || '-')}</strong></div>
-            <div><span>latency_ms / gpu_mem_mb</span><strong>${esc(`${metrics.latency_ms ?? '-'} / ${metrics.gpu_mem_mb ?? '-'}`)}</strong></div>
+            <div><span>验证得分</span><strong>${esc(formatMetricValue(metrics.val_score, { digits: 4 }))}</strong></div>
+            <div><span>验证准确率</span><strong>${esc(formatMetricValue(metrics.val_accuracy, { percent: true, digits: 4 }))}</strong></div>
+            <div><span>验证损失</span><strong>${esc(formatMetricValue(metrics.val_loss, { digits: 4 }))}</strong></div>
+            <div><span>历史点数</span><strong>${esc(metrics.history_count ?? 0)}</strong></div>
+            <div><span>最佳检查点</span><strong>${esc(metrics.best_checkpoint?.path || metrics.best_checkpoint?.metric || '-')}</strong></div>
+            <div><span>延迟 / 显存</span><strong>${esc(`${metrics.latency_ms ?? '-'} / ${metrics.gpu_mem_mb ?? '-'}`)}</strong></div>
           </div>
           ${renderReadinessChecks('审批门禁', validationReport)}
           ${renderReadinessChecks(releaseTitle, releaseRiskSummary)}
-          <details><summary>Advanced</summary><pre>${esc(safeJson(data))}</pre></details>
+          <details><summary>技术详情</summary><pre>${esc(safeJson(data))}</pre></details>
         `;
       }
 
@@ -2619,7 +2893,7 @@ function pageModels(route, rawCtx) {
             </div>
             <div class="approval-workbench-actions">
               <div class="inline-form compact">
-                <label class="approval-inline-label">task_type</label>
+                <label class="approval-inline-label">任务类型</label>
                 <input id="approvalTaskType" value="${esc(workbench?.recommended_task_type || capability.task_type || '')}" />
                 <label class="approval-inline-label">device_code</label>
                 <input id="approvalDeviceCode" value="${esc(workbench?.recommended_device_code || 'edge-01')}" />
@@ -2651,7 +2925,7 @@ function pageModels(route, rawCtx) {
                 <div class="table-wrap">
                   <table class="table">
                     <thead>
-                      <tr><th>任务</th><th>资产</th><th>状态</th><th>输出</th><th>confidence</th><th>操作</th></tr>
+                      <tr><th>任务</th><th>资产</th><th>状态</th><th>输出</th><th>识别置信度</th><th>操作</th></tr>
                     </thead>
                     <tbody>
                       ${recentTasks.map((row) => `
@@ -2714,9 +2988,9 @@ function pageModels(route, rawCtx) {
             <div class="form-grid release-workbench-form">
               <div class="grid-two">
                 <div class="form-grid">
-                  <label>target_devices(目标设备，逗号分隔)</label>
+                  <label>目标设备（逗号分隔）</label>
                   <input id="releaseTargetDevices" value="${esc(initialDevices)}" list="releaseDevicesDatalist" placeholder="edge-01" />
-                  <label>target_buyers(目标买家，tenant_code，逗号分隔)</label>
+                  <label>目标买家（租户编码，逗号分隔）</label>
                   <input id="releaseTargetBuyers" value="${esc(initialBuyers)}" list="releaseBuyersDatalist" placeholder="buyer-demo-001" />
                   <datalist id="releaseDevicesDatalist">
                     ${devices.map((row) => `<option value="${esc(row.code)}">${esc(row.name || row.code)}</option>`).join('')}
@@ -2726,21 +3000,21 @@ function pageModels(route, rawCtx) {
                   </datalist>
                 </div>
                 <div class="form-grid">
-                  <label>delivery_mode(交付方式)</label>
+                  <label>交付方式</label>
                   <select id="releaseDeliveryMode">
                     <option value="local_key" ${recommended.delivery_mode === 'local_key' ? 'selected' : ''}>本地解密</option>
                     <option value="api" ${recommended.delivery_mode === 'api' ? 'selected' : ''}>API</option>
                     <option value="hybrid" ${recommended.delivery_mode === 'hybrid' ? 'selected' : ''}>混合</option>
                   </select>
-                  <label>authorization_mode(授权方式)</label>
+                  <label>授权方式</label>
                   <select id="releaseAuthorizationMode">
-                    <option value="device_key" ${recommended.authorization_mode === 'device_key' ? 'selected' : ''}>device_key</option>
-                    <option value="api_token" ${recommended.authorization_mode === 'api_token' ? 'selected' : ''}>api_token</option>
-                    <option value="hybrid" ${recommended.authorization_mode === 'hybrid' ? 'selected' : ''}>hybrid</option>
+                    <option value="device_key" ${recommended.authorization_mode === 'device_key' ? 'selected' : ''}>设备密钥</option>
+                    <option value="api_token" ${recommended.authorization_mode === 'api_token' ? 'selected' : ''}>API 令牌</option>
+                    <option value="hybrid" ${recommended.authorization_mode === 'hybrid' ? 'selected' : ''}>混合</option>
                   </select>
-                  <label>local_key_label(本地密钥标签，可选)</label>
+                  <label>本地密钥标签（可选）</label>
                   <input id="releaseLocalKeyLabel" value="${esc(recommended.local_key_label || '')}" placeholder="edge/keys/model_decrypt.key" />
-                  <label>api_access_key_label(API 密钥标签，可选)</label>
+                  <label>API 密钥标签（可选）</label>
                   <input id="releaseApiKeyLabel" value="${esc(recommended.api_access_key_label || '')}" placeholder="vh_api" />
                 </div>
               </div>
@@ -2797,7 +3071,7 @@ function pageModels(route, rawCtx) {
                     </li>
                   `).join('')}
                 </ol>
-                <details><summary>Advanced</summary><pre>${esc(safeJson(data))}</pre></details>
+                <details><summary>技术详情</summary><pre>${esc(safeJson(data))}</pre></details>
               `
             : renderEmpty('该模型暂无时间线数据');
         } catch (error) {
@@ -3031,7 +3305,7 @@ function pageModels(route, rawCtx) {
               ${rows.slice(0, 12).map((row) => `
                 <li>
                   <strong>${esc(row.job_code)}</strong>
-                  <span>${esc(enumText('training_kind', row.training_kind))} · ${esc(enumText('training_status', row.status))} · train=${esc(row.asset_count ?? 0)} · val=${esc(row.validation_asset_count ?? 0)} · candidate=${esc(row.candidate_model?.id || '-')}</span>
+                  <span>${esc(enumText('training_kind', row.training_kind))} · ${esc(enumText('training_status', row.status))} · 训练集=${esc(row.asset_count ?? 0)} · 验证集=${esc(row.validation_asset_count ?? 0)} · 待验证模型=${esc(row.candidate_model?.id || '-')}</span>
                 </li>
               `).join('')}
             </ul>
@@ -3092,7 +3366,7 @@ function pageModels(route, rawCtx) {
                   <div class="selection-card-meta selection-card-meta--compact">
                     <span>来源</span><strong>${esc(sourceType)}</strong>
                     <span>风险</span><strong>${esc(riskDecision)}</strong>
-                    <span>任务</span><strong>${esc(row.task_type || row.plugin_name || '-')}</strong>
+                    <span>任务类型</span><strong>${esc(row.task_type || row.plugin_name || '-')}</strong>
                     <span>租户</span><strong>${esc(row.owner_tenant_name || row.owner_tenant_code || '-')}</strong>
                     <span>摘要</span><strong class="mono">${esc(truncateMiddle(row.model_hash || '-', 8, 6))}</strong>
                   </div>
@@ -3115,10 +3389,10 @@ function pageModels(route, rawCtx) {
                     <summary>技术详情</summary>
                     <div class="details-panel">
                       <div class="selection-card-meta selection-card-meta--compact">
-                        <span>model_id</span><strong class="mono">${esc(row.id)}</strong>
-                        <span>plugin</span><strong>${esc(row.plugin_name || '-')}</strong>
-                        <span>task_type</span><strong>${esc(row.task_type || '-')}</strong>
-                        <span>hash</span><strong class="mono">${esc(row.model_hash || '-')}</strong>
+                        <span>模型编号</span><strong class="mono">${esc(row.id)}</strong>
+                        <span>插件名称</span><strong>${esc(row.plugin_name || '-')}</strong>
+                        <span>任务类型</span><strong>${esc(row.task_type || '-')}</strong>
+                        <span>模型摘要</span><strong class="mono">${esc(row.model_hash || '-')}</strong>
                       </div>
                     </div>
                   </details>
@@ -3132,6 +3406,7 @@ function pageModels(route, rawCtx) {
           btn.addEventListener('click', async () => {
             const modelId = btn.getAttribute('data-model-timeline');
             setModelPanel('governance');
+            setModelGovernancePanel('timeline');
             await openModelTimeline(modelId);
           });
         });
@@ -3141,6 +3416,7 @@ function pageModels(route, rawCtx) {
             const modelId = btn.getAttribute('data-model-readiness');
             try {
               setModelPanel('governance');
+              setModelGovernancePanel('timeline');
               await openModelReadiness(modelId);
             } catch (error) {
               ctx.toast(error.message || '模型评估失败', 'error');
@@ -3153,6 +3429,7 @@ function pageModels(route, rawCtx) {
             const modelId = btn.getAttribute('data-model-approve');
             try {
               setModelPanel('governance');
+              setModelGovernancePanel('approval');
               await openModelReadiness(modelId);
               await openModelApprovalWorkbench(modelId);
               approvalWorkbenchWrap?.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -3167,6 +3444,7 @@ function pageModels(route, rawCtx) {
             const modelId = btn.getAttribute('data-model-release');
             try {
               setModelPanel('governance');
+              setModelGovernancePanel('release');
               await openModelReleaseWorkbench(modelId);
               releaseWorkbenchWrap?.scrollIntoView({ block: 'center', behavior: 'smooth' });
             } catch (error) {
@@ -3237,16 +3515,16 @@ function pageModels(route, rawCtx) {
           registerResult.innerHTML = renderInfoPanel(
             '模型提交结果',
             [
-              { label: 'model_id', value: created.id, mono: true },
-              { label: 'model_code', value: created.model_code },
-              { label: 'version', value: created.version },
-              { label: 'status', value: enumText('model_status', created.status || 'SUBMITTED') },
-              { label: 'plugin', value: created.plugin_name || '-' },
-              { label: 'model_type', value: enumText('model_type', created.model_type || '-') },
+              { label: '模型编号', value: created.id, mono: true },
+              { label: '模型名称', value: created.model_code },
+              { label: '版本', value: created.version },
+              { label: '状态', value: enumText('model_status', created.status || 'SUBMITTED') },
+              { label: '插件名称', value: created.plugin_name || '-' },
+              { label: '模型类型', value: enumText('model_type', created.model_type || '-') },
             ],
             `
               <div class="row-actions">
-                <button class="ghost" type="button" id="copyModelIdBtn">复制模型ID</button>
+                <button class="ghost" type="button" id="copyModelIdBtn">复制模型编号</button>
                 <button class="ghost" type="button" id="openModelTimelineBtn">查看时间线</button>
                 <button class="primary" type="button" id="openModelReadinessBtn">查看评估</button>
               </div>
@@ -3262,11 +3540,13 @@ function pageModels(route, rawCtx) {
           });
           root.querySelector('#openModelTimelineBtn')?.addEventListener('click', async () => {
             setModelPanel('governance');
+            setModelGovernancePanel('timeline');
             await openModelTimeline(created.id);
           });
           root.querySelector('#openModelReadinessBtn')?.addEventListener('click', async () => {
             try {
               setModelPanel('governance');
+              setModelGovernancePanel('timeline');
               await openModelReadiness(created.id);
             } catch (error) {
               ctx.toast(error.message || '模型评估失败', 'error');
@@ -3325,6 +3605,21 @@ function pageModels(route, rawCtx) {
           setModelPanel(button.getAttribute('data-model-panel-tab') || 'overview');
         });
       });
+      modelOverviewTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setModelOverviewPanel(button.getAttribute('data-model-overview-tab') || 'workbench');
+        });
+      });
+      modelBuildTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setModelBuildPanel(button.getAttribute('data-model-build-tab') || 'submit');
+        });
+      });
+      modelGovernanceTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setModelGovernancePanel(button.getAttribute('data-model-governance-tab') || 'timeline');
+        });
+      });
 
       setModelPanel(activeModelPanel);
       await Promise.all([loadModels(), loadTrainingJobs()]);
@@ -3332,7 +3627,7 @@ function pageModels(route, rawCtx) {
         const hint = document.createElement('div');
         hint.className = 'hint';
         hint.setAttribute('data-helper', 'true');
-        hint.textContent = `可选 base_model_id 示例：${cachedModels[0].id}`;
+        hint.textContent = `可选基础算法编号示例：${cachedModels[0].id}`;
         trainingJobForm.appendChild(hint);
       }
     },
@@ -3346,41 +3641,45 @@ function pageTraining(route, rawCtx) {
   const canManageWorkers = hasPermission(ctx.state, 'training.worker.manage');
   const canCreateTask = hasPermission(ctx.state, 'task.create');
   const heroSummary = role.startsWith('platform_')
-    ? '统一查看训练作业、Worker 健康和候选模型回收状态，保证训练链路始终处于平台控制面内。'
-    : '创建训练作业、查看 Worker 健康，并把训练成功的候选模型继续送入验证和审批。';
+    ? '统一查看训练作业、训练机器健康和待验证模型生成状态，保证训练链路始终处于平台控制面内。'
+    : '创建训练作业、查看训练机器健康，并把训练成功的新模型继续送入验证和审批。';
   return {
     html: `
       ${renderPageHero({
         eyebrow: '训练与微调',
         title: '训练中心',
         summary: heroSummary,
-        highlights: ['先确认 Worker ACTIVE', '预设驱动创建训练', '训练成功后直达验证'],
+        highlights: ['先确认训练机器在线', '预设驱动创建训练', '训练成功后直达验证'],
         actions: [
           { path: 'training/car-number-labeling', label: '打开车号文本复核', primary: true },
           { path: 'models', label: '查看模型审批' },
         ],
       })}
       <section class="card">
-        <h3>运行告警</h3>
-        <div id="trainingRuntimeAlertWrap">${renderLoading('加载训练运行健康状态...')}</div>
-      </section>
-      <section class="card">
         <h3>训练工作台概览</h3>
-        <div id="trainingWorkbenchOverviewWrap">${renderEmpty('选择一条训练作业后，这里会汇总当前状态、Worker 健康和推荐下一步动作。')}</div>
+        <div id="trainingWorkbenchOverviewWrap">${renderEmpty('选择一条训练作业后，这里会汇总当前状态、训练机器健康和推荐下一步动作。')}</div>
       </section>
       <section class="card">
         <div class="workspace-switcher">
           <button class="ghost" type="button" data-training-panel-tab="overview">训练总览</button>
           <button class="ghost" type="button" data-training-panel-tab="create">创建训练</button>
-          <button class="ghost" type="button" data-training-panel-tab="workers">Worker 运维</button>
+          <button class="ghost" type="button" data-training-panel-tab="workers">训练机器</button>
         </div>
-        <div id="trainingPanelMeta" class="hint">默认先看训练总览；创建和 Worker 运维按工作区展开。</div>
+        <div id="trainingPanelMeta" class="hint">默认先看训练总览；创建和训练机器按工作区展开。</div>
       </section>
       <section class="card" data-training-panel="overview">
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-training-overview-tab="alerts">运行告警</button>
+          <button class="ghost" type="button" data-training-overview-tab="jobs">训练作业</button>
+          <button class="ghost" type="button" data-training-overview-tab="summary">训练结果摘要</button>
+        </div>
+        <div id="trainingOverviewPanelMeta" class="hint">默认先看运行告警；需要追踪作业或查看训练结果摘要时再切到对应分区。</div>
+      </section>
+      <section class="card" data-training-panel="overview" data-training-overview-panel="alerts" hidden>
         <h3>运行告警</h3>
         <div id="trainingRuntimeAlertWrap">${renderLoading('加载训练运行健康状态...')}</div>
       </section>
-      <section class="grid-two" data-training-panel="overview">
+      <section class="grid-two" data-training-panel="overview" data-training-overview-panel="jobs" hidden>
         <section class="card">
           <h3>训练作业</h3>
           <form id="trainingFilterForm" class="inline-form">
@@ -3399,75 +3698,95 @@ function pageTraining(route, rawCtx) {
               <option value="train">${enumText('training_kind', 'train')}</option>
               <option value="evaluate">${enumText('training_kind', 'evaluate')}</option>
             </select>
-            <button class="ghost" type="submit">筛选</button>
+          <button class="ghost" type="submit">筛选</button>
           </form>
           <div id="trainingJobsTableWrap">${renderLoading('加载训练作业...')}</div>
         </section>
       </section>
-      <section class="card" data-training-panel="overview">
+      <section class="card" data-training-panel="overview" data-training-overview-panel="summary" hidden>
         <h3>训练结果摘要</h3>
         <p class="hint">把基础模型、数据规模、关键指标和后续动作放在一屏里，方便快速判断这轮训练是否值得进入审批、发布或继续迭代。</p>
         <div id="trainingRunSummaryWrap">${renderLoading('加载训练摘要...')}</div>
       </section>
       <section class="card" data-training-panel="workers" hidden>
-        <h3>训练 Worker</h3>
-        <div id="trainingWorkersWrap">${renderLoading('加载 worker...')}</div>
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-training-workers-tab="overview">机器总览</button>
+          <button class="ghost" type="button" data-training-workers-tab="manage">登记与清理</button>
+        </div>
+        <div id="trainingWorkersPanelMeta" class="hint">默认先看训练机器状态和可用节点；需要新增、刷新或清理历史异常时再进入登记与清理。</div>
+      </section>
+      <section class="card" data-training-panel="workers" data-training-workers-panel="overview" hidden>
+        <h3>训练机器</h3>
+        <div id="trainingWorkersWrap">${renderLoading('加载训练机器...')}</div>
+      </section>
+      <section class="card" data-training-panel="workers" data-training-workers-panel="manage" hidden>
+        <h3>登记与清理</h3>
         ${
           canManageWorkers
             ? `
-              <details class="inline-details training-worker-register">
-                <summary>注册 / 刷新 Worker</summary>
-                <form id="registerWorkerForm" class="details-panel form-grid">
-                  <label>worker_code(Worker 编码)</label><input name="worker_code" placeholder="train-worker-01" required />
-                  <label>name(名称)</label><input name="name" placeholder="GPU Worker 01" required />
-                  <label>host(主机地址)</label><input name="host" placeholder="10.0.0.31" />
-                  <label>status(状态)</label>
-                  <select name="status">
-                    <option value="ACTIVE">${enumText('worker_status', 'ACTIVE')}</option>
-                    <option value="INACTIVE">${enumText('worker_status', 'INACTIVE')}</option>
-                    <option value="UNHEALTHY">${enumText('worker_status', 'UNHEALTHY')}</option>
-                  </select>
-                  <label>labels(JSON 标签)</label><textarea name="labels" rows="2">{}</textarea>
-                  <label>resources(JSON 资源)</label><textarea name="resources" rows="2">{}</textarea>
-                  <button class="primary" type="submit">注册 Worker</button>
-                  <div id="registerWorkerMsg" class="hint"></div>
-                </form>
-              </details>
+              <form id="registerWorkerForm" class="form-grid">
+                <label>训练机器编号</label><input name="worker_code" placeholder="training-node-01" required />
+                <label>显示名称</label><input name="name" placeholder="训练机器 01" required />
+                <label>机器地址</label><input name="host" placeholder="10.0.0.31" />
+                <label>状态</label>
+                <select name="status">
+                  <option value="ACTIVE">${enumText('worker_status', 'ACTIVE')}</option>
+                  <option value="INACTIVE">${enumText('worker_status', 'INACTIVE')}</option>
+                  <option value="UNHEALTHY">${enumText('worker_status', 'UNHEALTHY')}</option>
+                </select>
+                <label>机器标签（JSON）</label><textarea name="labels" rows="2">{}</textarea>
+                <label>机器资源（JSON）</label><textarea name="resources" rows="2">{}</textarea>
+                <button class="primary" type="submit">保存训练机器</button>
+                <div id="registerWorkerMsg" class="hint"></div>
+              </form>
+              <div class="hint">历史异常训练机器的清理入口保留在“机器总览”里，只在确实需要时操作，避免误删正在排障的节点记录。</div>
             `
-            : renderEmpty('当前角色无 worker 管理权限')
+            : renderEmpty('当前角色无训练机器管理权限')
         }
       </section>
       ${
         canCreateTrainingJob
           ? `
             <section class="card" data-training-panel="create" hidden>
-              <h3>创建训练作业</h3>
-              <div class="grid-two">
-                <section class="lane-card">
-                  <h4>供应商算法库</h4>
-                  <p class="hint">从已发布给当前租户的算法里直接选一个基础模型，系统会自动带入供应商归属信息。</p>
-                  <div class="section-toolbar compact">
-                    <input id="trainingModelSearch" placeholder="搜索算法 / 供应商 / 任务类型" />
-                    <div id="trainingModelMeta" class="hint"></div>
-                  </div>
-                  <div id="trainingModelLibrary">${renderLoading('加载供应商算法...')}</div>
-                </section>
-                <section class="lane-card">
-                  <h4>训练机池</h4>
-                  <p class="hint">选择要执行训练的机器。可按 worker_code、host 或 IP 精确派发到指定节点。</p>
-                  <div class="section-toolbar compact">
-                    <input id="trainingWorkerSearch" placeholder="搜索 worker_code / host / 状态" />
-                    <label class="checkbox-row"><input id="trainingWorkerShowHistory" type="checkbox" /> 显示历史异常</label>
-                    <div id="trainingWorkerMeta" class="hint"></div>
-                  </div>
-                  <div id="trainingWorkerPool">${renderLoading('加载训练机...')}</div>
-                </section>
+              <div class="workspace-switcher">
+                <button class="ghost" type="button" data-training-create-tab="prep">准备训练</button>
+                <button class="ghost" type="button" data-training-create-tab="dataset">数据集版本</button>
+                <button class="ghost" type="button" data-training-create-tab="form">创建训练</button>
               </div>
+              <div id="trainingCreatePanelMeta" class="hint">默认先准备基础算法和训练机器；确认数据集后再进入创建训练。</div>
+            </section>
+            <section class="card" data-training-panel="create" data-training-create-panel="prep" hidden>
+              <div class="workspace-switcher">
+                <button class="ghost" type="button" data-training-prep-tab="model">选择算法</button>
+                <button class="ghost" type="button" data-training-prep-tab="worker">选择训练机器</button>
+              </div>
+              <div id="trainingPrepPanelMeta" class="hint">默认先选择基础算法；确认算法后再切到训练机器。</div>
+              <section class="lane-card" data-training-prep-panel="model" hidden>
+                <h4>供应商算法库</h4>
+                <p class="hint">从已发布给当前租户的算法里直接选一个基础模型，系统会自动带入供应商归属信息。</p>
+                <div class="section-toolbar compact">
+                  <input id="trainingModelSearch" placeholder="搜索算法 / 供应商 / 任务类型" />
+                  <div id="trainingModelMeta" class="hint"></div>
+                </div>
+                <div id="trainingModelLibrary">${renderLoading('加载供应商算法...')}</div>
+              </section>
+              <section class="lane-card" data-training-prep-panel="worker" hidden>
+                <h4>训练机池</h4>
+                <p class="hint">选择要执行训练的机器。可按训练机名称、地址或 IP 精确派发到指定节点。</p>
+                <div class="section-toolbar compact">
+                  <input id="trainingWorkerSearch" placeholder="搜索训练机名称 / 地址 / 状态" />
+                  <label class="checkbox-row"><input id="trainingWorkerShowHistory" type="checkbox" /> 显示历史异常</label>
+                  <div id="trainingWorkerMeta" class="hint"></div>
+                </div>
+                <div id="trainingWorkerPool">${renderLoading('加载训练机...')}</div>
+              </section>
+            </section>
+            <section class="card" data-training-panel="create" data-training-create-panel="dataset" hidden>
               <section class="lane-card">
                 <h4>训练数据集版本</h4>
-                <p class="hint">快速识别导出的数据集会自动形成版本记录。可直接把某个版本放入训练集或验证集，不必手工回填资产 ID。</p>
+                <p class="hint">快速识别导出的数据集会自动形成版本记录。可直接把某个版本放入训练集或验证集，不必手工回填资产编号。</p>
                 <div class="section-toolbar compact">
-                  <input id="trainingDatasetSearch" placeholder="搜索 dataset_label / 标签 / source" />
+                  <input id="trainingDatasetSearch" placeholder="搜索数据集标签 / 版本说明 / 来源" />
                   <select id="trainingDatasetPurposeFilter">
                     <option value="">全部用途</option>
                     <option value="training">${enumText('asset_purpose', 'training')}</option>
@@ -3483,25 +3802,27 @@ function pageTraining(route, rawCtx) {
                 <div id="trainingDatasetRollbackWrap" class="selection-summary">${renderEmpty('需要回滚某个版本时，点对应卡片里的“回滚为新版本”，这里会出现确认区。')}</div>
                 <div id="trainingDatasetPreviewWrap" class="selection-summary">${renderEmpty('选择某个数据集版本后，可在这里查看样本摘要、标签和复核状态。')}</div>
               </section>
+            </section>
+            <section class="card" data-training-panel="create" data-training-create-panel="form" hidden>
               <form id="trainingCreateForm" class="form-grid">
                 <div class="grid-two">
                   <div class="form-grid">
-                    <label>training_kind(训练类型)</label>
+                    <label>训练类型</label>
                     <select name="training_kind">
                       <option value="finetune">${enumText('training_kind', 'finetune')}</option>
                       <option value="train">${enumText('training_kind', 'train')}</option>
                       <option value="evaluate">${enumText('training_kind', 'evaluate')}</option>
                     </select>
-                    <label>asset_ids(训练资产ID，0-n，支持逗号/空格分隔)</label>
-                    <input name="asset_ids" list="trainingAssetsDatalist" placeholder="asset-id-1, asset-id-2" />
+                    <label>训练数据（资产编号，可多个）</label>
+                    <input name="asset_ids" list="trainingAssetsDatalist" placeholder="资产编号-1, 资产编号-2" />
                     <div class="hint">训练/验证资产可以为空，也可以引用多个单文件资产或多个 ZIP 数据集包。</div>
-                    <label>validation_asset_ids(验证资产ID，0-n，支持逗号/空格分隔)</label>
-                    <input name="validation_asset_ids" list="trainingAssetsDatalist" placeholder="asset-id-3" />
-                    <label>target_model_code(目标模型编码)</label>
+                    <label>验证数据（资产编号，可多个）</label>
+                    <input name="validation_asset_ids" list="trainingAssetsDatalist" placeholder="资产编号-3" />
+                    <label>训练后模型名称</label>
                     <input name="target_model_code" placeholder="railway-defect-ft" required />
-                    <label>target_version(目标版本)</label>
+                    <label>训练后版本号</label>
                     <input name="target_version" placeholder="v20260306.1" required />
-                    <label>training_preset(训练预设)</label>
+                    <label>训练预设</label>
                     <select id="trainingPresetSelect" name="training_preset">
                       <option value="car_number_balanced">车号 OCR · 标准微调</option>
                       <option value="car_number_fast">车号 OCR · 快速验证</option>
@@ -3511,17 +3832,17 @@ function pageTraining(route, rawCtx) {
                     <div class="hint">默认按预设自动生成训练参数。只有确实需要覆盖时，再展开下面的高级 JSON。</div>
                   </div>
                   <div class="form-grid">
-                    <label>base_model_id(供应商算法 / 基础模型 ID，可选)</label>
-                    <input name="base_model_id" list="trainingModelsDatalist" placeholder="model-id" />
-                    <div class="hint">建议先从上方“供应商算法库”选择，避免手工输入错误模型 ID。</div>
+                    <label>基础算法（可选）</label>
+                    <input name="base_model_id" list="trainingModelsDatalist" placeholder="模型编号" />
+                    <div class="hint">建议先从上方“供应商算法库”选择，避免手工输入错误模型编号。</div>
                     <details>
-                      <summary>高级参数与训练机（可选）</summary>
+                      <summary>高级参数与训练机器（可选）</summary>
                       <div class="form-grid">
-                        <label>worker_code(训练机编码，可选)</label>
-                        <input name="worker_code" list="trainingWorkersCodeDatalist" placeholder="默认自动选择活跃 Worker" />
-                        <label>worker_host(IP / 主机地址，可选)</label>
-                        <input name="worker_host" list="trainingWorkersHostDatalist" placeholder="可留空，由系统自动补活跃 Worker" />
-                        <label>spec(JSON 训练参数，可选)</label>
+                        <label>训练机名称（可选）</label>
+                        <input name="worker_code" list="trainingWorkersCodeDatalist" placeholder="默认自动选择在线训练机器" />
+                        <label>训练机地址（可选）</label>
+                        <input name="worker_host" list="trainingWorkersHostDatalist" placeholder="可留空，由系统自动补在线训练机器" />
+                        <label>训练参数（JSON，可选）</label>
                         <textarea name="spec" rows="4">{}</textarea>
                         <div class="hint">留空时按上面的训练预设自动生成。只有你要覆盖 epochs / learning_rate / preprocessing 时才需要改。</div>
                       </div>
@@ -3558,6 +3879,18 @@ function pageTraining(route, rawCtx) {
       const trainingPanelMeta = root.querySelector('#trainingPanelMeta');
       const trainingPanelTabs = [...root.querySelectorAll('[data-training-panel-tab]')];
       const trainingPanels = [...root.querySelectorAll('[data-training-panel]')];
+      const trainingOverviewPanelMeta = root.querySelector('#trainingOverviewPanelMeta');
+      const trainingOverviewTabs = [...root.querySelectorAll('[data-training-overview-tab]')];
+      const trainingOverviewPanels = [...root.querySelectorAll('[data-training-overview-panel]')];
+      const trainingPrepPanelMeta = root.querySelector('#trainingPrepPanelMeta');
+      const trainingPrepTabs = [...root.querySelectorAll('[data-training-prep-tab]')];
+      const trainingPrepPanels = [...root.querySelectorAll('[data-training-prep-panel]')];
+      const trainingWorkersPanelMeta = root.querySelector('#trainingWorkersPanelMeta');
+      const trainingWorkersTabs = [...root.querySelectorAll('[data-training-workers-tab]')];
+      const trainingWorkersPanels = [...root.querySelectorAll('[data-training-workers-panel]')];
+      const trainingCreatePanelMeta = root.querySelector('#trainingCreatePanelMeta');
+      const trainingCreateTabs = [...root.querySelectorAll('[data-training-create-tab]')];
+      const trainingCreatePanels = [...root.querySelectorAll('[data-training-create-panel]')];
       const trainingRuntimeAlertWrap = root.querySelector('#trainingRuntimeAlertWrap');
       const trainingWorkbenchOverviewWrap = root.querySelector('#trainingWorkbenchOverviewWrap');
       const trainingRunSummaryWrap = root.querySelector('#trainingRunSummaryWrap');
@@ -3611,6 +3944,10 @@ function pageTraining(route, rawCtx) {
       let cachedTrainingJobs = [];
       let activeTrainingJobId = '';
       let activeTrainingPanel = 'overview';
+      let activeTrainingOverviewPanel = 'alerts';
+      let activeTrainingCreatePanel = 'prep';
+      let activeTrainingPrepPanel = 'model';
+      let activeTrainingWorkersPanel = 'overview';
       let lastAutoSpecSerialized = '{}';
       const trainingLibraryFilters = {
         modelQuery: '',
@@ -3648,10 +3985,94 @@ function pageTraining(route, rawCtx) {
         },
       };
 
+      function setTrainingCreatePanel(panel) {
+        activeTrainingCreatePanel = ['prep', 'dataset', 'form'].includes(panel) ? panel : 'prep';
+        trainingCreatePanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-training-create-panel') !== activeTrainingCreatePanel || activeTrainingPanel !== 'create';
+        });
+        trainingCreateTabs.forEach((button) => {
+          const active = button.getAttribute('data-training-create-tab') === activeTrainingCreatePanel;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (trainingCreatePanelMeta) {
+          trainingCreatePanelMeta.textContent = activeTrainingCreatePanel === 'prep'
+            ? '先准备基础算法和训练机器，再继续看数据集或创建训练。'
+            : activeTrainingCreatePanel === 'dataset'
+              ? '集中选择训练数据集版本，再决定推荐、回滚或预览样本。'
+              : '最后统一确认训练参数、资产和训练机器，再创建训练作业。';
+        }
+        if (activeTrainingCreatePanel === 'prep') setTrainingPrepPanel(activeTrainingPrepPanel);
+      }
+
+      function setTrainingPrepPanel(panel) {
+        activeTrainingPrepPanel = ['model', 'worker'].includes(panel) ? panel : 'model';
+        trainingPrepPanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-training-prep-panel') !== activeTrainingPrepPanel || activeTrainingPanel !== 'create' || activeTrainingCreatePanel !== 'prep';
+        });
+        trainingPrepTabs.forEach((button) => {
+          const active = button.getAttribute('data-training-prep-tab') === activeTrainingPrepPanel;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (trainingPrepPanelMeta) {
+          trainingPrepPanelMeta.textContent = activeTrainingPrepPanel === 'model'
+            ? '先选基础算法，确认供应商来源和任务类型。'
+            : '算法确认后，再挑训练机器并检查历史异常。';
+        }
+      }
+
+      function setTrainingOverviewPanel(panel) {
+        activeTrainingOverviewPanel = ['alerts', 'jobs', 'summary'].includes(panel) ? panel : 'alerts';
+        trainingOverviewPanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-training-overview-panel') !== activeTrainingOverviewPanel || activeTrainingPanel !== 'overview';
+        });
+        trainingOverviewTabs.forEach((button) => {
+          const active = button.getAttribute('data-training-overview-tab') === activeTrainingOverviewPanel;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (trainingOverviewPanelMeta) {
+          trainingOverviewPanelMeta.textContent = activeTrainingOverviewPanel === 'alerts'
+            ? '先看当前是否有超时作业或训练机器异常。'
+            : activeTrainingOverviewPanel === 'jobs'
+              ? '在这里追踪训练作业状态、改派、取消或继续查看。'
+              : '这里汇总训练结果、候选模型和下一步动作。';
+        }
+      }
+
+      function setTrainingWorkersPanel(panel) {
+        activeTrainingWorkersPanel = ['overview', 'manage'].includes(panel) ? panel : 'overview';
+        trainingWorkersPanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-training-workers-panel') !== activeTrainingWorkersPanel || activeTrainingPanel !== 'workers';
+        });
+        trainingWorkersTabs.forEach((button) => {
+          const active = button.getAttribute('data-training-workers-tab') === activeTrainingWorkersPanel;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (trainingWorkersPanelMeta) {
+          trainingWorkersPanelMeta.textContent = activeTrainingWorkersPanel === 'overview'
+            ? '先看训练机器健康、可用节点和历史异常。'
+            : '需要新增、刷新或修正训练机器信息时，再进入登记与清理。';
+        }
+      }
+
       function setTrainingPanel(panel) {
         activeTrainingPanel = ['overview', 'create', 'workers'].includes(panel) ? panel : 'overview';
         trainingPanels.forEach((section) => {
-          section.hidden = section.getAttribute('data-training-panel') !== activeTrainingPanel;
+          const panelName = section.getAttribute('data-training-panel');
+          if (panelName !== activeTrainingPanel) {
+            section.hidden = true;
+            return;
+          }
+          if (panelName === 'create' && section.hasAttribute('data-training-create-panel')) return;
+          if (panelName === 'workers' && section.hasAttribute('data-training-workers-panel')) return;
+          section.hidden = false;
         });
         trainingPanelTabs.forEach((button) => {
           const active = button.getAttribute('data-training-panel-tab') === activeTrainingPanel;
@@ -3664,8 +4085,11 @@ function pageTraining(route, rawCtx) {
             ? '先看训练作业状态、运行告警和训练摘要。'
             : activeTrainingPanel === 'create'
               ? '把训练参数、数据集和训练机选择集中在一处。'
-              : '集中处理 Worker 健康、历史异常和节点注册。';
+              : '集中处理训练机器健康、历史异常和节点登记。';
         }
+        if (activeTrainingPanel === 'overview') setTrainingOverviewPanel(activeTrainingOverviewPanel);
+        if (activeTrainingPanel === 'create') setTrainingCreatePanel(activeTrainingCreatePanel);
+        if (activeTrainingPanel === 'workers') setTrainingWorkersPanel(activeTrainingWorkersPanel);
       }
 
       async function waitForTaskTerminal(taskId, { timeoutMs = 90_000 } = {}) {
@@ -3695,6 +4119,8 @@ function pageTraining(route, rawCtx) {
         localStorage.removeItem(STORAGE_KEYS.prefillTrainingDatasetLabel);
         localStorage.removeItem(STORAGE_KEYS.prefillTrainingDatasetVersionId);
         localStorage.removeItem(STORAGE_KEYS.prefillTrainingTargetModelCode);
+        activeTrainingPanel = 'create';
+        activeTrainingCreatePanel = prefillTrainingDatasetVersionId ? 'form' : 'prep';
       }
 
       function pickDefaultTrainingJob(rows) {
@@ -3721,7 +4147,7 @@ function pageTraining(route, rawCtx) {
             title: '等待选择训练作业',
             summary: '先从左侧训练作业列表选择一条运行中的、成功的或刚创建的作业，再决定是否验证候选模型或继续迭代数据。',
             metrics: [
-              { label: '活跃 Worker', value: activeWorkerCount, note: unhealthyWorkerCount ? `异常 ${unhealthyWorkerCount}` : '心跳正常' },
+              { label: '在线训练机器', value: activeWorkerCount, note: unhealthyWorkerCount ? `异常 ${unhealthyWorkerCount}` : '心跳正常' },
               { label: '训练作业', value: cachedTrainingJobs.length, note: '当前筛选结果' },
               { label: '推荐下一步', value: '创建训练', note: '也可先打开车号文本复核' },
             ],
@@ -3736,10 +4162,10 @@ function pageTraining(route, rawCtx) {
             { id: 'training-open-review', label: '打开车号文本复核' },
           ];
           if (job.candidate_model?.id) {
-            actions.push({ id: 'training-open-candidate-model', label: '查看候选模型' });
+            actions.push({ id: 'training-open-candidate-model', label: '查看待验证模型' });
           }
           if (canCreateTask && job.candidate_model?.id) {
-            actions.push({ id: 'training-open-validation', label: '直接验证候选模型' });
+            actions.push({ id: 'training-open-validation', label: '直接验证新模型' });
           }
           trainingWorkbenchOverviewWrap.innerHTML = renderWorkbenchOverview({
             title: job.job_code || '训练作业',
@@ -3747,11 +4173,11 @@ function pageTraining(route, rawCtx) {
             summary: job.status === 'SUCCEEDED'
               ? '这轮训练已经完成。优先看候选模型和验证入口，再决定是否进入审批。'
               : job.status === 'RUNNING'
-                ? '训练正在进行中。先看 Worker 健康和训练曲线，避免长时间空跑。'
-                : '当前作业仍在排队或等待调度，可继续检查 Worker 和数据集配置。',
+                ? '训练正在进行中。先看训练机器健康和训练曲线，避免长时间空跑。'
+                : '当前作业仍在排队或等待调度，可继续检查训练机器和数据集配置。',
             metrics: [
               { label: '候选模型', value: job.candidate_model ? `${job.candidate_model.model_code}:${job.candidate_model.version}` : '等待回收', note: job.target_model_code || '目标模型' },
-              { label: '执行节点', value: job.assigned_worker_code || '待派发', note: activeWorkerCount ? `活跃 Worker ${activeWorkerCount}` : '暂无活跃 Worker' },
+              { label: '执行节点', value: job.assigned_worker_code || '待派发', note: activeWorkerCount ? `在线训练机器 ${activeWorkerCount}` : '暂无在线训练机器' },
               { label: '训练 / 验证', value: `${job.asset_count ?? 0}/${job.validation_asset_count ?? 0}`, note: '资产数量' },
             ],
             actions,
@@ -3759,6 +4185,7 @@ function pageTraining(route, rawCtx) {
         }
         trainingWorkbenchOverviewWrap.querySelector('[data-workbench-action="training-open-create"]')?.addEventListener('click', () => {
           setTrainingPanel('create');
+          setTrainingCreatePanel('form');
           createForm?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
         trainingWorkbenchOverviewWrap.querySelector('[data-workbench-action="training-open-review"]')?.addEventListener('click', () => {
@@ -3766,6 +4193,7 @@ function pageTraining(route, rawCtx) {
         });
         trainingWorkbenchOverviewWrap.querySelector('[data-workbench-action="training-open-summary"]')?.addEventListener('click', () => {
           setTrainingPanel('overview');
+          setTrainingOverviewPanel('summary');
           trainingRunSummaryWrap?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
         trainingWorkbenchOverviewWrap.querySelector('[data-workbench-action="training-open-candidate-model"]')?.addEventListener('click', () => {
@@ -3777,6 +4205,7 @@ function pageTraining(route, rawCtx) {
         trainingWorkbenchOverviewWrap.querySelector('[data-workbench-action="training-open-validation"]')?.addEventListener('click', () => {
           if (!job?.candidate_model?.id) return;
           setTrainingPanel('overview');
+          setTrainingOverviewPanel('summary');
           trainingRunSummaryWrap?.querySelector('[data-launch-candidate-validation-open]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         });
       }
@@ -3868,7 +4297,7 @@ function pageTraining(route, rawCtx) {
         const warningJobs = cachedTrainingJobs.filter((row) => row.alert_level === 'WARNING');
         const unhealthyWorkers = assistWorkers.filter((row) => row.status === 'UNHEALTHY');
         if (!criticalJobs.length && !warningJobs.length && !unhealthyWorkers.length) {
-          trainingRuntimeAlertWrap.innerHTML = renderEmpty('当前没有训练超时或 Worker 心跳异常告警。');
+          trainingRuntimeAlertWrap.innerHTML = renderEmpty('当前没有训练超时或训练机器心跳异常告警。');
           return;
         }
         trainingRuntimeAlertWrap.innerHTML = `
@@ -3876,7 +4305,7 @@ function pageTraining(route, rawCtx) {
             <article class="alert-card critical">
               <span>CRITICAL 作业</span>
               <strong>${esc(String(criticalJobs.length))}</strong>
-              <small>${esc(criticalJobs[0]?.alert_reason || '运行中超时或 Worker 已失联')}</small>
+              <small>${esc(criticalJobs[0]?.alert_reason || '运行中超时或训练机器已失联')}</small>
             </article>
             <article class="alert-card warning">
               <span>WARNING 作业</span>
@@ -3884,7 +4313,7 @@ function pageTraining(route, rawCtx) {
               <small>${esc(warningJobs[0]?.alert_reason || '派发后长时间未开始')}</small>
             </article>
             <article class="alert-card">
-              <span>异常 Worker</span>
+              <span>异常训练机器</span>
               <strong>${esc(String(unhealthyWorkers.length))}</strong>
               <small>${esc(unhealthyWorkers[0] ? `${unhealthyWorkers[0].worker_code} · ${unhealthyWorkers[0].alert_reason || '心跳超时'}` : '心跳正常')}</small>
             </article>
@@ -3895,7 +4324,7 @@ function pageTraining(route, rawCtx) {
                   <div class="selection-summary">
                     ${criticalJobs.slice(0, 2).map((row) => `<span>作业 ${esc(row.job_code)} · ${esc(row.alert_reason || row.error_message || '-')}</span>`).join('')}
                     ${warningJobs.slice(0, 2).map((row) => `<span>作业 ${esc(row.job_code)} · ${esc(row.alert_reason || row.error_message || '-')}</span>`).join('')}
-                    ${unhealthyWorkers.slice(0, 2).map((row) => `<span>Worker ${esc(row.worker_code)} · ${esc(row.alert_reason || '心跳异常')}</span>`).join('')}
+                    ${unhealthyWorkers.slice(0, 2).map((row) => `<span>训练机器 ${esc(row.worker_code)} · ${esc(row.alert_reason || '心跳异常')}</span>`).join('')}
                     ${canManageWorkers ? '<div class="row-actions"><button class="ghost" type="button" data-training-runtime-reconcile>立即刷新健康状态</button></div>' : ''}
                   </div>
                 `
@@ -3907,7 +4336,7 @@ function pageTraining(route, rawCtx) {
           button.disabled = true;
           try {
             const result = await ctx.post('/training/runtime/reconcile', { note: 'training_page_manual_reconcile' });
-            ctx.toast(`已刷新训练运行健康状态：异常Worker ${result.counts?.unhealthy_worker_count || 0}，超时作业 ${result.counts?.timed_out_job_count || 0}`);
+            ctx.toast(`已刷新训练运行健康状态：异常训练机器 ${result.counts?.unhealthy_worker_count || 0}，超时作业 ${result.counts?.timed_out_job_count || 0}`);
             await Promise.all([loadWorkers(), loadJobTable()]);
           } catch (error) {
             ctx.toast(error.message || '刷新健康状态失败', 'error');
@@ -3969,7 +4398,7 @@ function pageTraining(route, rawCtx) {
         const totalResources = Math.max(0, trainResources) + Math.max(0, validationResources);
         const trainShare = totalResources ? `${Math.round((Math.max(0, trainResources) / totalResources) * 100)}%` : '-';
         const validationShare = totalResources ? `${Math.round((Math.max(0, validationResources) / totalResources) * 100)}%` : '-';
-        const trainer = output.trainer || job.spec?.trainer || '受控训练 Worker';
+        const trainer = output.trainer || job.spec?.trainer || '受控训练机';
         const currentStage = output.stage || (job.status === 'SUCCEEDED' ? 'completed' : job.status === 'RUNNING' ? 'training' : '-');
         const candidateModel = job.candidate_model;
         const historyEpochCount = Number(output.epochs ?? 0) || history.length || Number(job.spec?.epochs ?? 0) || 0;
@@ -4011,7 +4440,7 @@ function pageTraining(route, rawCtx) {
                   job.status === 'SUCCEEDED'
                     ? '训练已完成，可以根据指标决定是否进入候选审批、发布授权或继续迭代。'
                     : job.status === 'RUNNING'
-                      ? '训练正在执行中，当前摘要会随着 Worker 回写持续刷新。'
+                      ? '训练正在执行中，当前摘要会随着训练机器回写持续刷新。'
                       : '当前展示的是这条训练作业的最新状态，适合快速核对基础模型、数据规模和目标节点。'
                 )}</p>
               </div>
@@ -4019,17 +4448,17 @@ function pageTraining(route, rawCtx) {
                 <button class="ghost" type="button" data-copy-training-job="${esc(job.id)}">复制作业ID</button>
                 ${
                   candidateModel?.id
-                    ? `<button class="ghost" type="button" data-copy-candidate-model="${esc(candidateModel.id)}">复制候选模型ID</button>`
+                    ? `<button class="ghost" type="button" data-copy-candidate-model="${esc(candidateModel.id)}">复制待验证模型ID</button>`
                     : ''
                 }
                 ${
                   candidateModel?.id
-                    ? `<button class="primary" type="button" data-open-candidate-model="${esc(candidateModel.id)}">查看候选模型</button>`
+                    ? `<button class="primary" type="button" data-open-candidate-model="${esc(candidateModel.id)}">查看待验证模型</button>`
                     : ''
                 }
                 ${
                   canCreateTask && candidateModel?.id
-                    ? '<button class="ghost" type="button" data-create-candidate-validation>去任务中心验证候选模型</button>'
+                    ? '<button class="ghost" type="button" data-create-candidate-validation>去任务中心验证新模型</button>'
                     : canCreateTask
                       ? '<button class="ghost" type="button" data-go-training-task>去任务中心</button>'
                       : ''
@@ -4037,9 +4466,9 @@ function pageTraining(route, rawCtx) {
               </div>
             </section>
             <div class="keyvals">
-              <div><span>job_code</span><strong class="mono">${esc(job.job_code)}</strong></div>
+              <div><span>作业编号</span><strong class="mono">${esc(job.job_code)}</strong></div>
               <div><span>基础模型</span><strong>${esc(job.base_model ? `${job.base_model.model_code}:${job.base_model.version}` : '未指定')}</strong></div>
-              <div><span>候选模型</span><strong>${esc(candidateModel ? `${candidateModel.model_code}:${candidateModel.version}` : '等待回收')}</strong></div>
+              <div><span>待验证模型</span><strong>${esc(candidateModel ? `${candidateModel.model_code}:${candidateModel.version}` : '等待生成')}</strong></div>
               <div><span>执行节点</span><strong>${esc(job.assigned_worker_code || job.worker_selector?.host || job.worker_selector?.hosts?.[0] || '未派发')}</strong></div>
               <div><span>当前阶段</span><strong>${esc(currentStage)}</strong></div>
               <div><span>训练时长</span><strong>${esc(formatDurationWindow(job.started_at, job.finished_at, output.duration_sec))}</strong></div>
@@ -4047,8 +4476,8 @@ function pageTraining(route, rawCtx) {
               <div><span>完成时间</span><strong>${esc(formatDateTime(job.finished_at))}</strong></div>
               <div><span>供应商</span><strong>${esc(job.owner_tenant_code || '-')}</strong></div>
               <div><span>买家租户</span><strong>${esc(job.buyer_tenant_code || '-')}</strong></div>
-              <div><span>artifact_sha256</span><strong class="mono">${esc(truncateMiddle(output.artifact_sha256, 10, 8))}</strong></div>
-              <div><span>base_model_hash</span><strong class="mono">${esc(truncateMiddle(output.base_model_hash, 10, 8))}</strong></div>
+              <div><span>产物摘要</span><strong class="mono">${esc(truncateMiddle(output.artifact_sha256, 10, 8))}</strong></div>
+              <div><span>基础模型摘要</span><strong class="mono">${esc(truncateMiddle(output.base_model_hash, 10, 8))}</strong></div>
             </div>
             ${
               runtimeAlert
@@ -4072,8 +4501,8 @@ function pageTraining(route, rawCtx) {
             </section>
             <section class="grid-two training-history-grid-wrap">
               ${renderTrainingHistoryChart({
-                title: 'Loss Curve',
-                description: '按 epoch 查看 train / val loss，判断是否出现发散或过拟合。',
+                title: '损失曲线',
+                description: '按轮次查看训练 / 验证损失，判断是否出现发散或过拟合。',
                 history,
                 lowerIsBetter: true,
                 lines: [
@@ -4082,8 +4511,8 @@ function pageTraining(route, rawCtx) {
                 ],
               })}
               ${renderTrainingHistoryChart({
-                title: 'Accuracy Curve',
-                description: '按 epoch 查看 train / val accuracy，适合快速判断收敛与泛化。',
+                title: '准确率曲线',
+                description: '按轮次查看训练 / 验证准确率，适合快速判断收敛与泛化。',
                 history,
                 percent: true,
                 lines: [
@@ -4104,7 +4533,7 @@ function pageTraining(route, rawCtx) {
                 </div>
                 <div class="training-checkpoint-summary">
                   <span>${esc(historySummary)}</span>
-                  <span>${esc(`history_count=${output.history_count ?? history.length}`)}</span>
+                  <span>${esc(`历史点数=${output.history_count ?? history.length}`)}</span>
                   <span>${esc(`当前阶段=${currentStage}`)}</span>
                   <span>${esc(`训练器=${String(trainer)}`)}</span>
                 </div>
@@ -4117,7 +4546,7 @@ function pageTraining(route, rawCtx) {
                   <strong>${esc(trainShare)}</strong>
                 </div>
                 <div class="training-run-split-value">${esc(String(trainResources))}</div>
-                <p>${esc(`asset=${job.asset_count ?? 0} · samples=${output.train_samples ?? '-'}`)}</p>
+                <p>${esc(`资产数=${job.asset_count ?? 0} · 样本数=${output.train_samples ?? '-'}`)}</p>
               </article>
               <article class="training-run-split-card validation">
                 <div class="training-run-split-head">
@@ -4125,7 +4554,7 @@ function pageTraining(route, rawCtx) {
                   <strong>${esc(validationShare)}</strong>
                 </div>
                 <div class="training-run-split-value">${esc(String(validationResources))}</div>
-                <p>${esc(`asset=${job.validation_asset_count ?? 0} · samples=${output.val_samples ?? '-'}`)}</p>
+                <p>${esc(`资产数=${job.validation_asset_count ?? 0} · 样本数=${output.val_samples ?? '-'}`)}</p>
               </article>
             </section>
             <div class="grid-two">
@@ -4135,14 +4564,14 @@ function pageTraining(route, rawCtx) {
                 <span>预处理：${esc(compactValue(job.spec?.preprocessing || job.spec?.preprocess || job.spec?.resize))}</span>
                 <span>增强：${esc(compactValue(job.spec?.augmentations || job.spec?.augmentation))}</span>
                 <span>特征说明：${esc(compactValue(output.feature_spec || job.spec?.feature_spec))}</span>
-                <details><summary>spec / output_summary</summary><pre>${esc(safeJson({ spec: job.spec || {}, output_summary: output }))}</pre></details>
+                <details><summary>训练参数与输出摘要</summary><pre>${esc(safeJson({ spec: job.spec || {}, output_summary: output }))}</pre></details>
               </section>
               <section class="selection-summary">
                 <strong>数据来源</strong>
                 <span>目标版本：${esc(`${job.target_model_code}:${job.target_version}`)}</span>
                 <span>训练资产：${esc(trainRefs.length ? trainRefs.map((row) => row.version ? `${row.version.dataset_label}:${row.version.version}` : row.asset?.file_name || row.assetId).join(' / ') : '未绑定')}</span>
                 <span>验证资产：${esc(validationRefs.length ? validationRefs.map((row) => row.version ? `${row.version.dataset_label}:${row.version.version}` : row.asset?.file_name || row.assetId).join(' / ') : '未绑定')}</span>
-                ${candidateModel?.id ? '<span>下一步：候选模型已回收后，可点上方“去任务中心验证候选模型”，任务页会自动预填模型/任务类型/设备，但仍需选择一张单图或视频资产；训练用 ZIP 数据集不能直接做在线验证。</span>' : '<span>下一步：候选模型回收后，任务页可直接拿候选模型做验证。</span>'}
+                ${candidateModel?.id ? '<span>下一步：新模型已经准备好，可点上方“去任务中心验证新模型”。任务页会自动预填模型、任务类型和设备，你只需要补一张单图或视频资产；训练用 ZIP 数据集不能直接做在线验证。</span>' : '<span>下一步：训练结束后，系统会生成一版待验证模型，再去任务中心挑真实图片验证。</span>'}
                 ${job.error_message ? `<span>错误摘要：${esc(job.error_message)}</span>` : '<span>错误摘要：无</span>'}
               </section>
             </div>
@@ -4150,10 +4579,10 @@ function pageTraining(route, rawCtx) {
               canCreateTask && candidateModel?.id
                 ? `
                     <section class="selection-summary training-inline-validation">
-                      <strong>直接验证候选模型</strong>
+                      <strong>直接验证新模型</strong>
                       <span>不必先跳任务中心。系统会优先帮你带一张合适的单图/视频资产；你也可以手动改成别的资产，再直接创建验证任务。</span>
                       <div class="training-inline-validation-grid">
-                        <input id="trainingValidationAssetInput" list="trainingValidationAssetsDatalist" placeholder="优先使用推荐资产；也可手动改成别的单图/视频 asset_id" value="${esc(pickSuggestedValidationAsset(validationSampleCandidates))}" />
+                        <input id="trainingValidationAssetInput" list="trainingValidationAssetsDatalist" placeholder="优先使用推荐资产；也可手动改成别的单图或视频资产编号" value="${esc(pickSuggestedValidationAsset(validationSampleCandidates))}" />
                         <datalist id="trainingValidationAssetsDatalist">
                           ${assistAssets.filter((row) => row.asset_type !== 'archive').map((row) => `<option value="${esc(row.id)}">${esc(row.file_name)}</option>`).join('')}
                         </datalist>
@@ -4165,7 +4594,7 @@ function pageTraining(route, rawCtx) {
                           ? `<div class="result-text-ribbon">${validationSampleCandidates.map((row) => `<button class="ghost" type="button" data-pick-validation-asset="${esc(row.id)}">${esc(row.file_name)}</button>`).join('')}</div>`
                           : ''
                       }
-                      <div id="trainingValidationLaunchMsg" class="hint">默认会使用候选模型 ${esc(candidateModel.model_code)}:${esc(candidateModel.version)} 和设备 ${esc(job.assigned_worker_code ? 'edge-01' : (job.worker_selector?.hosts?.[0] || job.worker_selector?.host || 'edge-01'))}。</div>
+                      <div id="trainingValidationLaunchMsg" class="hint">默认会使用刚训练出来的新模型 ${esc(candidateModel.model_code)}:${esc(candidateModel.version)}，以及设备 ${esc(job.assigned_worker_code ? 'edge-01' : (job.worker_selector?.hosts?.[0] || job.worker_selector?.host || 'edge-01'))}。</div>
                     </section>
                   `
                 : ''
@@ -4299,7 +4728,7 @@ function pageTraining(route, rawCtx) {
                   <div class="selection-card-meta selection-card-meta--compact">
                     <span>训练/验证</span><strong>${esc(`${row.asset_count ?? 0}/${row.validation_asset_count ?? 0}`)}</strong>
                     <span>基础模型</span><strong>${esc(row.base_model ? `${row.base_model.model_code}:${row.base_model.version}` : '未指定')}</strong>
-                    <span>候选模型</span><strong>${esc(row.candidate_model ? `${row.candidate_model.model_code}:${row.candidate_model.version}` : '等待回收')}</strong>
+                    <span>待验证模型</span><strong>${esc(row.candidate_model ? `${row.candidate_model.model_code}:${row.candidate_model.version}` : '等待生成')}</strong>
                     <span>执行节点</span><strong>${esc(workerLabel)}</strong>
                   </div>
                   <div class="row-actions">
@@ -4327,6 +4756,7 @@ function pageTraining(route, rawCtx) {
         jobsWrap.querySelectorAll('[data-training-open-summary]').forEach((button) => {
           button.addEventListener('click', () => {
             activeTrainingJobId = button.getAttribute('data-training-open-summary') || '';
+            setTrainingOverviewPanel('summary');
             renderTrainingJobTable(cachedTrainingJobs);
             renderTrainingRunSummary();
             renderTrainingWorkbenchOverview();
@@ -4406,12 +4836,12 @@ function pageTraining(route, rawCtx) {
       }
 
       async function loadWorkers() {
-        workersWrap.innerHTML = renderLoading('加载 worker...');
+        workersWrap.innerHTML = renderLoading('加载训练机器...');
         try {
           const rows = await ctx.get('/training/workers');
           assistWorkers = rows || [];
           if (!rows.length) {
-            workersWrap.innerHTML = renderEmpty('暂无 Worker，请先接入训练执行节点或在下方注册 Worker');
+            workersWrap.innerHTML = renderEmpty('暂无训练机器，请先接入训练执行节点或在下方登记训练机器');
             if (workerPool) workerPool.innerHTML = renderEmpty('当前没有可用于训练分配的机器');
             if (workerCodesDatalist) workerCodesDatalist.innerHTML = '';
             if (workerHostsDatalist) workerHostsDatalist.innerHTML = '';
@@ -4423,28 +4853,51 @@ function pageTraining(route, rawCtx) {
           const archivedRows = rows.filter((row) => row.status !== 'ACTIVE');
           const visibleRows = trainingLibraryFilters.workerShowHistory ? rows : activeRows;
           workersWrap.innerHTML = `
-            <div class="hint">默认仅展示活跃 Worker。历史异常/失联记录 ${archivedRows.length} 条，可在训练机池里勾选“显示历史异常”查看。</div>
+            <div class="hint">默认仅展示活跃训练机器。历史异常/失联记录 ${archivedRows.length} 条，可在训练机池里勾选“显示历史异常”查看。</div>
             ${canManageWorkers && archivedRows.length ? '<div class="row-actions"><button class="ghost" type="button" data-cleanup-workers>清理历史异常</button></div>' : ''}
-            <div class="table-wrap">
-              <table class="table">
-                <thead><tr><th>worker_code(Worker 编码)</th><th>alert(告警)</th><th>status(状态)</th><th>host(主机)</th><th>outstanding(待处理)</th><th>last_seen(最近心跳)</th><th>resources(资源)</th><th>操作</th></tr></thead>
-                <tbody>
-                  ${visibleRows.map((row) => `
-                    <tr>
-                      <td class="mono">${esc(row.worker_code)}</td>
-                      <td>${row.alert_level ? `<span class="badge">${esc(row.alert_level)}</span>` : '-'}</td>
-                      <td>${esc(enumText('worker_status', row.status))}</td>
-                      <td>${esc(row.host || '-')}</td>
-                      <td>${esc(row.outstanding_jobs ?? 0)}</td>
-                      <td>${formatDateTime(row.last_seen_at)}</td>
-                      <td><details><summary>查看</summary><pre>${esc(safeJson(row.resources || {}))}</pre></details></td>
-                      <td><button class="ghost" type="button" data-pick-worker="${esc(row.worker_code)}">选为训练机</button></td>
-                    </tr>
-                  `).join('')}
-                </tbody>
-              </table>
+            <div class="selection-grid">
+              ${visibleRows.map((row) => `
+                <article class="selection-card ${row.status === 'ACTIVE' ? 'selected' : ''}">
+                  <div class="selection-card-head selection-card-head--stack">
+                    <div class="selection-card-title">
+                      <strong>${esc(row.worker_code)}</strong>
+                      <span class="selection-card-subtitle">${esc(row.host || '未登记主机')}</span>
+                    </div>
+                    <div class="quick-review-statuses">
+                      ${row.alert_level ? `<span class="badge">${esc(row.alert_level)}</span>` : ''}
+                      <span class="badge">${esc(enumText('worker_status', row.status))}</span>
+                    </div>
+                  </div>
+                  <div class="selection-card-meta selection-card-meta--compact">
+                    <span>待处理作业</span><strong>${esc(row.outstanding_jobs ?? 0)}</strong>
+                    <span>最近心跳</span><strong>${formatDateTime(row.last_seen_at)}</strong>
+                    <span>显示名称</span><strong>${esc(row.name || row.worker_code)}</strong>
+                    <span>下一步</span><strong>${row.status === 'ACTIVE' ? '可直接选为训练机' : '仅排障查看'}</strong>
+                  </div>
+                  <div class="row-actions">
+                    <button class="ghost" type="button" data-pick-worker="${esc(row.worker_code)}">选为训练机</button>
+                  </div>
+                  <details class="inline-details">
+                    <summary>技术详情</summary>
+                    <div class="details-panel">
+                      <div class="selection-card-meta selection-card-meta--compact">
+                        <span>机器编号</span><strong class="mono">${esc(row.id || '-')}</strong>
+                        <span>机器地址</span><strong>${esc(row.host || '-')}</strong>
+                        <span>最近出现</span><strong>${formatDateTime(row.last_seen_at)}</strong>
+                        <span>告警级别</span><strong>${esc(row.alert_level || '-')}</strong>
+                      </div>
+                      <details class="inline-details">
+                        <summary>机器资源详情</summary>
+                        <div class="details-panel">
+                          <pre>${esc(safeJson(row.resources || {}))}</pre>
+                        </div>
+                      </details>
+                    </div>
+                  </details>
+                </article>
+              `).join('')}
             </div>
-            ${!visibleRows.length && archivedRows.length ? renderEmpty('当前没有活跃 Worker；如需排查历史失联节点，请勾选“显示历史异常”') : ''}
+            ${!visibleRows.length && archivedRows.length ? renderEmpty('当前没有活跃训练机器；如需排查历史失联节点，请勾选“显示历史异常”') : ''}
           `;
           if (workerCodesDatalist) {
             workerCodesDatalist.innerHTML = rows.map((row) => `<option value="${esc(row.worker_code)}">${esc(row.name || row.worker_code)}</option>`).join('');
@@ -4470,7 +4923,7 @@ function pageTraining(route, rawCtx) {
                 stale_hours: 24,
                 note: 'training_page_cleanup_archived_workers',
               });
-              ctx.toast(`已清理 ${result.removed_count || 0} 条历史异常 worker`);
+              ctx.toast(`已清理 ${result.removed_count || 0} 条历史异常训练机器记录`);
               await Promise.all([loadWorkers(), loadJobTable()]);
             } catch (error) {
               ctx.toast(error.message || '训练机清理失败', 'error');
@@ -4480,7 +4933,7 @@ function pageTraining(route, rawCtx) {
           });
         } catch (error) {
           if (String(error.message || '').includes('403')) {
-            workersWrap.innerHTML = renderEmpty('当前角色无 Worker 查看权限');
+            workersWrap.innerHTML = renderEmpty('当前角色无训练机器查看权限');
             if (workerPool) workerPool.innerHTML = renderEmpty('当前角色无训练机查看权限');
             renderTrainingRuntimeAlerts();
             renderTrainingWorkbenchOverview();
@@ -4586,11 +5039,13 @@ function pageTraining(route, rawCtx) {
         createResultWrap.querySelector('[data-focus-created-job]')?.addEventListener('click', async () => {
           activeTrainingJobId = job.id || activeTrainingJobId;
           setTrainingPanel('overview');
+          setTrainingOverviewPanel('jobs');
           await loadJobTable();
           trainingRunSummaryWrap?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
         createResultWrap.querySelector('[data-scroll-training-summary]')?.addEventListener('click', () => {
           setTrainingPanel('overview');
+          setTrainingOverviewPanel('summary');
           trainingRunSummaryWrap?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
         createResultWrap.querySelector('[data-open-car-number-review]')?.addEventListener('click', () => {
@@ -4612,6 +5067,7 @@ function pageTraining(route, rawCtx) {
         const model = assistModels.find((row) => row.id === modelId);
         if (!model || !baseModelInput) return;
         baseModelInput.value = model.id;
+        setTrainingPrepPanel('worker');
         if (targetModelCodeInput && !String(targetModelCodeInput.value || '').trim()) {
           targetModelCodeInput.value = model.model_code === 'car_number_ocr' ? 'car_number_ocr' : `${model.model_code}-ft`;
         }
@@ -4703,22 +5159,22 @@ function pageTraining(route, rawCtx) {
         const localWorkerStartCmd = 'python3 deploy/training-worker/bootstrap_local_worker.py bootstrap --start --restart';
         const localWorkerStatus = localWorker?.status || 'NOT_REGISTERED';
         const localWorkerSummary = localWorkerStatus === 'ACTIVE'
-          ? '本机训练 worker 已在线，页面创建的新训练作业会优先改派或调度到这台机器。'
+          ? '本机训练机器已在线，页面创建的新训练作业会优先改派或调度到这台机器。'
           : localWorkerStatus === 'UNHEALTHY'
-            ? '检测到本机 worker 曾注册但当前离线。建议重新生成 token 并后台拉起本机 worker。'
-            : '当前还没有可用的本机训练 worker。建议先注册并启动本机 worker，再创建训练作业。';
+            ? '检测到本机训练机器曾注册但当前离线。建议重新生成 token 并后台拉起本机训练机器。'
+            : '当前还没有可用的本机训练机器。建议先注册并启动本机训练机器，再创建训练作业。';
         const localWorkerMeta = localWorker
           ? `
               <div class="selection-card-meta">
-                <span>worker_code</span><strong class="mono">${esc(localWorker.worker_code)}</strong>
+                <span>机器编号</span><strong class="mono">${esc(localWorker.worker_code)}</strong>
                 <span>状态</span><strong>${esc(enumText('worker_status', localWorker.status))}</strong>
-                <span>host</span><strong class="mono">${esc(localWorker.host || '-')}</strong>
+                <span>机器地址</span><strong class="mono">${esc(localWorker.host || '-')}</strong>
                 <span>最近心跳</span><strong>${esc(localWorker.heartbeat_age_sec == null ? '-' : `${localWorker.heartbeat_age_sec}s`)}</strong>
               </div>
             `
           : `
               <div class="selection-card-meta">
-                <span>worker_code</span><strong class="mono">local-train-worker</strong>
+                <span>机器编号</span><strong class="mono">local-train-worker</strong>
                 <span>状态</span><strong>未注册</strong>
                 <span>推荐脚本</span><strong class="mono">deploy/training-worker/bootstrap_local_worker.py</strong>
               </div>
@@ -4726,7 +5182,7 @@ function pageTraining(route, rawCtx) {
         const localWorkerGuide = `
           <article class="selection-card ${localWorkerStatus === 'ACTIVE' ? 'selected' : ''}">
             <div class="selection-card-head">
-              <strong>本机训练 Worker</strong>
+              <strong>本机训练机器</strong>
               <span class="badge">${esc(localWorkerStatus === 'NOT_REGISTERED' ? '未注册' : enumText('worker_status', localWorkerStatus))}</span>
             </div>
             <p class="muted">${esc(localWorkerSummary)}</p>
@@ -4743,7 +5199,7 @@ function pageTraining(route, rawCtx) {
           workerPool.querySelector('[data-copy-local-worker-cmd]')?.addEventListener('click', async () => {
             try {
               await navigator.clipboard.writeText(localWorkerStartCmd);
-              ctx.toast('本机 worker 启动命令已复制');
+              ctx.toast('本机训练机器启动命令已复制');
             } catch {
               ctx.toast('复制失败，请手工复制命令', 'error');
             }
@@ -4796,10 +5252,10 @@ function pageTraining(route, rawCtx) {
                     <span class="badge">${esc(enumText('worker_status', row.status))}</span>
                   </div>
                   <div class="selection-card-meta">
-                    <span>worker_code</span><strong class="mono">${esc(row.worker_code)}</strong>
-                    <span>host / IP</span><strong class="mono">${esc(row.host || '-')}</strong>
+                    <span>训练机器编号</span><strong class="mono">${esc(row.worker_code)}</strong>
+                    <span>机器地址</span><strong class="mono">${esc(row.host || '-')}</strong>
                     <span>待处理</span><strong>${esc(row.outstanding_jobs ?? 0)}</strong>
-                    <span>GPU</span><strong>${esc(`${(row.resources || {}).gpu_count || 0} / ${(row.resources || {}).gpu_mem_mb || 0} MB`)}</strong>
+                    <span>GPU 资源</span><strong>${esc(`${(row.resources || {}).gpu_count || 0} / ${(row.resources || {}).gpu_mem_mb || 0} MB`)}</strong>
                     <span>告警</span><strong>${esc(row.alert_level || '-')}</strong>
                   </div>
                   <div class="row-actions">
@@ -4813,7 +5269,7 @@ function pageTraining(route, rawCtx) {
         workerPool.querySelector('[data-copy-local-worker-cmd]')?.addEventListener('click', async () => {
           try {
             await navigator.clipboard.writeText(localWorkerStartCmd);
-            ctx.toast('本机 worker 启动命令已复制');
+            ctx.toast('本机训练机器启动命令已复制');
           } catch {
             ctx.toast('复制失败，请手工复制命令', 'error');
           }
@@ -4899,7 +5355,7 @@ function pageTraining(route, rawCtx) {
                     </div>
                   </div>
                   <div class="selection-card-meta">
-                    <span>asset_id</span><strong class="mono">${esc(row.asset_id)}</strong>
+                    <span>资产编号</span><strong class="mono">${esc(row.asset_id)}</strong>
                     <span>来源</span><strong>${esc(row.source_type || '-')}</strong>
                     <span>样本数</span><strong>${esc(String(summary.task_count ?? summary.source_result_count ?? meta.archive_resource_count ?? 0))}</strong>
                     <span>标签</span><strong>${esc((summary.label_vocab || meta.label_vocab || []).slice(0, 6).join(', ') || '-')}</strong>
@@ -5324,8 +5780,8 @@ function pageTraining(route, rawCtx) {
             resources: JSON.parse(String(fd.get('resources') || '{}')),
           };
           const result = await ctx.post('/training/workers/register', payload);
-          registerWorkerMsg.textContent = `注册成功，bootstrap_token: ${result.bootstrap_token || '-'}`;
-          ctx.toast('训练 Worker 注册成功');
+          registerWorkerMsg.textContent = `注册成功，引导令牌：${result.bootstrap_token || '-'}`;
+          ctx.toast('训练机器登记成功');
           await loadWorkers();
         } catch (error) {
           registerWorkerMsg.textContent = error.message || '注册失败';
@@ -5373,6 +5829,8 @@ function pageTraining(route, rawCtx) {
           renderTrainingCreateResult(result);
           ctx.toast('训练作业创建成功');
           await loadJobTable();
+          setTrainingPanel('overview');
+          setTrainingOverviewPanel('summary');
           trainingRunSummaryWrap?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         } catch (error) {
           createMsg.textContent = error.message || '创建失败';
@@ -5446,12 +5904,32 @@ function pageTraining(route, rawCtx) {
           setTrainingPanel(button.getAttribute('data-training-panel-tab') || 'overview');
         });
       });
+      trainingOverviewTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setTrainingOverviewPanel(button.getAttribute('data-training-overview-tab') || 'alerts');
+        });
+      });
+      trainingPrepTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setTrainingPrepPanel(button.getAttribute('data-training-prep-tab') || 'model');
+        });
+      });
+      trainingWorkersTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setTrainingWorkersPanel(button.getAttribute('data-training-workers-tab') || 'overview');
+        });
+      });
+      trainingCreateTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setTrainingCreatePanel(button.getAttribute('data-training-create-tab') || 'prep');
+        });
+      });
 
       await Promise.all([loadJobTable(), loadWorkers(), loadFormAssistData()]);
       ensureDefaultWorkerSelection();
       applyTrainingPreset({ force: String(specInput?.value || '').trim() === '{}' });
       refreshSelectionSummary();
-      setTrainingPanel('overview');
+      setTrainingPanel(activeTrainingPanel);
       renderTrainingCreateResult(null);
     },
   };
@@ -5464,45 +5942,64 @@ function pageCarNumberLabeling(route, rawCtx) {
       <section class="card">
         <h2>车号文本复核</h2>
         <p>直接浏览 <code>demo_data/train</code> 裁剪出来的车号 crop，接受或修正 OCR 建议，并把复核结果回写到标注清单。</p>
-        <form id="carNumberLabelingFilterForm" class="section-toolbar compact">
-          <input id="carNumberLabelingSearch" name="q" placeholder="搜索 sample_id / 源文件 / 建议文本" />
-          <select id="carNumberLabelingStatus" name="review_status">
-            <option value="">全部状态</option>
-            <option value="pending">pending</option>
-            <option value="done">done</option>
-            <option value="needs_check">needs_check</option>
-          </select>
-          <select id="carNumberLabelingSplit" name="split_hint">
-            <option value="">全部切分</option>
-            <option value="train">train</option>
-            <option value="validation">validation</option>
-          </select>
-          <label class="checkbox-row"><input id="carNumberOnlyMissingFinal" type="checkbox" /> 仅看未补 final_text</label>
-          <label class="checkbox-row"><input id="carNumberOnlyWithSuggestion" type="checkbox" /> 仅看有建议</label>
-          <button class="ghost" type="submit">刷新列表</button>
-        </form>
-        <div class="row-actions review-toolbar">
-          <button id="presetCarNumberTodo" class="ghost" type="button">只看待处理</button>
-          <button id="presetCarNumberNeedsCheck" class="ghost" type="button">只看 needs_check</button>
-          <button id="presetCarNumberReset" class="ghost" type="button">重置筛选</button>
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-labeling-panel-tab="overview">复核总览</button>
+          <button class="ghost" type="button" data-labeling-panel-tab="queue">待处理样本</button>
+          <button class="ghost" type="button" data-labeling-panel-tab="review">当前样本复核</button>
+          <button class="ghost" type="button" data-labeling-panel-tab="export">导出与训练</button>
         </div>
-        <div class="row-actions review-toolbar">
-          <label class="checkbox-row"><input id="carNumberAllowSuggestionsExport" type="checkbox" /> 导出时允许建议值补空</label>
-          <button id="exportCarNumberTextDataset" class="ghost" type="button">导出 OCR 文本训练包</button>
-          <button id="exportCarNumberTextAssets" class="primary" type="button">导出训练资产并打开训练页</button>
-          <button id="exportCarNumberTrainingJob" class="ghost" type="button">导出训练资产并直接创建训练作业</button>
-          <span class="hint">快捷键：<code>Ctrl/Cmd+S</code> 保存，<code>Alt+↑/↓</code> 切换上一条/下一条。前者只预填训练页，不会自动创建作业。</span>
-        </div>
-        <div id="carNumberLabelingExportMsg" class="hint"></div>
+        <div id="labelingPanelMeta" class="hint">默认先看复核总览；选择样本后会自动切到当前样本复核，导出训练数据时会自动切到导出与训练。</div>
+      </section>
+      <section class="card" data-labeling-panel="overview">
         <div id="carNumberLabelingSummaryWrap">${renderLoading('加载复核摘要...')}</div>
       </section>
-      <section class="grid-two">
+      <section class="card" data-labeling-panel="review" hidden>
+        <div id="carNumberLabelingDetailWrap">${renderEmpty('先到“待处理样本”里选择一个样本开始复核')}</div>
+      </section>
+      <section class="card" data-labeling-panel="export" hidden>
+        <div class="row-actions review-toolbar">
+          <label class="checkbox-row"><input id="carNumberAllowSuggestionsExport" type="checkbox" /> 导出时允许建议值补空</label>
+          <button id="exportCarNumberTextDataset" class="ghost" type="button">导出文本训练包</button>
+          <button id="exportCarNumberTextAssets" class="primary" type="button">先准备训练数据</button>
+          <button id="exportCarNumberTrainingJob" class="ghost" type="button">现在开始训练</button>
+        </div>
+        <div class="hint">快捷键：<code>Ctrl/Cmd+S</code> 保存，<code>Alt+↑/↓</code> 切换上一条/下一条。“先准备训练数据”会打开训练页并自动预填，“现在开始训练”会直接创建训练作业。</div>
+        <div id="carNumberLabelingExportMsg" class="hint"></div>
+      </section>
+      <section class="grid-two" data-labeling-panel="queue" hidden>
         <section class="card">
+          <form id="carNumberLabelingFilterForm" class="section-toolbar compact">
+            <input id="carNumberLabelingSearch" name="q" placeholder="搜索 sample_id / 源文件 / 建议文本" />
+            <select id="carNumberLabelingStatus" name="review_status">
+              <option value="">全部状态</option>
+              <option value="pending">待处理</option>
+              <option value="done">已完成</option>
+              <option value="needs_check">待复核</option>
+            </select>
+            <select id="carNumberLabelingSplit" name="split_hint">
+              <option value="">全部切分</option>
+              <option value="train">train</option>
+              <option value="validation">validation</option>
+            </select>
+            <label class="checkbox-row"><input id="carNumberOnlyMissingFinal" type="checkbox" /> 仅看未补最终文本</label>
+            <label class="checkbox-row"><input id="carNumberOnlyWithSuggestion" type="checkbox" /> 仅看有建议</label>
+            <button class="ghost" type="submit">刷新列表</button>
+          </form>
+          <div class="row-actions review-toolbar">
+            <button id="presetCarNumberTodo" class="ghost" type="button">只看待处理</button>
+            <button id="presetCarNumberNeedsCheck" class="ghost" type="button">只看待复核</button>
+            <button id="presetCarNumberReset" class="ghost" type="button">重置筛选</button>
+          </div>
           <div id="carNumberLabelingListMeta" class="hint"></div>
           <div id="carNumberLabelingListWrap">${renderLoading('加载待复核样本...')}</div>
         </section>
         <section class="card">
-          <div id="carNumberLabelingDetailWrap">${renderEmpty('从左侧选择一个样本开始复核')}</div>
+          <h3>待处理说明</h3>
+          <div class="hint">在左侧筛选和浏览样本；选中后系统会自动切到“当前样本复核”。如果你只是想看进度，留在“复核总览”；如果准备导出训练数据，切到“导出与训练”。</div>
+          <div class="selection-summary">
+            <strong>推荐顺序</strong>
+            <span>先处理待处理和缺少最终文本的样本，再导出训练数据或直接开始训练。</span>
+          </div>
         </section>
       </section>
     `,
@@ -5525,11 +6022,15 @@ function pageCarNumberLabeling(route, rawCtx) {
       const exportAssetsBtn = root.querySelector('#exportCarNumberTextAssets');
       const exportTrainingJobBtn = root.querySelector('#exportCarNumberTrainingJob');
       const exportMsg = root.querySelector('#carNumberLabelingExportMsg');
+      const labelingPanelMeta = root.querySelector('#labelingPanelMeta');
+      const labelingPanelTabs = Array.from(root.querySelectorAll('[data-labeling-panel-tab]'));
+      const labelingPanels = Array.from(root.querySelectorAll('[data-labeling-panel]'));
       let selectedSampleId = '';
       let currentItems = [];
       let currentPreviewUrl = '';
       let activeSaveRequest = null;
       let currentCarNumberRule = null;
+      let activeLabelingPanel = 'overview';
 
       function revokePreviewUrl() {
         if (currentPreviewUrl) URL.revokeObjectURL(currentPreviewUrl);
@@ -5545,6 +6046,26 @@ function pageCarNumberLabeling(route, rawCtx) {
           has_suggestion: onlyWithSuggestionInput?.checked ? 'true' : '',
           limit: 120,
         };
+      }
+
+      function setLabelingPanel(panel) {
+        activeLabelingPanel = panel;
+        labelingPanelTabs.forEach((btn) => {
+          const active = btn.getAttribute('data-labeling-panel-tab') === panel;
+          btn.classList.toggle('primary', active);
+          btn.classList.toggle('ghost', !active);
+        });
+        labelingPanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-labeling-panel') !== panel;
+        });
+        if (labelingPanelMeta) {
+          labelingPanelMeta.textContent = ({
+            overview: '先看整体进度、规则和最近导出情况。',
+            queue: '在这里筛选和选择待处理样本；选中后会自动切到当前样本复核。',
+            review: '聚焦当前样本，接受建议、修正文本并保存复核。',
+            export: '当一批样本已经补好真值后，在这里整理训练数据或直接开始训练。',
+          })[panel] || '按当前工作区继续操作。';
+        }
       }
 
       function renderSummary(summary) {
@@ -5581,7 +6102,7 @@ function pageCarNumberLabeling(route, rawCtx) {
             <article class="metric-card">
               <h4>复核状态</h4>
               <p class="metric">${esc(reviewCounts.done ?? 0)}</p>
-              <span>${esc(`pending ${reviewCounts.pending ?? 0} / needs_check ${reviewCounts.needs_check ?? 0}`)}</span>
+              <span>${esc(`待处理 ${reviewCounts.pending ?? 0} / 待复核 ${reviewCounts.needs_check ?? 0}`)}</span>
             </article>
             <article class="metric-card">
               <h4>最近导出</h4>
@@ -5641,31 +6162,31 @@ function pageCarNumberLabeling(route, rawCtx) {
                 <span>${esc(item.source_file || '-')}</span>
               </div>
               <div class="keyvals compact">
-                <div><span>split</span><strong>${esc(item.split_hint || '-')}</strong></div>
-                <div><span>review_status</span><strong>${esc(item.review_status || '-')}</strong></div>
-                <div><span>bbox</span><strong>${esc((item.bbox || []).join(', ') || '-')}</strong></div>
-                <div><span>engine</span><strong>${esc(item.ocr_suggestion_engine || '-')}</strong></div>
+                <div><span>切分</span><strong>${esc(item.split_hint || '-')}</strong></div>
+                <div><span>复核状态</span><strong>${esc(item.review_status || '-')}</strong></div>
+                <div><span>定位框</span><strong>${esc((item.bbox || []).join(', ') || '-')}</strong></div>
+                <div><span>识别引擎</span><strong>${esc(item.ocr_suggestion_engine || '-')}</strong></div>
               </div>
-              <label>ocr_suggestion(模型建议)</label>
+              <label>模型建议</label>
               <input value="${esc(item.ocr_suggestion || '')}" disabled />
               <div class="hint">confidence=${esc(item.ocr_suggestion_confidence || '-')} · quality=${esc(item.ocr_suggestion_quality || '-')}</div>
-              <label>final_text(人工确认文本)</label>
+              <label>最终文本（人工确认）</label>
               <input id="carNumberFinalText" name="final_text" value="${esc(item.final_text || '')}" placeholder="输入最终车号文本" />
               <div class="hint">${esc(item.car_number_rule?.description || currentCarNumberRule?.description || '当前默认要求车号符合激活规则')}</div>
-              ${item.final_text_validation ? `<div class="hint">当前 final_text 校验：${esc(item.final_text_validation.valid ? '合法' : '不合法')}</div>` : ''}
-              <label>review_status(复核状态)</label>
+              ${item.final_text_validation ? `<div class="hint">当前最终文本校验：${esc(item.final_text_validation.valid ? '合法' : '不合法')}</div>` : ''}
+              <label>复核状态</label>
               <select name="review_status">
-                <option value="pending" ${item.review_status === 'pending' ? 'selected' : ''}>pending</option>
-                <option value="done" ${item.review_status === 'done' ? 'selected' : ''}>done</option>
-                <option value="needs_check" ${item.review_status === 'needs_check' ? 'selected' : ''}>needs_check</option>
+                <option value="pending" ${item.review_status === 'pending' ? 'selected' : ''}>待处理</option>
+                <option value="done" ${item.review_status === 'done' ? 'selected' : ''}>已完成</option>
+                <option value="needs_check" ${item.review_status === 'needs_check' ? 'selected' : ''}>待复核</option>
               </select>
-              <label>reviewer(复核人)</label>
+              <label>复核人</label>
               <input name="reviewer" value="${esc(item.reviewer || ctx.state.user?.username || '')}" />
-              <label>notes(备注)</label>
+              <label>备注</label>
               <textarea name="notes" rows="3" placeholder="记录特殊情况、模糊字符、需要复查的原因">${esc(item.notes || '')}</textarea>
               <div class="row-actions">
                 <button id="acceptCarNumberSuggestion" class="ghost" type="button" ${item.ocr_suggestion ? '' : 'disabled'}>采用建议</button>
-                <button id="clearCarNumberFinalText" class="ghost" type="button">清空 final_text</button>
+                <button id="clearCarNumberFinalText" class="ghost" type="button">清空最终文本</button>
               </div>
               <div class="row-actions">
                 <button id="selectPrevCarNumberReview" class="ghost" type="button">上一条</button>
@@ -5712,11 +6233,12 @@ function pageCarNumberLabeling(route, rawCtx) {
         }
       }
 
-      async function selectItem(sampleId) {
+      async function selectItem(sampleId, { openPanel = true } = {}) {
         selectedSampleId = sampleId;
         const item = currentItems.find((row) => row.sample_id === sampleId) || null;
         renderDetail(item);
         if (!item) return;
+        if (openPanel) setLabelingPanel('review');
         await loadPreview(sampleId);
         if (selectedSampleId === sampleId) renderDetail(item);
         listWrap.innerHTML = renderList({ items: currentItems });
@@ -5726,7 +6248,7 @@ function pageCarNumberLabeling(route, rawCtx) {
       function bindListClicks() {
         listWrap.querySelectorAll('[data-labeling-sample]').forEach((btn) => {
           btn.addEventListener('click', async () => {
-            await selectItem(btn.getAttribute('data-labeling-sample') || '');
+            await selectItem(btn.getAttribute('data-labeling-sample') || '', { openPanel: true });
           });
         });
       }
@@ -5737,7 +6259,7 @@ function pageCarNumberLabeling(route, rawCtx) {
         const baseIndex = currentIndex >= 0 ? currentIndex : 0;
         const nextIndex = (baseIndex + step + currentItems.length) % currentItems.length;
         const nextItem = currentItems[nextIndex];
-        if (nextItem) await selectItem(nextItem.sample_id);
+        if (nextItem) await selectItem(nextItem.sample_id, { openPanel: true });
       }
 
       function activeReviewForm() {
@@ -5773,7 +6295,7 @@ function pageCarNumberLabeling(route, rawCtx) {
             ? preferredOpenItem(currentItems, selectedSampleId)
             : preferredOpenItem(currentItems);
           if (nextSampleId) {
-            await selectItem(nextSampleId);
+            await selectItem(nextSampleId, { openPanel: activeLabelingPanel === 'review' });
           } else {
             selectedSampleId = '';
             revokePreviewUrl();
@@ -5813,7 +6335,7 @@ function pageCarNumberLabeling(route, rawCtx) {
               .concat(currentItems.slice(0, currentIndex + 1))
               .find((item) => item.review_status !== 'done' || !item.has_final_text);
             const nextItem = pendingAfter || currentItems[(currentIndex + 1) % currentItems.length];
-            if (nextItem) await selectItem(nextItem.sample_id);
+            if (nextItem) await selectItem(nextItem.sample_id, { openPanel: true });
           }
           if (msg) msg.textContent = '保存成功';
           return data;
@@ -5827,6 +6349,7 @@ function pageCarNumberLabeling(route, rawCtx) {
 
       async function exportTextDataset() {
         if (!exportBtn || !exportMsg) return;
+        setLabelingPanel('export');
         exportBtn.disabled = true;
         if (exportAssetsBtn) exportAssetsBtn.disabled = true;
         if (exportTrainingJobBtn) exportTrainingJobBtn.disabled = true;
@@ -5851,6 +6374,7 @@ function pageCarNumberLabeling(route, rawCtx) {
 
       async function exportAssetsToTraining() {
         if (!exportAssetsBtn || !exportMsg) return;
+        setLabelingPanel('export');
         exportBtn.disabled = true;
         exportAssetsBtn.disabled = true;
         if (exportTrainingJobBtn) exportTrainingJobBtn.disabled = true;
@@ -5865,7 +6389,7 @@ function pageCarNumberLabeling(route, rawCtx) {
           if (prefill.dataset_label) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetLabel, prefill.dataset_label);
           if (prefill.training_dataset_version_id) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetVersionId, prefill.training_dataset_version_id);
           if (prefill.intended_model_code) localStorage.setItem(STORAGE_KEYS.prefillTrainingTargetModelCode, prefill.intended_model_code);
-          exportMsg.textContent = `已注册训练资产 ${payload?.training_asset?.asset_id || '-'} / 验证资产 ${payload?.validation_asset?.asset_id || '-'}。训练页已预填这些资产，但还需要你手动点“创建训练作业”。`;
+          exportMsg.textContent = `已注册训练资产 ${payload?.training_asset?.asset_id || '-'} / 验证资产 ${payload?.validation_asset?.asset_id || '-'}。训练页已预填这些资产编号，但还需要你手动点“创建训练作业”。`;
           ctx.toast('训练资产已导出，训练页已预填');
           ctx.navigate('training');
         } catch (error) {
@@ -5880,6 +6404,7 @@ function pageCarNumberLabeling(route, rawCtx) {
 
       async function exportTrainingJob() {
         if (!exportTrainingJobBtn || !exportMsg) return;
+        setLabelingPanel('export');
         exportBtn.disabled = true;
         if (exportAssetsBtn) exportAssetsBtn.disabled = true;
         exportTrainingJobBtn.disabled = true;
@@ -5945,6 +6470,12 @@ function pageCarNumberLabeling(route, rawCtx) {
         await exportTrainingJob();
       });
 
+      labelingPanelTabs.forEach((btn) => {
+        btn.addEventListener('click', () => {
+          setLabelingPanel(btn.getAttribute('data-labeling-panel-tab') || 'overview');
+        });
+      });
+
       root.setAttribute('tabindex', '-1');
       root.addEventListener('keydown', async (event) => {
         const target = event.target;
@@ -5973,6 +6504,7 @@ function pageCarNumberLabeling(route, rawCtx) {
       });
 
       await Promise.all([loadSummary(), loadItems({ preserveSelection: false })]);
+      setLabelingPanel(activeLabelingPanel);
       root.focus();
     },
   };
@@ -5997,7 +6529,14 @@ function pagePipelines(route, rawCtx) {
           { path: 'models', label: '去模型中心' },
         ],
       })}
-      <section class="card">
+      <section class="card" data-pipeline-panel="overview">
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-pipeline-overview-tab="workbench">工作台概览</button>
+          <button class="ghost" type="button" data-pipeline-overview-tab="list">流水线列表</button>
+        </div>
+        <div id="pipelineOverviewPanelMeta" class="hint">默认先看流水线工作台概览；需要切换版本或做筛选时再进入流水线列表。</div>
+      </section>
+      <section class="card" data-pipeline-panel="overview" data-pipeline-overview-panel="workbench" hidden>
         <h3>流水线工作台概览</h3>
         <div id="pipelineWorkbenchOverviewWrap">${renderEmpty('先从流水线列表选择一版配置，这里会汇总当前状态和推荐的发布动作。')}</div>
       </section>
@@ -6009,29 +6548,38 @@ function pagePipelines(route, rawCtx) {
         </div>
         <div id="pipelinePanelMeta" class="hint">默认先看流水线总览；注册和发布按工作区展开。</div>
       </section>
-      <section class="card" data-pipeline-panel="overview">
+      <section class="card" data-pipeline-panel="build" hidden>
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-pipeline-build-tab="register">注册流水线</button>
+          <button class="ghost" type="button" data-pipeline-build-tab="guide">发布前提示</button>
+        </div>
+        <div id="pipelineBuildPanelMeta" class="hint">默认先注册流水线；发布前提示按需查看。</div>
+      </section>
+      <section class="card" data-pipeline-panel="overview" data-pipeline-overview-panel="list" hidden>
         <h3>流水线列表</h3>
         <div id="pipelinesTableWrap">${renderLoading('加载流水线列表...')}</div>
       </section>
-      <section class="grid-two" data-pipeline-panel="build" hidden>
+      <section class="grid-two" data-pipeline-panel="build" data-pipeline-build-panel="register" hidden>
         <form id="pipelineRegisterForm" class="card form-grid">
           <h3>注册流水线</h3>
-          <label>pipeline_code(流水线编码)</label><input name="pipeline_code" placeholder="railway-mainline" required />
-          <label>name(名称)</label><input name="name" placeholder="主线路由流水线" required />
-          <label>version(版本)</label><input name="version" placeholder="v1.0.0" required />
-          <label>router_model_id(路由模型ID，可选)</label><input name="router_model_id" placeholder="router-model-id" />
+          <label>流水线编码</label><input name="pipeline_code" placeholder="railway-mainline" required />
+          <label>名称</label><input name="name" placeholder="主线路由流水线" required />
+          <label>版本</label><input name="version" placeholder="v1.0.0" required />
+          <label>路由模型编号（可选）</label><input name="router_model_id" placeholder="路由模型编号" />
           <details>
             <summary>路由配置与高级参数</summary>
             <div class="details-panel form-grid">
-              <label>expert_map(JSON 专家路由表)</label><textarea name="expert_map" rows="3">{}</textarea>
-              <label>thresholds(JSON 阈值配置)</label><textarea name="thresholds" rows="2">{}</textarea>
-              <label>fusion_rules(JSON 融合规则)</label><textarea name="fusion_rules" rows="2">{}</textarea>
-              <label>config(JSON 扩展配置，可空)</label><textarea name="config" rows="4">{}</textarea>
+              <label>专家模型分配（JSON）</label><textarea name="expert_map" rows="3">{}</textarea>
+              <label>阈值配置（JSON）</label><textarea name="thresholds" rows="2">{}</textarea>
+              <label>融合规则（JSON）</label><textarea name="fusion_rules" rows="2">{}</textarea>
+              <label>扩展配置（JSON，可空）</label><textarea name="config" rows="4">{}</textarea>
             </div>
           </details>
           <button class="primary" type="submit">注册流水线</button>
           <div id="pipelineRegisterMsg" class="hint"></div>
         </form>
+      </section>
+      <section class="card" data-pipeline-panel="build" data-pipeline-build-panel="guide" hidden>
         <section class="card">
           <h3>发布前检查</h3>
           <div class="selection-summary">
@@ -6041,9 +6589,9 @@ function pagePipelines(route, rawCtx) {
             <span>发布时限定目标租户和设备范围，逐步放量，而不是一次性全量下发。</span>
           </div>
           <details>
-            <summary>示例 expert_map</summary>
+            <summary>示例专家模型分配</summary>
             <pre>{
-  "car_number_ocr": {"model_id": "your-model-id"}
+  "car_number_ocr": {"model_id": "模型编号"}
 }</pre>
           </details>
         </section>
@@ -6062,16 +6610,67 @@ function pagePipelines(route, rawCtx) {
       const pipelinePanelMeta = root.querySelector('#pipelinePanelMeta');
       const pipelinePanelTabs = [...root.querySelectorAll('[data-pipeline-panel-tab]')];
       const pipelinePanels = [...root.querySelectorAll('[data-pipeline-panel]')];
+      const pipelineOverviewPanelMeta = root.querySelector('#pipelineOverviewPanelMeta');
+      const pipelineOverviewTabs = [...root.querySelectorAll('[data-pipeline-overview-tab]')];
+      const pipelineOverviewPanels = [...root.querySelectorAll('[data-pipeline-overview-panel]')];
+      const pipelineBuildPanelMeta = root.querySelector('#pipelineBuildPanelMeta');
+      const pipelineBuildTabs = [...root.querySelectorAll('[data-pipeline-build-tab]')];
+      const pipelineBuildPanels = [...root.querySelectorAll('[data-pipeline-build-panel]')];
       const releaseWorkbenchWrap = root.querySelector('#pipelineReleaseWorkbenchWrap');
       let activePipelineReleaseId = '';
       let activePipelineId = '';
       let activePipelinePanel = 'overview';
+      let activePipelineOverviewPanel = 'workbench';
+      let activePipelineBuildPanel = 'register';
       let cachedPipelines = [];
+
+      function setPipelineOverviewPanel(panel) {
+        activePipelineOverviewPanel = ['workbench', 'list'].includes(panel) ? panel : 'workbench';
+        pipelineOverviewPanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-pipeline-overview-panel') !== activePipelineOverviewPanel || activePipelinePanel !== 'overview';
+        });
+        pipelineOverviewTabs.forEach((button) => {
+          const active = button.getAttribute('data-pipeline-overview-tab') === activePipelineOverviewPanel;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (pipelineOverviewPanelMeta) {
+          pipelineOverviewPanelMeta.textContent = activePipelineOverviewPanel === 'workbench'
+            ? '先看当前焦点流水线的状态、风险和推荐发布动作。'
+            : '需要切换版本、筛选或查看全部流水线时，再进入流水线列表。';
+        }
+      }
+
+      function setPipelineBuildPanel(panel) {
+        activePipelineBuildPanel = ['register', 'guide'].includes(panel) ? panel : 'register';
+        pipelineBuildPanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-pipeline-build-panel') !== activePipelineBuildPanel || activePipelinePanel !== 'build';
+        });
+        pipelineBuildTabs.forEach((button) => {
+          const active = button.getAttribute('data-pipeline-build-tab') === activePipelineBuildPanel;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (pipelineBuildPanelMeta) {
+          pipelineBuildPanelMeta.textContent = activePipelineBuildPanel === 'register'
+            ? '先注册新的流水线版本，再考虑发布。'
+            : '先看发布前检查建议，确认路由模型、专家模型和阈值规则没有遗漏。';
+        }
+      }
 
       function setPipelinePanel(panel) {
         activePipelinePanel = ['overview', 'build', 'release'].includes(panel) ? panel : 'overview';
         pipelinePanels.forEach((section) => {
-          section.hidden = section.getAttribute('data-pipeline-panel') !== activePipelinePanel;
+          const panelName = section.getAttribute('data-pipeline-panel');
+          if (panelName !== activePipelinePanel) {
+            section.hidden = true;
+            return;
+          }
+          if (panelName === 'overview' && section.hasAttribute('data-pipeline-overview-panel')) return;
+          if (panelName === 'build' && section.hasAttribute('data-pipeline-build-panel')) return;
+          section.hidden = false;
         });
         pipelinePanelTabs.forEach((button) => {
           const active = button.getAttribute('data-pipeline-panel-tab') === activePipelinePanel;
@@ -6086,6 +6685,8 @@ function pagePipelines(route, rawCtx) {
               ? '把注册和路由配置集中处理。'
               : '把发布范围、设备和买家配置放在同一处。';
         }
+        if (activePipelinePanel === 'overview') setPipelineOverviewPanel(activePipelineOverviewPanel);
+        if (activePipelinePanel === 'build') setPipelineBuildPanel(activePipelineBuildPanel);
       }
 
       function selectedPipelineRecord() {
@@ -6117,8 +6718,8 @@ function pagePipelines(route, rawCtx) {
               ? '这条流水线已经正式发布。建议继续用真实样本做验证回查，确认路由与专家模型命中稳定。'
               : '这条流水线还没有正式发布。建议先核对路由模型、专家路由和阈值，再进入发布工作台。',
             metrics: [
-              { label: '路由模型', value: pipeline.router_model_id ? truncateMiddle(pipeline.router_model_id, 8, 6) : '未配置', note: 'router_model_id' },
-              { label: '阈值版本', value: pipeline.threshold_version || '未声明', note: 'thresholds' },
+              { label: '路由模型', value: pipeline.router_model_id ? truncateMiddle(pipeline.router_model_id, 8, 6) : '未配置', note: '当前绑定的路由模型' },
+              { label: '阈值版本', value: pipeline.threshold_version || '未声明', note: '当前阈值规则版本' },
               { label: '状态', value: enumText('pipeline_status', pipeline.status), note: pipeline.name || '当前流水线' },
             ],
             actions: [
@@ -6130,6 +6731,7 @@ function pagePipelines(route, rawCtx) {
         }
         pipelineWorkbenchOverviewWrap.querySelector('[data-workbench-action="pipeline-open-register"]')?.addEventListener('click', () => {
           setPipelinePanel('build');
+          setPipelineBuildPanel('register');
           registerForm?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         });
         pipelineWorkbenchOverviewWrap.querySelector('[data-workbench-action="pipeline-open-tasks"]')?.addEventListener('click', () => {
@@ -6173,14 +6775,14 @@ function pagePipelines(route, rawCtx) {
             <div class="form-grid release-workbench-form">
               <div class="grid-two">
                 <div class="form-grid">
-                  <label>target_devices(目标设备，逗号分隔)</label>
+                  <label>目标设备（逗号分隔）</label>
                   <input id="pipelineReleaseTargetDevices" list="pipelineReleaseDevicesDatalist" value="${esc((recommended.target_devices || []).join(', '))}" placeholder="edge-01" />
                   <datalist id="pipelineReleaseDevicesDatalist">
                     ${devices.map((row) => `<option value="${esc(row.code)}">${esc(row.name || row.code)}</option>`).join('')}
                   </datalist>
                 </div>
                 <div class="form-grid">
-                  <label>target_buyers(目标买家，tenant_code，逗号分隔)</label>
+                  <label>目标买家（租户编码，逗号分隔）</label>
                   <input id="pipelineReleaseTargetBuyers" list="pipelineReleaseBuyersDatalist" value="${esc((recommended.target_buyers || []).join(', '))}" placeholder="buyer-demo-001" />
                   <datalist id="pipelineReleaseBuyersDatalist">
                     ${buyers.map((row) => `<option value="${esc(row.tenant_code)}">${esc(row.name || row.tenant_code)}</option>`).join('')}
@@ -6189,12 +6791,12 @@ function pagePipelines(route, rawCtx) {
               </div>
               <div class="grid-two">
                 <div class="form-grid">
-                  <label>traffic_ratio(流量比例)</label>
+                  <label>流量比例</label>
                   <input id="pipelineReleaseTrafficRatio" type="number" min="1" max="100" value="${esc(recommended.traffic_ratio || 100)}" />
                 </div>
                 <div class="form-grid">
-                  <label>release_notes(发布说明)</label>
-                  <input id="pipelineReleaseNotes" value="${esc(recommended.release_notes || 'console release')}" placeholder="console release" />
+                  <label>发布说明</label>
+                  <input id="pipelineReleaseNotes" value="${esc(recommended.release_notes || '控制台发布')}" placeholder="控制台发布" />
                 </div>
               </div>
               <div id="pipelineReleaseMsg" class="hint">先确认这条流水线引用的模型都正确，再发布到目标范围。</div>
@@ -6224,7 +6826,7 @@ function pagePipelines(route, rawCtx) {
               target_devices: splitCsv(releaseWorkbenchWrap.querySelector('#pipelineReleaseTargetDevices')?.value || ''),
               target_buyers: splitCsv(releaseWorkbenchWrap.querySelector('#pipelineReleaseTargetBuyers')?.value || ''),
               traffic_ratio: Number(releaseWorkbenchWrap.querySelector('#pipelineReleaseTrafficRatio')?.value || 100) || 100,
-              release_notes: String(releaseWorkbenchWrap.querySelector('#pipelineReleaseNotes')?.value || '').trim() || 'console release',
+              release_notes: String(releaseWorkbenchWrap.querySelector('#pipelineReleaseNotes')?.value || '').trim() || '控制台发布',
             };
             button.disabled = true;
             if (msg) msg.textContent = '正在发布流水线...';
@@ -6289,10 +6891,10 @@ function pagePipelines(route, rawCtx) {
                     <summary>技术详情</summary>
                     <div class="details-panel">
                       <div class="selection-card-meta selection-card-meta--compact">
-                        <span>pipeline_id</span><strong class="mono">${esc(row.id)}</strong>
-                        <span>router_model_id</span><strong class="mono">${esc(row.router_model_id || '-')}</strong>
-                        <span>threshold_version</span><strong>${esc(row.threshold_version || '-')}</strong>
-                        <span>name</span><strong>${esc(row.name || '-')}</strong>
+                        <span>流水线编号</span><strong class="mono">${esc(row.id)}</strong>
+                        <span>路由模型编号</span><strong class="mono">${esc(row.router_model_id || '-')}</strong>
+                        <span>阈值版本</span><strong>${esc(row.threshold_version || '-')}</strong>
+                        <span>配置名称</span><strong>${esc(row.name || '-')}</strong>
                       </div>
                     </div>
                   </details>
@@ -6357,6 +6959,16 @@ function pagePipelines(route, rawCtx) {
           setPipelinePanel(button.getAttribute('data-pipeline-panel-tab') || 'overview');
         });
       });
+      pipelineOverviewTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setPipelineOverviewPanel(button.getAttribute('data-pipeline-overview-tab') || 'workbench');
+        });
+      });
+      pipelineBuildTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setPipelineBuildPanel(button.getAttribute('data-pipeline-build-tab') || 'register');
+        });
+      });
 
       setPipelinePanel('overview');
       await loadPipelines();
@@ -6387,14 +6999,23 @@ function pageTasks(route, rawCtx) {
           { path: 'results', label: '查看结果页', primary: true },
         ],
       })}
-      <section class="grid-two">
+      <section class="card">
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-task-panel-tab="quick">快速识别</button>
+          <button class="ghost" type="button" data-task-panel-tab="create">创建任务</button>
+          <button class="ghost" type="button" data-task-panel-tab="models">可选模型</button>
+          <button class="ghost" type="button" data-task-panel-tab="list">任务列表</button>
+        </div>
+        <div id="taskPanelMeta" class="hint">默认先看快速识别；需要精确控制时再切到创建任务或可选模型。</div>
+      </section>
+      <section class="grid-two" data-task-panel="quick">
         <form id="quickDetectForm" class="card form-grid">
           <h3>快速识别</h3>
           <label>file(上传图片 / 视频，可选)</label>
           <input id="quickDetectFile" type="file" accept=".jpg,.jpeg,.png,.bmp,.mp4,.avi,.mov" multiple />
-          <div class="hint">支持单图/短视频，也支持一次上传多张图片或多个短视频；如果资产已经在平台内，也可以直接填写 1-n 个 asset_id。</div>
-          <label>asset_id(已有资产ID，可选，支持 1-n)</label>
-          <input name="asset_id" id="quickDetectAssetInput" list="taskAssetsDatalist" placeholder="asset-id-1, asset-id-2" />
+          <div class="hint">支持单图/短视频，也支持一次上传多张图片或多个短视频；如果资产已经在平台内，也可以直接填写 1-n 个已有资产编号。</div>
+          <label>已有资产编号（可选，可多个）</label>
+          <input name="asset_id" id="quickDetectAssetInput" list="taskAssetsDatalist" placeholder="资产编号-1, 资产编号-2" />
           <label>object_prompt / intent_text(要识别什么)</label>
           <input name="object_prompt" id="quickDetectPrompt" placeholder="例如 车号 / car / person / train / bus" required />
           <div class="chip-row" id="quickDetectPromptChips">
@@ -6403,7 +7024,7 @@ function pageTasks(route, rawCtx) {
           <div id="quickDetectIntentOptions" class="quick-intent-grid"></div>
           <div class="hint">系统会先按你的描述归一化意图并选模。输入“车号 / 车厢号 / 车皮号 / 编号”都会优先走车号 OCR，并直接输出文本。</div>
           <div id="quickDetectModelOptions">${renderEmpty('明确输入“车号”等目标后，这里会直接显示可用模型，不再要求先走一遍目标预检。')}</div>
-          <label>device_code(设备编码)</label>
+          <label>设备编号</label>
           <input name="device_code" id="quickDetectDeviceCode" value="edge-01" />
           <div class="row-actions">
             <button class="ghost" type="button" id="quickDetectPreflightBtn">先扫一遍给建议</button>
@@ -6417,12 +7038,12 @@ function pageTasks(route, rawCtx) {
           <div id="quickDetectResult">${renderEmpty(`上传一张或多张图片 / 视频，输入要识别的对象后，${BRAND_NAME} 会自动选模、创建任务、回传标注图，并支持把本次结果直接打包为训练 / 验证数据集。`)}</div>
         </section>
       </section>
-      <section class="grid-two">
+      <section class="grid-two" data-task-panel="create" hidden>
         <form id="taskCreateForm" class="card form-grid">
           <h3>创建任务</h3>
-          <label>asset_id(资产ID)</label>
-          <input name="asset_id" id="taskAssetInput" list="taskAssetsDatalist" placeholder="asset-id" required />
-          <label>task_type(任务类型，可选)</label>
+          <label>资产编号</label>
+          <input name="asset_id" id="taskAssetInput" list="taskAssetsDatalist" placeholder="资产编号" required />
+          <label>任务类型（可选）</label>
           <select name="task_type">
             <option value="">自动选择</option>
             <option value="pipeline_orchestrated">${enumText('task_type', 'pipeline_orchestrated')}</option>
@@ -6430,22 +7051,22 @@ function pageTasks(route, rawCtx) {
             <option value="car_number_ocr">${enumText('task_type', 'car_number_ocr')}</option>
             <option value="bolt_missing_detect">${enumText('task_type', 'bolt_missing_detect')}</option>
           </select>
-          <label>device_code(设备编码)</label>
+          <label>设备编号</label>
           <input name="device_code" value="edge-01" />
-          <label>intent_text(意图描述)</label>
+          <label>补充说明</label>
           <input name="intent_text" placeholder="例如：优先识别车号" />
           <details class="inline-details task-create-advanced">
             <summary>高级控制（模型 / 流水线 / 调度）</summary>
             <div class="details-panel">
-              <label>pipeline_id(流水线ID，优先)</label>
-              <input name="pipeline_id" id="taskPipelineInput" list="taskPipelinesDatalist" placeholder="pipeline-id，可空" />
-              <label>model_id(模型ID，无 pipeline 时使用)</label>
-              <input name="model_id" id="taskModelInput" list="taskModelsDatalist" placeholder="model-id，可空" />
+              <label>流水线编号（优先，可选）</label>
+              <input name="pipeline_id" id="taskPipelineInput" list="taskPipelinesDatalist" placeholder="流水线编号，可空" />
+              <label>模型编号（可选）</label>
+              <input name="model_id" id="taskModelInput" list="taskModelsDatalist" placeholder="模型编号，可空" />
               <label class="checkbox-row"><input type="checkbox" name="use_master_scheduler" /> 启用主调度器自动选模</label>
-              <div class="hint">如果你已经明确知道要用哪一版模型，建议直接从下方“可选模型”里点选，避免手输 model_id。</div>
+              <div class="hint">如果你已经明确知道要用哪一版模型，建议直接从下方“可选模型”里点选，避免手输模型编号。</div>
             </div>
           </details>
-          <div id="taskCreateAssist" class="selection-summary">当前会根据你填写的资产、模型 / 流水线和任务类型生成一条推理任务。</div>
+          <div id="taskCreateAssist" class="selection-summary">当前会根据你填写的资产、模型 / 流水线和任务类型生成一条识别任务。</div>
           <datalist id="taskAssetsDatalist"></datalist>
           <datalist id="taskPipelinesDatalist"></datalist>
           <datalist id="taskModelsDatalist"></datalist>
@@ -6454,24 +7075,27 @@ function pageTasks(route, rawCtx) {
         </form>
         <section class="card">
           <h3>创建结果</h3>
-          <div id="taskCreateResult">${renderEmpty('创建成功后会显示 task_id，并提供结果页直达入口')}</div>
+          <div id="taskCreateResult">${renderEmpty('创建成功后会显示任务编号，并提供结果页直达入口')}</div>
         </section>
       </section>
-      <section class="card">
+      <section class="card" data-task-panel="models" hidden>
         <h3>可选模型</h3>
         <div class="section-toolbar compact">
-          <input id="taskModelSearch" placeholder="搜索 model_code / version / task_type / 来源" />
+          <input id="taskModelSearch" placeholder="搜索模型名称 / 版本 / 任务类型 / 来源" />
           <div id="taskModelMeta" class="hint"></div>
         </div>
         <div id="taskModelLibrary">${renderLoading('加载可选模型...')}</div>
       </section>
-      <section class="card">
+      <section class="card" data-task-panel="list" hidden>
         <h3>任务列表</h3>
         <div id="tasksTableWrap">${renderLoading('加载任务列表...')}</div>
       </section>
     `,
     async mount(root) {
       bindPageNavButtons(root, ctx);
+      const taskPanelMeta = root.querySelector('#taskPanelMeta');
+      const taskPanelTabs = [...root.querySelectorAll('[data-task-panel-tab]')];
+      const taskPanels = [...root.querySelectorAll('[data-task-panel]')];
       const quickDetectForm = root.querySelector('#quickDetectForm');
       const quickDetectFile = root.querySelector('#quickDetectFile');
       const quickDetectAssetInput = root.querySelector('#quickDetectAssetInput');
@@ -6505,6 +7129,28 @@ function pageTasks(route, rawCtx) {
       let assistAssets = [];
       let assistModels = [];
       let taskModelQuery = '';
+      let activeTaskPanel = 'quick';
+
+      function setTaskPanel(panel) {
+        activeTaskPanel = ['quick', 'create', 'models', 'list'].includes(panel) ? panel : 'quick';
+        taskPanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-task-panel') !== activeTaskPanel;
+        });
+        taskPanelTabs.forEach((button) => {
+          const active = button.getAttribute('data-task-panel-tab') === activeTaskPanel;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (taskPanelMeta) {
+          taskPanelMeta.textContent = {
+            quick: '先上传图片或已有资产，明确目标后直接识别。',
+            create: '当你已经知道要用哪台设备、哪版模型或流水线时，再切到创建任务。',
+            models: '先挑模型，再带入创建任务；避免手输模型编号。',
+            list: '统一查看已创建任务、等待完成并进入结果页。',
+          }[activeTaskPanel];
+        }
+      }
 
       function revokeQuickUrls() {
         if (quickPreviewUrl) {
@@ -6537,7 +7183,7 @@ function pageTasks(route, rawCtx) {
               <div class="quick-detect-preview-meta">
                 <strong>已有资产队列</strong>
                 <span class="mono">${esc(assetIds.slice(0, 4).join(', '))}${assetIds.length > 4 ? ' ...' : ''}</span>
-                <span>共 ${esc(String(assetIds.length))} 个 asset_id</span>
+                <span>共 ${esc(String(assetIds.length))} 个已有资产</span>
               </div>
             `;
             return;
@@ -6675,10 +7321,10 @@ function pageTasks(route, rawCtx) {
                   <span class="badge">${esc(row.model_code === intent.taskType ? '推荐' : enumText('model_status', row.status || '-'))}</span>
                 </div>
                 <div class="selection-card-meta selection-card-meta--compact">
-                  <span>task_type</span><strong>${esc(row.task_type || row.plugin_name || '-')}</strong>
-                  <span>plugin</span><strong>${esc(row.plugin_name || '-')}</strong>
+                  <span>任务类型</span><strong>${esc(row.task_type || row.plugin_name || '-')}</strong>
+                  <span>插件名称</span><strong>${esc(row.plugin_name || '-')}</strong>
                   <span>来源</span><strong>${esc(enumText('model_source_type', (row.platform_meta || {}).model_source_type || '-'))}</strong>
-                  <span>model_id</span><strong class="mono">${esc(truncateMiddle(row.id, 8, 6))}</strong>
+                  <span>模型编号</span><strong class="mono">${esc(truncateMiddle(row.id, 8, 6))}</strong>
                 </div>
                 <div class="row-actions">
                   <button class="${quickSelectedModelId === row.id ? 'primary' : 'ghost'}" type="button" data-pick-quick-model="${esc(row.id)}">${quickSelectedModelId === row.id ? '当前将使用这版' : '选这版模型'}</button>
@@ -6764,7 +7410,7 @@ function pageTasks(route, rawCtx) {
                     <span class="badge">${esc(String(item.completedOutcome ? '已完成识别' : item.preflight?.timed_out ? '预检超时' : '预检完成'))}</span>
                   </div>
                   <div class="keyvals">
-                    <div><span>asset_id</span><strong class="mono">${esc(item.assetId || '-')}</strong></div>
+                    <div><span>资产编号</span><strong class="mono">${esc(item.assetId || '-')}</strong></div>
                     <div><span>候选数</span><strong>${esc(String(item.candidates.length))}</strong></div>
                     <div><span>当前建议</span><strong>${esc(enumText('task_type', selectedCandidate?.task_type || '-'))}</strong></div>
                     <div><span>提示词</span><strong>${esc(selectedCandidate?.recommended_prompt || item.prompt || '-')}</strong></div>
@@ -6938,7 +7584,7 @@ function pageTasks(route, rawCtx) {
         if (deviceCodeInput && prefillTaskDeviceCode) deviceCodeInput.value = prefillTaskDeviceCode;
         if (createMsg) {
           createMsg.textContent = prefillTaskHint
-            || `已预填验证任务：model ${prefillTaskModelId || '-'} · task_type ${prefillTaskType || '-'} · device ${prefillTaskDeviceCode || '-'}`;
+            || `已预填验证任务：模型 ${prefillTaskModelId || '-'} · 任务类型 ${prefillTaskType || '-'} · 设备 ${prefillTaskDeviceCode || '-'}`;
         }
         localStorage.removeItem(STORAGE_KEYS.prefillTaskModelId);
         localStorage.removeItem(STORAGE_KEYS.prefillTaskAssetId);
@@ -7067,6 +7713,7 @@ function pageTasks(route, rawCtx) {
             ? `已从快速识别带入模型 ${selectedModel.model_code}:${selectedModel.version}${assetIds.length === 1 ? ` · asset ${assetIds[0]}` : ''}。`
             : '已把上方快速识别的任务类型、设备和意图带入下方精确任务。';
         }
+        setTaskPanel('create');
         createForm?.scrollIntoView({ block: 'center', behavior: 'smooth' });
       }
 
@@ -7149,10 +7796,10 @@ function pageTasks(route, rawCtx) {
                         <span class="badge">${esc(enumText('model_status', row.status || '-'))}</span>
                       </div>
                       <div class="selection-card-meta selection-card-meta--compact">
-                        <span>task_type</span><strong>${esc(row.task_type || row.plugin_name || '-')}</strong>
+                        <span>任务类型</span><strong>${esc(row.task_type || row.plugin_name || '-')}</strong>
                         <span>来源</span><strong>${esc(enumText('model_source_type', (row.platform_meta || {}).model_source_type || '-'))}</strong>
-                        <span>plugin</span><strong>${esc(row.plugin_name || '-')}</strong>
-                        <span>model_id</span><strong class="mono">${esc(truncateMiddle(row.id, 8, 6))}</strong>
+                        <span>插件</span><strong>${esc(row.plugin_name || '-')}</strong>
+                        <span>模型编号</span><strong class="mono">${esc(truncateMiddle(row.id, 8, 6))}</strong>
                       </div>
                       <div class="row-actions">
                         <button class="primary" type="button" data-pick-task-model="${esc(row.id)}">${currentModelId === row.id ? '当前使用中' : '选这版模型'}</button>
@@ -7618,8 +8265,8 @@ function pageTasks(route, rawCtx) {
             <div class="keyvals">
               <div><span>batch_count</span><strong>${esc(String(outcomes.length))}</strong></div>
               <div><span>object_prompt</span><strong>${esc(outcomes[0]?.prompt || '-')}</strong></div>
-              <div><span>task_ids</span><strong>${esc(String(outcomes.length))} 条</strong></div>
-              <div><span>object_count</span><strong>${esc(String(totalObjects))}</strong></div>
+              <div><span>任务条数</span><strong>${esc(String(outcomes.length))} 条</strong></div>
+              <div><span>命中目标数</span><strong>${esc(String(totalObjects))}</strong></div>
             </div>
             <div class="quick-detect-recommend">
               ${
@@ -7644,11 +8291,11 @@ function pageTasks(route, rawCtx) {
                 ? `
                     <div class="quick-detect-export-result">
                       <div class="keyvals">
-                        <div><span>dataset_asset_id</span><strong class="mono">${esc(quickDatasetExport.asset.id)}</strong></div>
-                        <div><span>dataset_version</span><strong>${esc(`${quickDatasetExport.dataset_version?.dataset_label || '-'}:${quickDatasetExport.dataset_version?.version || '-'}`)}</strong></div>
-                        <div><span>archive_resource_count</span><strong>${esc(String(quickDatasetExport.asset.meta?.archive_resource_count || 0))}</strong></div>
-                        <div><span>label_vocab</span><strong>${esc((quickDatasetExport.asset.meta?.label_vocab || []).join(', ') || '-')}</strong></div>
-                        <div><span>asset_purpose</span><strong>${esc(quickDatasetExport.asset.meta?.asset_purpose || '-')}</strong></div>
+                        <div><span>数据集资产编号</span><strong class="mono">${esc(quickDatasetExport.asset.id)}</strong></div>
+                        <div><span>数据集版本</span><strong>${esc(`${quickDatasetExport.dataset_version?.dataset_label || '-'}:${quickDatasetExport.dataset_version?.version || '-'}`)}</strong></div>
+                        <div><span>资源数</span><strong>${esc(String(quickDatasetExport.asset.meta?.archive_resource_count || 0))}</strong></div>
+                        <div><span>标签集合</span><strong>${esc((quickDatasetExport.asset.meta?.label_vocab || []).join(', ') || '-')}</strong></div>
+                        <div><span>用途</span><strong>${esc(quickDatasetExport.asset.meta?.asset_purpose || '-')}</strong></div>
                       </div>
                       <div class="row-actions">
                         <button class="primary" type="button" id="openQuickDatasetTraining">去训练中心</button>
@@ -7686,11 +8333,11 @@ function pageTasks(route, rawCtx) {
                       </div>
                     </div>
                     <div class="keyvals compact quick-detect-batch-meta">
-                      <div><span>asset_id</span><strong class="mono" title="${esc(item.uploadedAsset?.id || item.task.asset_id || '-')}">${esc(truncateMiddle(item.uploadedAsset?.id || item.task.asset_id || '-', 10, 8))}</strong></div>
-                      <div><span>task_id</span><strong class="mono" title="${esc(item.task.id)}">${esc(truncateMiddle(item.task.id, 10, 8))}</strong></div>
-                      <div><span>task_type</span><strong>${esc(enumText('task_type', item.taskType || item.task.task_type || '-'))}</strong></div>
-                      <div><span>selected_model</span><strong title="${esc(`${item.recommendation?.selected_model?.model_code || '-'}:${item.recommendation?.selected_model?.version || '-'}`)}">${esc(item.recommendation?.selected_model?.model_code || '-')} · ${esc(truncateMiddle(item.recommendation?.selected_model?.version || '-', 16, 8))}</strong></div>
-                      <div><span>object_count</span><strong>${esc(String(item.predictions.length))}</strong></div>
+                      <div><span>资产编号</span><strong class="mono" title="${esc(item.uploadedAsset?.id || item.task.asset_id || '-')}">${esc(truncateMiddle(item.uploadedAsset?.id || item.task.asset_id || '-', 10, 8))}</strong></div>
+                      <div><span>任务编号</span><strong class="mono" title="${esc(item.task.id)}">${esc(truncateMiddle(item.task.id, 10, 8))}</strong></div>
+                      <div><span>任务类型</span><strong>${esc(enumText('task_type', item.taskType || item.task.task_type || '-'))}</strong></div>
+                      <div><span>当前模型</span><strong title="${esc(`${item.recommendation?.selected_model?.model_code || '-'}:${item.recommendation?.selected_model?.version || '-'}`)}">${esc(item.recommendation?.selected_model?.model_code || '-')} · ${esc(truncateMiddle(item.recommendation?.selected_model?.version || '-', 16, 8))}</strong></div>
+                      <div><span>命中目标数</span><strong>${esc(String(item.predictions.length))}</strong></div>
                     </div>
                     <div class="quick-detect-recommend">${esc(item.recommendation?.summary || '已完成自动选模并执行快速识别')}</div>
                     ${
@@ -7926,7 +8573,7 @@ function pageTasks(route, rawCtx) {
               throw new Error('请先保存所有未提交的修订，再导出数据集版本');
             }
             const datasetLabel = String(datasetLabelEl?.value || '').trim();
-            if (!datasetLabel) throw new Error('请输入 dataset_label');
+          if (!datasetLabel) throw new Error('请输入数据集标签');
             quickDatasetExport = await ctx.post('/results/export-dataset', {
               task_ids: quickBatchTaskIds,
               dataset_label: datasetLabel,
@@ -8098,10 +8745,10 @@ function pageTasks(route, rawCtx) {
                     <summary>技术详情</summary>
                     <div class="details-panel">
                       <div class="keyvals compact">
-                        <div><span>asset_id</span><strong class="mono" title="${esc(row.asset_id || '-')}">${esc(truncateMiddle(row.asset_id || '-', 10, 8))}</strong></div>
-                        <div><span>model_id</span><strong class="mono" title="${esc(row.model_id || '-')}">${esc(truncateMiddle(row.model_id || '-', 10, 8))}</strong></div>
-                        <div><span>pipeline_id</span><strong class="mono" title="${esc(row.pipeline_id || '-')}">${esc(truncateMiddle(row.pipeline_id || '-', 10, 8))}</strong></div>
-                        <div><span>task_id</span><strong class="mono" title="${esc(row.id)}">${esc(truncateMiddle(row.id, 12, 10))}</strong></div>
+                        <div><span>资产编号</span><strong class="mono" title="${esc(row.asset_id || '-')}">${esc(truncateMiddle(row.asset_id || '-', 10, 8))}</strong></div>
+                        <div><span>模型编号</span><strong class="mono" title="${esc(row.model_id || '-')}">${esc(truncateMiddle(row.model_id || '-', 10, 8))}</strong></div>
+                        <div><span>流水线编号</span><strong class="mono" title="${esc(row.pipeline_id || '-')}">${esc(truncateMiddle(row.pipeline_id || '-', 10, 8))}</strong></div>
+                        <div><span>任务编号</span><strong class="mono" title="${esc(row.id)}">${esc(truncateMiddle(row.id, 12, 10))}</strong></div>
                       </div>
                     </div>
                   </details>
@@ -8172,7 +8819,7 @@ function pageTasks(route, rawCtx) {
       async function performQuickPreflight() {
         const { prompt, items } = currentQuickWorkItems();
         if (!items.length) {
-          throw new Error('请上传图片/视频，或填写已有 asset_id');
+          throw new Error('请上传图片/视频，或填写已有资产编号');
         }
         revokeQuickUrls();
         quickBatchTaskIds = [];
@@ -8215,7 +8862,7 @@ function pageTasks(route, rawCtx) {
         try {
           const { prompt, items, files, existingAssetIds } = currentQuickWorkItems();
           if (!prompt) throw new Error('请输入要识别的对象');
-          if (!items.length) throw new Error('请上传图片/视频，或填写已有 asset_id');
+          if (!items.length) throw new Error('请上传图片/视频，或填写已有资产编号');
 
           const quickIntent = resolveQuickDetectIntent(prompt);
           const directModels = quickDetectModelCandidates(prompt);
@@ -8316,9 +8963,9 @@ function pageTasks(route, rawCtx) {
               <span>${esc(`系统已生成 ${enumText('task_type', created.task_type)} 任务，可直接等待执行完成后打开结果页。`)}</span>
             </div>
             <div class="keyvals">
-              <div><span>task_id</span><strong class="mono">${esc(created.id)}</strong></div>
-              <div><span>status</span><strong>${esc(enumText('task_status', created.status))}</strong></div>
-              <div><span>task_type</span><strong>${esc(enumText('task_type', created.task_type))}</strong></div>
+              <div><span>任务编号</span><strong class="mono">${esc(created.id)}</strong></div>
+              <div><span>状态</span><strong>${esc(enumText('task_status', created.status))}</strong></div>
+              <div><span>任务类型</span><strong>${esc(enumText('task_type', created.task_type))}</strong></div>
             </div>
             <div class="row-actions">
               <button class="primary" id="openTaskDetail">查看任务详情</button>
@@ -8326,6 +8973,7 @@ function pageTasks(route, rawCtx) {
               <button class="ghost" id="waitTaskResults">等待执行并打开结果页</button>
             </div>
           `;
+          setTaskPanel('list');
           root.querySelector('#openTaskDetail')?.addEventListener('click', () => ctx.navigate(`tasks/${created.id}`));
           root.querySelector('#openTaskResults')?.addEventListener('click', () => ctx.navigate(`results/task/${created.id}`));
           root.querySelector('#waitTaskResults')?.addEventListener('click', async (event) => {
@@ -8357,6 +9005,11 @@ function pageTasks(route, rawCtx) {
         taskModelQuery = taskModelSearch.value || '';
         renderTaskModelLibrary();
       });
+      taskPanelTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setTaskPanel(button.getAttribute('data-task-panel-tab') || 'quick');
+        });
+      });
       createForm?.querySelector('select[name="task_type"]')?.addEventListener('change', renderTaskModelLibrary);
       createForm?.querySelector('input[name="use_master_scheduler"]')?.addEventListener('change', renderTaskModelLibrary);
       createForm?.querySelectorAll('input, select').forEach((input) => {
@@ -8365,6 +9018,7 @@ function pageTasks(route, rawCtx) {
       });
 
       renderTaskCreateAssist();
+      setTaskPanel('quick');
 
       await Promise.all([loadTasks(), loadAssistData()]);
     },
@@ -8376,13 +9030,20 @@ function pageTaskDetail(route, rawCtx) {
   const taskId = route.params?.task_id;
   return {
     html: `
-      <section class="card">
-        <h2>任务详情</h2>
-        <p class="mono">${esc(taskId)}</p>
-      </section>
+      ${renderPageHero({
+        eyebrow: '任务执行追踪',
+        title: '任务详情',
+        summary: '先看执行结论、识别摘要和结果入口；原始任务字段与执行上下文后置到技术详情。',
+        highlights: ['执行结论优先', '可直接去结果页', '技术字段按需展开'],
+        actions: [
+          { path: 'tasks', label: '返回任务中心' },
+          { path: `results/task/${taskId}`, label: '打开结果页', primary: true },
+        ],
+      })}
       <section class="card" id="taskDetailWrap">${renderLoading('加载任务详情...')}</section>
     `,
     async mount(root) {
+      bindPageNavButtons(root, ctx);
       const wrap = root.querySelector('#taskDetailWrap');
       async function waitForDetailTaskTerminal(id, { timeoutMs = 90_000 } = {}) {
         const deadline = Date.now() + timeoutMs;
@@ -8406,45 +9067,93 @@ function pageTaskDetail(route, rawCtx) {
         const totalObjects = summaries.reduce((sum, item) => sum + Number(item.objectCount || 0), 0);
         const recognizedTexts = [...new Set(summaries.flatMap((item) => item.recognizedTexts || []).filter(Boolean))];
         wrap.innerHTML = `
-          <div class="task-list-card">
-            <div class="task-list-head">
-              <div class="task-list-title">
-                <strong class="mono" title="${esc(data.id)}">${esc(truncateMiddle(data.id, 12, 10))}</strong>
-                <span>${esc(enumText('task_type', data.task_type))}</span>
+          <section class="card">
+            <div class="workspace-switcher">
+              <button class="ghost" type="button" data-task-detail-panel-tab="summary">执行结论</button>
+              <button class="ghost" type="button" data-task-detail-panel-tab="actions">下一步动作</button>
+              <button class="ghost" type="button" data-task-detail-panel-tab="tech">技术详情</button>
+            </div>
+            <div id="taskDetailPanelMeta" class="hint">默认先看执行结论；需要继续追踪结果时再切到下一步动作，原始字段和 JSON 放到技术详情。</div>
+          </section>
+          <section class="card" data-task-detail-panel="summary">
+            <div class="task-list-card">
+              <div class="task-list-head">
+                <div class="task-list-title">
+                  <strong class="mono" title="${esc(data.id)}">${esc(truncateMiddle(data.id, 12, 10))}</strong>
+                  <span>${esc(enumText('task_type', data.task_type))}</span>
+                </div>
+                <div class="quick-review-statuses">
+                  <span class="badge">${esc(enumText('task_status', data.status))}</span>
+                  ${data.device_code ? `<span class="badge">${esc(data.device_code)}</span>` : ''}
+                </div>
               </div>
-              <div class="quick-review-statuses">
-                <span class="badge">${esc(enumText('task_status', data.status))}</span>
-                ${data.device_code ? `<span class="badge">${esc(data.device_code)}</span>` : ''}
+              <div class="keyvals compact result-summary-keyvals">
+                <div><span>结果条数</span><strong>${esc(String((rows || []).length))}</strong></div>
+                <div><span>创建时间</span><strong>${formatDateTime(data.created_at)}</strong></div>
+                <div><span>开始时间</span><strong>${formatDateTime(data.started_at)}</strong></div>
+                <div><span>完成时间</span><strong>${formatDateTime(data.finished_at)}</strong></div>
               </div>
+              ${data.error_message ? `<div class="quick-detect-recommend">${esc(data.error_message)}</div>` : '<div class="hint">如果任务还在执行中，可切到“下一步动作”直接等待完成并打开结果页。</div>'}
             </div>
-            <div class="keyvals compact result-summary-keyvals">
-              <div><span>结果条数</span><strong>${esc(String((rows || []).length))}</strong></div>
-              <div><span>创建时间</span><strong>${formatDateTime(data.created_at)}</strong></div>
-              <div><span>开始时间</span><strong>${formatDateTime(data.started_at)}</strong></div>
-              <div><span>完成时间</span><strong>${formatDateTime(data.finished_at)}</strong></div>
+            <div class="selection-summary task-detail-summary">
+              <strong>执行摘要</strong>
+              <span>${esc(`当前已回查到 ${(rows || []).length} 条结果，累计命中 ${totalObjects} 个对象 / 文本。`)}</span>
+              <span>${esc(recognizedTexts.length ? `识别文本：${recognizedTexts.slice(0, 6).join(' / ')}` : '当前还没有 OCR 文本摘要。')}</span>
             </div>
-            ${data.error_message ? `<div class="quick-detect-recommend">${esc(data.error_message)}</div>` : '<div class="hint">如果任务还在执行中，可直接点“等待完成并打开结果页”。</div>'}
-          </div>
-          <div class="selection-summary task-detail-summary">
-            <strong>执行摘要</strong>
-            <span>${esc(`当前已回查到 ${(rows || []).length} 条结果，累计命中 ${totalObjects} 个对象 / 文本。`)}</span>
-            <span>${esc(recognizedTexts.length ? `识别文本：${recognizedTexts.slice(0, 6).join(' / ')}` : '当前还没有 OCR 文本摘要。')}</span>
-          </div>
-          ${recognizedTexts.length ? `<div class="result-text-ribbon task-detail-ribbon">${recognizedTexts.slice(0, 10).map((text) => `<span class="badge">${esc(text)}</span>`).join('')}</div>` : ''}
-          <div class="row-actions">
-            <button class="primary" id="goTaskResult">查看结果</button>
-            <button class="ghost" id="waitTaskResult">等待完成并打开结果页</button>
-          </div>
-          <details>
-            <summary>Advanced</summary>
-            <div class="keyvals compact result-tech-keyvals">
-              <div><span>asset_id</span><strong class="mono" title="${esc(data.asset_id || '-')}">${esc(truncateMiddle(data.asset_id || '-', 10, 8))}</strong></div>
-              <div><span>model_id</span><strong class="mono" title="${esc(data.model_id || '-')}">${esc(truncateMiddle(data.model_id || '-', 10, 8))}</strong></div>
-              <div><span>pipeline_id</span><strong class="mono" title="${esc(data.pipeline_id || '-')}">${esc(truncateMiddle(data.pipeline_id || '-', 10, 8))}</strong></div>
+            ${recognizedTexts.length ? `<div class="result-text-ribbon task-detail-ribbon">${recognizedTexts.slice(0, 10).map((text) => `<span class="badge">${esc(text)}</span>`).join('')}</div>` : ''}
+          </section>
+          <section class="card" data-task-detail-panel="actions" hidden>
+            <div class="selection-summary">
+              <strong>继续处理这条任务</strong>
+              <span>${esc(data.status === 'SUCCEEDED' ? '任务已经完成，可以直接查看结果或回到任务中心继续创建新任务。' : '任务还在执行中，可以等待完成后直接打开结果页。')}</span>
             </div>
-            <pre>${esc(safeJson(data))}</pre>
-          </details>
+            <div class="row-actions">
+              <button class="ghost" id="backTaskList">返回任务中心</button>
+              <button class="primary" id="goTaskResult">查看结果</button>
+              <button class="ghost" id="waitTaskResult">等待完成并打开结果页</button>
+            </div>
+          </section>
+          <section class="card" data-task-detail-panel="tech" hidden>
+            <details class="inline-details" open>
+              <summary>技术详情</summary>
+              <div class="keyvals compact result-tech-keyvals">
+                <div><span>资产编号</span><strong class="mono" title="${esc(data.asset_id || '-')}">${esc(truncateMiddle(data.asset_id || '-', 10, 8))}</strong></div>
+                <div><span>模型编号</span><strong class="mono" title="${esc(data.model_id || '-')}">${esc(truncateMiddle(data.model_id || '-', 10, 8))}</strong></div>
+                <div><span>流水线编号</span><strong class="mono" title="${esc(data.pipeline_id || '-')}">${esc(truncateMiddle(data.pipeline_id || '-', 10, 8))}</strong></div>
+              </div>
+              <pre>${esc(safeJson(data))}</pre>
+            </details>
+          </section>
         `;
+        const taskDetailPanelMeta = root.querySelector('#taskDetailPanelMeta');
+        const taskDetailPanelTabs = Array.from(root.querySelectorAll('[data-task-detail-panel-tab]'));
+        const taskDetailPanels = Array.from(root.querySelectorAll('[data-task-detail-panel]'));
+        let activeTaskDetailPanel = 'summary';
+        function setTaskDetailPanel(panel) {
+          activeTaskDetailPanel = panel;
+          taskDetailPanelTabs.forEach((btn) => {
+            const active = btn.getAttribute('data-task-detail-panel-tab') === panel;
+            btn.classList.toggle('primary', active);
+            btn.classList.toggle('ghost', !active);
+          });
+          taskDetailPanels.forEach((section) => {
+            section.hidden = section.getAttribute('data-task-detail-panel') !== panel;
+          });
+          if (taskDetailPanelMeta) {
+            taskDetailPanelMeta.textContent = ({
+              summary: '先看任务状态、识别摘要和当前结果概况。',
+              actions: '在这里决定是返回任务中心、直接查看结果，还是等待任务完成。',
+              tech: '只有排障或核对原始字段时再看这里的技术详情。',
+            })[panel] || '按当前分区继续查看。';
+          }
+        }
+        taskDetailPanelTabs.forEach((btn) => {
+          btn.addEventListener('click', () => {
+            setTaskDetailPanel(btn.getAttribute('data-task-detail-panel-tab') || 'summary');
+          });
+        });
+        setTaskDetailPanel(activeTaskDetailPanel);
+        root.querySelector('#backTaskList')?.addEventListener('click', () => ctx.navigate('tasks'));
         root.querySelector('#goTaskResult')?.addEventListener('click', () => ctx.navigate(`results/task/${taskId}`));
         root.querySelector('#waitTaskResult')?.addEventListener('click', async (event) => {
           const button = event.currentTarget;
@@ -8472,26 +9181,39 @@ function buildResultListHtml(rows, modelInsights = {}) {
   const uniqueModelIds = [...new Set(rows.map((row) => String(row.model_id || '').trim()).filter(Boolean))];
 
   return `
-    ${renderResultOverviewCards(rows, summaries)}
-    ${
-      allTexts.length
-        ? `<section class="result-text-ribbon">${allTexts.slice(0, 12).map((text) => `<span class="badge">${esc(text)}</span>`).join('')}</section>`
-        : ''
-    }
-    ${renderResultValidationConclusion(rows, summaries, modelInsights)}
-    ${
-      uniqueModelIds.length
-        ? `
-            <section class="result-model-insights">
-              ${uniqueModelIds
-                .map((modelId) => renderModelInsightBlock(modelId, modelInsights[modelId]))
-                .filter(Boolean)
-                .join('')}
-            </section>
-          `
-        : ''
-    }
-    <div class="result-list">
+    <section class="card">
+      <div class="workspace-switcher">
+        <button class="ghost" type="button" data-result-list-panel-tab="overview">结果概览</button>
+        <button class="ghost" type="button" data-result-list-panel-tab="models">模型表现</button>
+        <button class="ghost" type="button" data-result-list-panel-tab="items">单条结果</button>
+      </div>
+      <div id="resultListPanelMeta" class="hint">默认先看整体结论；需要核对模型表现或逐条复核时再进入对应分区。</div>
+    </section>
+    <section data-result-list-panel="overview">
+      ${renderResultOverviewCards(rows, summaries)}
+      ${
+        allTexts.length
+          ? `<section class="result-text-ribbon">${allTexts.slice(0, 12).map((text) => `<span class="badge">${esc(text)}</span>`).join('')}</section>`
+          : ''
+      }
+      ${renderResultValidationConclusion(rows, summaries, modelInsights)}
+    </section>
+    <section data-result-list-panel="models" hidden>
+      ${
+        uniqueModelIds.length
+          ? `
+              <section class="result-model-insights">
+                ${uniqueModelIds
+                  .map((modelId) => renderModelInsightBlock(modelId, modelInsights[modelId]))
+                  .filter(Boolean)
+                  .join('')}
+              </section>
+            `
+          : renderEmpty('当前结果没有关联模型表现摘要。')
+      }
+    </section>
+    <section data-result-list-panel="items" hidden>
+      <div class="result-list">
       ${summaries.map((item) => {
         const row = item.row;
         const labelCloud = renderResultLabelCloud(item);
@@ -8564,23 +9286,24 @@ function buildResultListHtml(rows, modelInsights = {}) {
                 <summary>技术详情</summary>
                 <div class="details-panel">
                   <div class="keyvals compact result-tech-keyvals">
-                    <div><span>result_id</span><strong class="mono">${esc(row.id)}</strong></div>
-                    <div><span>model_id</span><strong class="mono">${esc(truncateMiddle(row.model_id || '-', 10, 8))}</strong></div>
-                    <div><span>alert_level</span><strong>${esc(row.alert_level || 'INFO')}</strong></div>
-                    <div><span>stage</span><strong>${esc(item.stage)}</strong></div>
+                    <div><span>结果编号</span><strong class="mono">${esc(row.id)}</strong></div>
+                    <div><span>模型编号</span><strong class="mono">${esc(truncateMiddle(row.model_id || '-', 10, 8))}</strong></div>
+                    <div><span>告警级别</span><strong>${esc(row.alert_level || 'INFO')}</strong></div>
+                    <div><span>结果阶段</span><strong>${esc(item.stage)}</strong></div>
                   </div>
                   <details open>
-                    <summary>结果 JSON</summary>
+                    <summary>原始结果数据</summary>
                     <pre>${esc(safeJson(row.result_json))}</pre>
                   </details>
-                  ${readiness ? `<details><summary>模型验证摘要</summary><pre>${esc(safeJson(readiness.validation_report || {}))}</pre></details>` : ''}
+                  ${readiness ? `<details><summary>模型验证详情</summary><pre>${esc(safeJson(readiness.validation_report || {}))}</pre></details>` : ''}
                 </div>
               </details>
             </div>
           </article>
         `;
       }).join('')}
-    </div>
+      </div>
+    </section>
   `;
 }
 
@@ -8589,46 +9312,58 @@ function pageResults(route, rawCtx) {
   const role = primaryRole(ctx.state.user);
   const defaultTaskId = route.params?.task_id || localStorage.getItem(STORAGE_KEYS.lastTaskId) || '';
   const heroSummary = role.startsWith('buyer_')
-    ? '按 task_id 回查结构化结果、截图摘要和导出信息，支撑客户验收与复核。'
+    ? '按任务编号回查结构化结果、截图摘要和导出信息，支撑客户验收与复核。'
     : role.startsWith('platform_')
       ? '统一查看执行结果、导出摘要和截图证据，验证模型交付与任务产出。'
       : '查看任务输出、截图摘要与导出信息。';
   return {
     html: `
       ${renderPageHero({
-        eyebrow: '结果复核与回灌',
+        eyebrow: '结果复核与训练数据',
         title: '结果中心',
         summary: heroSummary,
-        highlights: ['先看验证结论', '低置信度优先复核', '可直接导出回训练'],
+        highlights: ['先看验证结论', '低置信度优先复核', '确认后可转成训练数据'],
         actions: [
           { path: 'tasks', label: '返回任务中心' },
-          { path: 'training', label: '打开训练中心', primary: true },
+          { path: 'training', label: '去训练中心', primary: true },
         ],
       })}
       <section class="card">
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-result-panel-tab="query">查询结果</button>
+          <button class="ghost" type="button" data-result-panel-tab="actions">下一步动作</button>
+          <button class="ghost" type="button" data-result-panel-tab="dataset">变成训练数据</button>
+          <button class="ghost" type="button" data-result-panel-tab="list">结果列表</button>
+        </div>
+        <div id="resultPanelMeta" class="hint">${esc(defaultTaskId ? '默认先看结果列表；要继续处理时再切到下一步动作或训练数据。' : '默认先查询结果；查到任务后再继续看下一步动作和训练数据。')}</div>
+      </section>
+      <section class="card" data-result-panel="query">
         <form id="resultQueryForm" class="inline-form">
-          <input id="resultTaskId" name="task_id" placeholder="输入 task_id" value="${esc(defaultTaskId)}" required />
+          <input id="resultTaskId" name="task_id" placeholder="输入任务编号" value="${esc(defaultTaskId)}" required />
           <button class="primary" type="submit">查询结果</button>
           <button class="ghost" id="resultBackTasksBtn" type="button">返回任务中心</button>
           <button class="ghost" id="resultOpenTaskBtn" type="button">打开任务详情</button>
           <button class="ghost" id="resultExportBtn" type="button">导出摘要</button>
         </form>
-        <div id="resultMeta" class="hint">${esc(defaultTaskId ? '' : '训练后验证时，可从训练页点击“去任务中心验证候选模型”，再在任务创建成功后点击“等待执行并打开结果页”。')}</div>
+        <div id="resultMeta" class="hint">${esc(defaultTaskId ? '' : '训练成功后，可先去任务中心挑 1 张真实图片验证；任务完成后再回这里看结果与下一步建议。')}</div>
       </section>
-      <section class="card">
+      <section class="card" data-result-panel="actions" hidden>
         <h3>下一步动作</h3>
         <div id="resultActionWorkbench">${defaultTaskId ? renderLoading('正在生成下一步建议...') : renderEmpty('查询到结果后，这里会根据当前状态给出下一步建议。')}</div>
       </section>
-      <section class="card">
-        <h3>结果回灌工作台</h3>
-        <div id="resultDatasetWorkbench">${defaultTaskId ? renderLoading('正在准备结果回灌工作台...') : renderEmpty('先查询一条 task 结果，再把当前复核结果导出成训练/验证数据集版本。')}</div>
+      <section class="card" data-result-panel="dataset" hidden>
+        <h3>把确认结果变成训练数据</h3>
+        <div id="resultDatasetWorkbench">${defaultTaskId ? renderLoading('正在准备训练数据导出区...') : renderEmpty('先查询一条 task 结果，再把当前确认结果整理成训练或验证数据。')}</div>
       </section>
-      <section class="card">
-        <div id="resultListWrap">${defaultTaskId ? renderLoading('加载结果...') : renderEmpty('请输入 task_id 查询，或先在任务中心创建并执行任务')}</div>
+      <section class="card" data-result-panel="list" hidden>
+        <div id="resultListWrap">${defaultTaskId ? renderLoading('加载结果...') : renderEmpty('请输入任务编号查询，或先在任务中心创建并执行任务')}</div>
       </section>
     `,
     async mount(root) {
       bindPageNavButtons(root, ctx);
+      const resultPanelMeta = root.querySelector('#resultPanelMeta');
+      const resultPanelTabs = [...root.querySelectorAll('[data-result-panel-tab]')];
+      const resultPanels = [...root.querySelectorAll('[data-result-panel]')];
       const queryForm = root.querySelector('#resultQueryForm');
       const taskInput = root.querySelector('#resultTaskId');
       const resultMeta = root.querySelector('#resultMeta');
@@ -8642,6 +9377,28 @@ function pageResults(route, rawCtx) {
       let currentRows = [];
       let currentSummaries = [];
       let currentDatasetExport = null;
+      let activeResultPanel = defaultTaskId ? 'list' : 'query';
+
+      function setResultPanel(panel) {
+        activeResultPanel = ['query', 'actions', 'dataset', 'list'].includes(panel) ? panel : (defaultTaskId ? 'list' : 'query');
+        resultPanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-result-panel') !== activeResultPanel;
+        });
+        resultPanelTabs.forEach((button) => {
+          const active = button.getAttribute('data-result-panel-tab') === activeResultPanel;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (resultPanelMeta) {
+          resultPanelMeta.textContent = {
+            query: '先输入任务编号，确认要查看哪一次执行结果。',
+            actions: '先看系统给出的下一步建议，再决定回任务中心、去训练中心还是继续复核。',
+            dataset: '把确认结果整理成训练或验证数据，再带去训练中心继续使用。',
+            list: '统一查看当前任务的结果、截图和技术详情。',
+          }[activeResultPanel];
+        }
+      }
 
       function dominantTaskType(summaries) {
         const counts = new Map();
@@ -8673,35 +9430,36 @@ function pageResults(route, rawCtx) {
 
       function renderResultDatasetWorkbench(taskId, summaries, exported = null) {
         if (!taskId) {
-          return renderEmpty('先查询一条 task 结果，再把当前复核结果导出成训练/验证数据集版本。');
+          return renderEmpty('先查询一条 task 结果，再把当前确认结果整理成训练或验证数据。');
         }
         if (!Array.isArray(summaries) || !summaries.length) {
-          return renderEmpty('当前 task 还没有可导出的结果。先等待任务完成，或回到任务中心确认执行状态。');
+          return renderEmpty('当前任务还没有可导出的结果。先等待任务完成，或回到任务中心确认执行状态。');
         }
         const taskType = dominantTaskType(summaries) || 'object_detect';
         const lowConfidenceCount = summaries.filter((item) => item?.taskType === 'car_number_ocr' && (!Number.isFinite(item.ocrConfidence) || item.ocrConfidence < 0.8 || item.ocrRisk !== 'stable')).length;
         const suggestedPurpose = taskType === 'car_number_ocr' && lowConfidenceCount === 0 ? 'training' : 'validation';
         const defaultLabel = exported?.dataset_version?.dataset_label || buildResultDatasetLabel(taskId, summaries);
+        const taskTypeText = enumText('task_type', taskType);
         return `
           <div class="result-dataset-workbench">
             <div class="result-panel-head">
               <div>
-                <strong>把当前结果回灌成数据集版本</strong>
+                <strong>把当前确认结果整理成训练数据</strong>
                 <p>${esc(taskType === 'car_number_ocr'
                   ? (lowConfidenceCount
-                    ? `当前有 ${lowConfidenceCount} 条低置信度 OCR 结果，建议先导出为 validation，再继续复核。`
-                    : '当前 OCR 结果已经比较稳定，可优先导出为 training 数据集版本。')
-                  : '当前结果适合导出为结构化样本包，再在训练中心继续筛选或复用。')}</p>
+                    ? `当前有 ${lowConfidenceCount} 条低置信度 OCR 结果，建议先整理成验证数据，再继续复核。`
+                    : '当前 OCR 结果已经比较稳定，可优先整理成训练数据。')
+                  : '当前结果适合整理成结构化样本包，再在训练中心继续筛选或复用。')}</p>
               </div>
-              <span class="badge">${esc(taskType)}</span>
+              <span class="badge">${esc(taskTypeText)}</span>
             </div>
             <div class="form-grid result-dataset-form">
               <label>
-                <span>dataset_label(数据集标签)</span>
-                <input id="resultDatasetLabel" value="${esc(defaultLabel)}" placeholder="result-review-dataset" />
+                <span>数据集标签</span>
+                <input id="resultDatasetLabel" value="${esc(defaultLabel)}" placeholder="例如：车号识别-复核样本" />
               </label>
               <label>
-                <span>asset_purpose(用途)</span>
+                <span>用途</span>
                 <select id="resultDatasetPurpose">
                   <option value="training" ${suggestedPurpose === 'training' ? 'selected' : ''}>训练</option>
                   <option value="validation" ${suggestedPurpose === 'validation' ? 'selected' : ''}>验证</option>
@@ -8714,23 +9472,23 @@ function pageResults(route, rawCtx) {
               </label>
             </div>
             <div class="row-actions">
-              <button class="primary" type="button" data-result-export-dataset>导出并送训练中心</button>
-              <button class="ghost" type="button" data-result-export-assets>只导出数据集版本</button>
+              <button class="primary" type="button" data-result-export-dataset>整理好并带去训练中心</button>
+              <button class="ghost" type="button" data-result-export-assets>只整理成数据集</button>
               ${exported?.asset?.id ? '<button class="ghost" type="button" data-open-result-training>打开训练页</button>' : ''}
             </div>
             ${
               exported?.asset?.id
                 ? `
                     <div class="keyvals compact">
-                      <div><span>dataset_asset_id</span><strong class="mono">${esc(exported.asset.id)}</strong></div>
-                      <div><span>dataset_version</span><strong>${esc(`${exported.dataset_version?.dataset_label || '-'}:${exported.dataset_version?.version || '-'}`)}</strong></div>
-                      <div><span>task_type</span><strong>${esc(taskType)}</strong></div>
+                      <div><span>数据集资产编号</span><strong class="mono">${esc(exported.asset.id)}</strong></div>
+                      <div><span>数据集版本</span><strong>${esc(`${exported.dataset_version?.dataset_label || '-'}:${exported.dataset_version?.version || '-'}`)}</strong></div>
+                      <div><span>任务类型</span><strong>${esc(taskTypeText)}</strong></div>
                       <div><span>样本数</span><strong>${esc(formatMetricValue(exported.summary?.task_count))}</strong></div>
                     </div>
                   `
                 : `
                     <div class="hint">
-                      当前会直接按 task_id=${esc(taskId)} 导出。导出完成后会自动预填训练中心需要的 dataset version 和 asset_id。
+                      当前会直接按任务编号 ${esc(taskId)} 整理。完成后会自动把训练页需要的数据集版本和资产编号预填好。
                     </div>
                   `
             }
@@ -8773,6 +9531,36 @@ function pageResults(route, rawCtx) {
         });
       }
 
+      function bindResultListPanels() {
+        const resultListPanelMeta = listWrap.querySelector('#resultListPanelMeta');
+        const resultListPanelTabs = Array.from(listWrap.querySelectorAll('[data-result-list-panel-tab]'));
+        const resultListPanels = Array.from(listWrap.querySelectorAll('[data-result-list-panel]'));
+        if (!resultListPanelTabs.length || !resultListPanels.length) return;
+        function setResultListPanel(panel) {
+          resultListPanelTabs.forEach((btn) => {
+            const active = btn.getAttribute('data-result-list-panel-tab') === panel;
+            btn.classList.toggle('primary', active);
+            btn.classList.toggle('ghost', !active);
+          });
+          resultListPanels.forEach((section) => {
+            section.hidden = section.getAttribute('data-result-list-panel') !== panel;
+          });
+          if (resultListPanelMeta) {
+            resultListPanelMeta.textContent = ({
+              overview: '先看当前任务的整体结论、OCR 文本和验证建议。',
+              models: '在这里核对关联模型的验证表现和验证门禁摘要。',
+              items: '需要逐条看截图、框和技术详情时，再进入单条结果。',
+            })[panel] || '按当前分区继续查看。';
+          }
+        }
+        resultListPanelTabs.forEach((btn) => {
+          btn.addEventListener('click', () => {
+            setResultListPanel(btn.getAttribute('data-result-list-panel-tab') || 'overview');
+          });
+        });
+        setResultListPanel('overview');
+      }
+
       function bindResultActionWorkbench(taskId) {
         if (!actionWorkbench || !taskId) return;
         actionWorkbench.querySelector('[data-result-action="open-training"]')?.addEventListener('click', () => {
@@ -8780,6 +9568,7 @@ function pageResults(route, rawCtx) {
             ctx.navigate('training');
             return;
           }
+          setResultPanel('dataset');
           actionWorkbench.scrollIntoView({ block: 'center', behavior: 'smooth' });
           datasetWorkbench?.scrollIntoView({ block: 'center', behavior: 'smooth' });
           const exportBtn = datasetWorkbench?.querySelector('[data-result-export-dataset]');
@@ -8805,7 +9594,7 @@ function pageResults(route, rawCtx) {
           const screenshotInput = datasetWorkbench.querySelector('#resultDatasetIncludeScreenshots');
           const datasetLabel = String(labelInput?.value || '').trim();
           if (!datasetLabel) {
-            ctx.toast('请先填写 dataset_label', 'error');
+            ctx.toast('请先填写数据集标签', 'error');
             return;
           }
           button.disabled = true;
@@ -8822,7 +9611,8 @@ function pageResults(route, rawCtx) {
             }
             datasetWorkbench.innerHTML = renderResultDatasetWorkbench(taskId, currentSummaries, currentDatasetExport);
             bindResultDatasetWorkbench(taskId);
-            resultMeta.textContent = `已导出数据集版本：${currentDatasetExport.dataset_version?.dataset_label || '-'}:${currentDatasetExport.dataset_version?.version || '-'} · asset ${currentDatasetExport.asset?.id || '-'}`;
+            setResultPanel('dataset');
+            resultMeta.textContent = `已导出数据集版本：${currentDatasetExport.dataset_version?.dataset_label || '-'}:${currentDatasetExport.dataset_version?.version || '-'} · 数据集资产编号 ${currentDatasetExport.asset?.id || '-'}`;
             ctx.toast('结果数据集版本已导出');
           } catch (error) {
             ctx.toast(error.message || '结果数据集导出失败', 'error');
@@ -8837,7 +9627,7 @@ function pageResults(route, rawCtx) {
           const screenshotInput = datasetWorkbench.querySelector('#resultDatasetIncludeScreenshots');
           const datasetLabel = String(labelInput?.value || '').trim();
           if (!datasetLabel) {
-            ctx.toast('请先填写 dataset_label', 'error');
+            ctx.toast('请先填写数据集标签', 'error');
             return;
           }
           button.disabled = true;
@@ -8856,6 +9646,7 @@ function pageResults(route, rawCtx) {
             }
             datasetWorkbench.innerHTML = renderResultDatasetWorkbench(taskId, currentSummaries, currentDatasetExport);
             bindResultDatasetWorkbench(taskId);
+            setResultPanel('dataset');
             ctx.toast('已导出并预填训练中心');
             ctx.navigate('training');
           } catch (error) {
@@ -8897,7 +9688,7 @@ function pageResults(route, rawCtx) {
         const clean = String(taskId || '').trim();
         if (!clean) {
           revokeResultBlobUrls();
-          listWrap.innerHTML = renderEmpty('请输入 task_id，或先在任务中心创建并执行任务');
+          listWrap.innerHTML = renderEmpty('请输入任务编号，或先在任务中心创建并执行任务');
           resultMeta.textContent = '';
           if (actionWorkbench) actionWorkbench.innerHTML = renderEmpty('查询到结果后，这里会根据当前状态给出下一步建议。');
           if (datasetWorkbench) datasetWorkbench.innerHTML = renderEmpty('先查询一条 task 结果，再把当前复核结果导出成训练/验证数据集版本。');
@@ -8918,6 +9709,7 @@ function pageResults(route, rawCtx) {
           currentSummaries = currentRows.map(summarizeResultRow);
           currentDatasetExport = null;
           listWrap.innerHTML = buildResultListHtml(enrichedRows || [], modelInsights);
+          bindResultListPanels();
           if (actionWorkbench) {
             actionWorkbench.innerHTML = renderResultActionWorkbench(clean, currentSummaries, currentDatasetExport);
             bindResultActionWorkbench(clean);
@@ -8932,6 +9724,7 @@ function pageResults(route, rawCtx) {
             ? `当前查询到 ${enrichedRows.length} 条结果 · 关联模型 ${modelCount} 个 · 识别文本 ${recognizedTexts.slice(0, 3).join(' / ')}`
             : `当前查询到 ${enrichedRows.length} 条结果 · 关联模型 ${modelCount} 个`;
           localStorage.setItem(STORAGE_KEYS.lastTaskId, clean);
+          setResultPanel('list');
           await bindScreenshotButtons();
         } catch (error) {
           listWrap.innerHTML = renderError(error.message);
@@ -8944,6 +9737,11 @@ function pageResults(route, rawCtx) {
         event.preventDefault();
         await loadByTaskId(taskInput?.value || '');
       });
+      resultPanelTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setResultPanel(button.getAttribute('data-result-panel-tab') || 'query');
+        });
+      });
 
       backTasksBtn?.addEventListener('click', () => {
         const taskId = String(taskInput?.value || '').trim();
@@ -8954,7 +9752,7 @@ function pageResults(route, rawCtx) {
       openTaskBtn?.addEventListener('click', () => {
         const taskId = String(taskInput?.value || '').trim();
         if (!taskId) {
-          ctx.toast('请先输入 task_id', 'error');
+          ctx.toast('请先输入任务编号', 'error');
           return;
         }
         localStorage.setItem(STORAGE_KEYS.lastTaskId, taskId);
@@ -8964,7 +9762,7 @@ function pageResults(route, rawCtx) {
       exportBtn?.addEventListener('click', async () => {
         const taskId = String(taskInput?.value || '').trim();
         if (!taskId) {
-          ctx.toast('请先输入 task_id', 'error');
+          ctx.toast('请先输入任务编号', 'error');
           return;
         }
         try {
@@ -8978,6 +9776,7 @@ function pageResults(route, rawCtx) {
         }
       });
 
+      setResultPanel(activeResultPanel);
       if (defaultTaskId) await loadByTaskId(defaultTaskId);
     },
   };
@@ -9005,7 +9804,17 @@ function pageAudit(route, rawCtx) {
         <div id="auditPanelMeta" class="hint">默认先看审计总览；按需展开检索日志。</div>
       </section>
       <section class="card" data-audit-panel="overview">
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-audit-overview-tab="workbench">工作台概览</button>
+          <button class="ghost" type="button" data-audit-overview-tab="recent">最近动作</button>
+        </div>
+        <div id="auditOverviewPanelMeta" class="hint">默认先看审计工作台概览；需要浏览最近动作时再切进去。</div>
+      </section>
+      <section class="card" data-audit-panel="overview" data-audit-overview-panel="workbench" hidden>
         <div id="auditOverviewWrap">${renderLoading('加载审计概览...')}</div>
+      </section>
+      <section class="card" data-audit-panel="overview" data-audit-overview-panel="recent" hidden>
+        <div id="auditRecentWrap">${renderLoading('加载最近动作...')}</div>
       </section>
       <section class="card" data-audit-panel="search" hidden>
         <form id="auditFilterForm" class="inline-form">
@@ -9023,15 +9832,44 @@ function pageAudit(route, rawCtx) {
       const auditPanelMeta = root.querySelector('#auditPanelMeta');
       const auditPanelTabs = [...root.querySelectorAll('[data-audit-panel-tab]')];
       const auditPanels = [...root.querySelectorAll('[data-audit-panel]')];
+      const auditOverviewPanelMeta = root.querySelector('#auditOverviewPanelMeta');
+      const auditOverviewTabs = [...root.querySelectorAll('[data-audit-overview-tab]')];
+      const auditOverviewPanels = [...root.querySelectorAll('[data-audit-overview-panel]')];
       const overviewWrap = root.querySelector('#auditOverviewWrap');
+      const recentWrap = root.querySelector('#auditRecentWrap');
       const filterForm = root.querySelector('#auditFilterForm');
       const tableWrap = root.querySelector('#auditTableWrap');
       let activeAuditPanel = 'overview';
+      let activeAuditOverviewPanel = 'workbench';
+
+      function setAuditOverviewPanel(panel) {
+        activeAuditOverviewPanel = ['workbench', 'recent'].includes(panel) ? panel : 'workbench';
+        auditOverviewPanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-audit-overview-panel') !== activeAuditOverviewPanel || activeAuditPanel !== 'overview';
+        });
+        auditOverviewTabs.forEach((button) => {
+          const active = button.getAttribute('data-audit-overview-tab') === activeAuditOverviewPanel;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (auditOverviewPanelMeta) {
+          auditOverviewPanelMeta.textContent = activeAuditOverviewPanel === 'workbench'
+            ? '先看留痕规模、动作类型和推荐下一步动作。'
+            : '需要浏览最近发生的审批、训练、任务和结果事件时，再进入最近动作。';
+        }
+      }
 
       function setAuditPanel(panel) {
         activeAuditPanel = ['overview', 'search'].includes(panel) ? panel : 'overview';
         auditPanels.forEach((section) => {
-          section.hidden = section.getAttribute('data-audit-panel') !== activeAuditPanel;
+          const panelName = section.getAttribute('data-audit-panel');
+          if (panelName !== activeAuditPanel) {
+            section.hidden = true;
+            return;
+          }
+          if (panelName === 'overview' && section.hasAttribute('data-audit-overview-panel')) return;
+          section.hidden = false;
         });
         auditPanelTabs.forEach((button) => {
           const active = button.getAttribute('data-audit-panel-tab') === activeAuditPanel;
@@ -9044,11 +9882,13 @@ function pageAudit(route, rawCtx) {
             ? '先看审计总量、最近动作和资源类型分布。'
             : '按动作、资源或操作者检索完整留痕。';
         }
+        if (activeAuditPanel === 'overview') setAuditOverviewPanel(activeAuditOverviewPanel);
       }
 
       async function loadAudit() {
         tableWrap.innerHTML = renderLoading('加载审计日志...');
         if (overviewWrap) overviewWrap.innerHTML = renderLoading('加载审计概览...');
+        if (recentWrap) recentWrap.innerHTML = renderLoading('加载最近动作...');
         try {
           const fd = new FormData(filterForm);
           const query = toQuery({
@@ -9062,7 +9902,6 @@ function pageAudit(route, rawCtx) {
           if (overviewWrap) {
             const actionKinds = new Set(rows.map((row) => String(row.action || '').trim()).filter(Boolean)).size;
             const resourceKinds = new Set(rows.map((row) => String(row.resource_type || '').trim()).filter(Boolean)).size;
-            const latestAction = rows[0]?.action || '暂无';
             overviewWrap.innerHTML = renderWorkbenchOverview({
               title: '审计总览',
               summary: '统一查看模型审批发布、训练执行、任务创建和结果导出的留痕。',
@@ -9083,6 +9922,31 @@ function pageAudit(route, rawCtx) {
             overviewWrap.querySelector('[data-workbench-action="audit-open-devices"]')?.addEventListener('click', () => {
               ctx.navigate('devices');
             });
+          }
+          if (recentWrap) {
+            recentWrap.innerHTML = rows.length
+              ? `
+                  <div class="selection-grid">
+                    ${rows.slice(0, 8).map((row) => `
+                      <article class="selection-card">
+                        <div class="selection-card-head selection-card-head--stack">
+                          <div class="selection-card-title">
+                            <strong>${esc(row.action)}</strong>
+                            <span class="selection-card-subtitle">${formatDateTime(row.created_at)}</span>
+                          </div>
+                          <span class="badge">${esc(row.resource_type || '-')}</span>
+                        </div>
+                        <div class="selection-card-meta selection-card-meta--compact">
+                          <span>操作者</span><strong>${esc(row.actor_username || row.actor_role || '-')}</strong>
+                          <span>资源ID</span><strong class="mono">${esc(truncateMiddle(row.resource_id || '-', 10, 8))}</strong>
+                          <span>影响</span><strong>${esc(row.detail?.status || row.detail?.decision || '已留痕')}</strong>
+                          <span>下一步</span><strong>${esc(row.resource_type === 'model' ? '去模型中心' : row.resource_type === 'task' ? '去任务中心' : '继续检索')}</strong>
+                        </div>
+                      </article>
+                    `).join('')}
+                  </div>
+                `
+              : renderEmpty('当前还没有可展示的最近动作。');
           }
           if (!rows.length) {
             tableWrap.innerHTML = renderEmpty('暂无审计日志。完成模型审批、任务创建、结果导出或设备拉取后会在这里留痕');
@@ -9128,6 +9992,11 @@ function pageAudit(route, rawCtx) {
       auditPanelTabs.forEach((button) => {
         button.addEventListener('click', () => {
           setAuditPanel(button.getAttribute('data-audit-panel-tab') || 'overview');
+        });
+      });
+      auditOverviewTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setAuditOverviewPanel(button.getAttribute('data-audit-overview-tab') || 'workbench');
         });
       });
       setAuditPanel('overview');
@@ -9287,15 +10156,19 @@ function pageSettings(route, rawCtx) {
         <div class="workspace-switcher">
           <button class="ghost" type="button" data-settings-panel-tab="overview">账号总览</button>
           <button class="ghost" type="button" data-settings-panel-tab="access">权限范围</button>
+          <button class="ghost" type="button" data-settings-panel-tab="governance">数据治理</button>
           <button class="ghost" type="button" data-settings-panel-tab="tech">技术详情</button>
         </div>
-        <div id="settingsPanelMeta" class="hint">默认先看账号总览；权限和技术细节按工作区展开。</div>
+        <div id="settingsPanelMeta" class="hint">默认先看账号总览；权限、数据治理和技术细节按工作区展开。</div>
       </section>
       <section class="card" data-settings-panel="overview">
         <div id="settingsOverviewWrap">${renderLoading('加载账号总览...')}</div>
       </section>
       <section class="card" data-settings-panel="access" hidden>
         <div id="settingsAccessWrap">${renderLoading('加载权限范围...')}</div>
+      </section>
+      <section class="card" data-settings-panel="governance" hidden>
+        <div id="settingsGovernanceWrap">${renderLoading('加载数据治理预览...')}</div>
       </section>
       <section class="card" data-settings-panel="tech" hidden>
         <div id="settingsTechWrap">${renderLoading('加载技术详情...')}</div>
@@ -9308,11 +10181,179 @@ function pageSettings(route, rawCtx) {
       const panels = [...root.querySelectorAll('[data-settings-panel]')];
       const overviewWrap = root.querySelector('#settingsOverviewWrap');
       const accessWrap = root.querySelector('#settingsAccessWrap');
+      const governanceWrap = root.querySelector('#settingsGovernanceWrap');
       const techWrap = root.querySelector('#settingsTechWrap');
       let activePanel = 'overview';
+      let governanceKeepLatest = 3;
+      let governanceData = null;
+      let governanceBusyAction = '';
+      let governanceLastResult = '';
+
+      function normalizeGovernanceAction(action) {
+        return String(action || '').trim();
+      }
+
+      function renderGovernanceMetrics(summary = {}) {
+        const entries = Object.entries(summary || {}).filter(([, value]) => value !== undefined && value !== null);
+        if (!entries.length) return '<div class="hint">当前没有可展示的治理摘要。</div>';
+        return `
+          <div class="keyvals compact">
+            ${entries.map(([key, value]) => `<div><span>${esc(key)}</span><strong>${esc(typeof value === 'number' ? formatMetricValue(value) : String(value))}</strong></div>`).join('')}
+          </div>
+        `;
+      }
+
+      function renderGovernanceRowList(rows = [], emptyText = '当前没有可预览的样本。') {
+        if (!rows.length) return `<div class="hint">${esc(emptyText)}</div>`;
+        return `
+          <div class="page-hero-highlights">
+            ${rows.map((row) => {
+              const label = row.label || row.file_name || row.id || row.pipeline_id || row.task_id || '-';
+              const reason = row.reason || row.asset_type || row.storage_uri || '';
+              return `<span class="page-hero-pill" title="${esc(reason || label)}">${esc(reason ? `${label} · ${reason}` : label)}</span>`;
+            }).join('')}
+          </div>
+        `;
+      }
+
+      function governanceActionTitle(action) {
+        if (action === 'keep_demo_chain') return '只保留当前车号演示主链';
+        if (action === 'cleanup_synthetic_runtime') return '清理 synthetic 运行残留';
+        if (action === 'prune_ocr_exports') return '裁剪旧 OCR 导出历史';
+        return action || '数据治理动作';
+      }
+
+      function governanceActionDescription(action) {
+        if (action === 'keep_demo_chain') return '保留当前车号识别样例主链与当前目标检测模型，其余确认无用的历史数据会被清走。';
+        if (action === 'cleanup_synthetic_runtime') return '清理 API 回归和 synthetic 运行残留，避免历史临时文件继续污染控制台。';
+        if (action === 'prune_ocr_exports') return '只保留最近几版 OCR 导出历史，删除没有继续使用价值的旧导出记录。';
+        return '查看并执行当前数据治理动作。';
+      }
+
+      function renderGovernanceActionCard(item, canExecute) {
+        const action = normalizeGovernanceAction(item?.action);
+        const isBusy = governanceBusyAction === action;
+        const summary = item?.summary || {};
+        const previewRows = action === 'keep_demo_chain'
+          ? [
+              ...(item?.keep_preview?.models || []),
+              ...(item?.keep_preview?.training_jobs || []),
+              ...(item?.delete_preview?.assets || []),
+            ]
+          : action === 'prune_ocr_exports'
+            ? (item?.rows_preview || [])
+            : (summary?.paths?.assets || []).map((path) => ({ label: path }));
+        return `
+          <article class="selection-card">
+            <div class="selection-card-head selection-card-head--stack">
+              <div class="selection-card-title">
+                <strong>${esc(item?.title || governanceActionTitle(action))}</strong>
+                <span class="selection-card-subtitle">${esc(governanceActionDescription(action))}</span>
+              </div>
+              <span class="badge">${esc(canExecute ? '可执行' : '仅预览')}</span>
+            </div>
+            ${renderGovernanceMetrics(summary)}
+            <details class="inline-details">
+              <summary>查看预览样本</summary>
+              <div class="details-panel">
+                ${renderGovernanceRowList(previewRows, '当前动作没有更多预览项。')}
+              </div>
+            </details>
+            <div class="page-hero-actions">
+              <button class="ghost" type="button" data-governance-refresh="${esc(action)}">刷新预览</button>
+              <button class="${canExecute ? 'primary' : 'ghost'}" type="button" data-governance-run="${esc(action)}" ${canExecute ? '' : 'disabled'}>
+                ${isBusy ? '执行中...' : '立即执行'}
+              </button>
+            </div>
+          </article>
+        `;
+      }
+
+      function renderGovernancePanel() {
+        if (!governanceWrap) return;
+        if (!governanceData) {
+          governanceWrap.innerHTML = renderLoading('加载数据治理预览...');
+          return;
+        }
+        const actions = Array.isArray(governanceData.actions) ? governanceData.actions : [];
+        governanceWrap.innerHTML = `
+          ${renderWorkbenchOverview({
+            title: '数据治理',
+            summary: '先预览，再执行。把“保留当前车号演示主链”“清理 synthetic 残留”“裁剪旧 OCR 导出历史”收进同一入口。',
+            status: governanceData.can_execute ? '可执行治理' : '只读预览',
+            metrics: [
+              { label: '治理动作', value: actions.length, note: '当前可用' },
+              { label: '保留 OCR 历史', value: governanceData.keep_latest, note: '按版本链裁剪' },
+              { label: '执行权限', value: governanceData.can_execute ? '平台管理员' : '只读角色', note: governanceData.generated_at ? `预览时间 ${formatDateTime(governanceData.generated_at)}` : '刚刚加载' },
+            ],
+            actions: [
+              { id: 'governance-refresh-all', label: '刷新全部预览', primary: true },
+              { id: 'governance-open-tech', label: '查看技术详情' },
+            ],
+          })}
+          <div class="selection-summary">
+            <label>
+              保留最近几版 OCR 导出历史
+              <input id="governanceKeepLatest" type="number" min="1" max="20" value="${esc(governanceKeepLatest)}" />
+            </label>
+            <div class="hint">先按预览确认范围，再决定是否执行。平台管理员可直接从这里触发治理动作。</div>
+            ${governanceLastResult ? `<div class="hint">${esc(governanceLastResult)}</div>` : ''}
+          </div>
+          <div class="selection-grid">
+            ${actions.map((item) => renderGovernanceActionCard(item, Boolean(governanceData.can_execute))).join('')}
+          </div>
+        `;
+        governanceWrap.querySelector('[data-workbench-action="governance-refresh-all"]')?.addEventListener('click', () => {
+          loadGovernancePreview();
+        });
+        governanceWrap.querySelector('[data-workbench-action="governance-open-tech"]')?.addEventListener('click', () => {
+          setSettingsPanel('tech');
+        });
+        governanceWrap.querySelector('#governanceKeepLatest')?.addEventListener('change', async (event) => {
+          const nextValue = Math.max(1, Math.min(20, Number(event.target.value) || 3));
+          governanceKeepLatest = nextValue;
+          await loadGovernancePreview();
+        });
+        governanceWrap.querySelectorAll('[data-governance-refresh]').forEach((button) => {
+          button.addEventListener('click', () => loadGovernancePreview());
+        });
+        governanceWrap.querySelectorAll('[data-governance-run]').forEach((button) => {
+          button.addEventListener('click', async () => {
+            const action = button.getAttribute('data-governance-run') || '';
+            governanceBusyAction = action;
+            renderGovernancePanel();
+            try {
+              const result = await ctx.post('/settings/data-governance/run', {
+                action,
+                keep_latest: governanceKeepLatest,
+                note: `settings_governance_${action}`,
+              });
+              governanceLastResult = `${governanceActionTitle(action)}已执行完成。执行时间：${formatDateTime(result.executed_at || new Date().toISOString())}`;
+              await loadGovernancePreview();
+            } catch (error) {
+              governanceBusyAction = '';
+              governanceLastResult = error.message || '数据治理执行失败';
+              renderGovernancePanel();
+            }
+          });
+        });
+      }
+
+      async function loadGovernancePreview() {
+        if (!governanceWrap) return;
+        governanceWrap.innerHTML = renderLoading('加载数据治理预览...');
+        try {
+          governanceData = await ctx.get(`/settings/data-governance${toQuery({ keep_latest: governanceKeepLatest })}`);
+          governanceBusyAction = '';
+          renderGovernancePanel();
+        } catch (error) {
+          governanceBusyAction = '';
+          governanceWrap.innerHTML = renderError(error.message);
+        }
+      }
 
       function setSettingsPanel(panel) {
-        activePanel = ['overview', 'access', 'tech'].includes(panel) ? panel : 'overview';
+        activePanel = ['overview', 'access', 'governance', 'tech'].includes(panel) ? panel : 'overview';
         panels.forEach((section) => {
           section.hidden = section.getAttribute('data-settings-panel') !== activePanel;
         });
@@ -9327,7 +10368,9 @@ function pageSettings(route, rawCtx) {
             ? '先看当前账号、租户边界和默认工作路径。'
             : activePanel === 'access'
               ? '查看当前角色可执行范围和能力标签。'
-              : '仅在排障或核对权限细项时查看原始技术信息。';
+              : activePanel === 'governance'
+                ? '先预览系统准备保留或清理的内容，再决定是否执行数据治理。'
+                : '仅在排障或核对权限细项时查看原始技术信息。';
         }
       }
 
@@ -9448,10 +10491,12 @@ function pageSettings(route, rawCtx) {
             </div>
           </details>
         `;
+        await loadGovernancePreview();
         setSettingsPanel('overview');
       } catch (error) {
         overviewWrap.innerHTML = renderError(error.message);
         accessWrap.innerHTML = renderError(error.message);
+        if (governanceWrap) governanceWrap.innerHTML = renderError(error.message);
         techWrap.innerHTML = renderError(error.message);
       }
     },

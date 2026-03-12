@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.audit import actions
 from app.core.constants import PIPELINE_STATUS_DRAFT
 from app.core.constants import PIPELINE_STATUS_RELEASED
+from app.core.ui_errors import raise_ui_error
 from app.db.database import get_db
 from app.db.models import Device, PipelineRecord, Tenant
 from app.security.dependencies import AuthUser, require_roles
@@ -143,7 +144,12 @@ def register_pipeline(
         .first()
     )
     if existing:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Pipeline code+version already exists")
+        raise_ui_error(
+            status.HTTP_409_CONFLICT,
+            "pipeline_version_conflict",
+            "同编码同版本的流水线已经存在。",
+            next_step="请换一个新版本号后再注册流水线，或回到列表查看现有版本。",
+        )
 
     normalized_config, expert_map, thresholds, fusion_rules = normalize_pipeline_config(
         router_model_id=payload.router_model_id,
@@ -154,7 +160,12 @@ def register_pipeline(
     )
     model_ids = collect_pipeline_model_ids(normalized_config)
     if not model_ids:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Pipeline must reference at least one model")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "pipeline_models_missing",
+            "流水线至少要绑定一版路由模型或专家模型后才能注册。",
+            next_step="请先补充路由模型或专家模型分配，再重新提交注册。",
+        )
     # 核心约束：注册时即校验模型存在性与可见性，避免运行时才发现配置失效。
     # Validate referenced model IDs at register-time to fail fast.
     model_map = validate_pipeline_models(db, normalized_config, model_ids)
@@ -204,7 +215,12 @@ def release_pipeline(
 ):
     pipeline = db.query(PipelineRecord).filter(PipelineRecord.id == payload.pipeline_id).first()
     if not pipeline:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pipeline not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "pipeline_not_found",
+            "流水线不存在，或当前账号看不到这条流水线。",
+            next_step="请回到流水线中心刷新列表后，重新选择需要发布的流水线。",
+        )
 
     config = dict(pipeline.config or {})
     config["release"] = {
