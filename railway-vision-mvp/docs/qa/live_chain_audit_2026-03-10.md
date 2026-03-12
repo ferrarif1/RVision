@@ -279,6 +279,54 @@
   - 后端实现已经不再直接 import 清理脚本，而是调用仓库内治理脚本并解析 JSON 输出，和手工运维是一套逻辑
   - 预览与执行都会写审计动作：`DATA_GOVERNANCE_PREVIEW / DATA_GOVERNANCE_EXECUTE`
 
+### 25. 登录失败 / 权限不足 / 资产预览 / 流水线注册发布已切换成结构化错误
+- 实测失败场景：
+  - 错误密码登录：`POST /auth/login`
+  - 权限不足执行数据治理：`POST /settings/data-governance/run`
+  - 资产内容不存在：`GET /assets/nonexistent/content`
+  - 数据集版本预览不存在：`GET /assets/dataset-versions/nonexistent/preview`
+  - 流水线缺模型注册：`POST /pipelines/register`
+  - 流水线不存在直接发布：`POST /pipelines/release`
+- 实测结果：
+  - 都返回结构化 `detail = {code, message, next_step}`
+  - 不再把 `Asset not found / pipeline not found / invalid credentials` 这类原始英文直接抛给前端
+
+### 26. 结果中心 / 边缘执行 / 车号复核导出错误已切换成结构化错误
+- 实测失败场景：
+  - 结果中心查询不存在任务：`GET /results?task_id=missing-task`
+  - 结果中心缺少数据集标签：`POST /results/export-dataset`
+  - 结果截图不存在：`GET /results/missing-result/screenshot`
+  - 边缘拉不存在资产：`GET /edge/pull_asset?asset_id=missing-asset`
+  - 边缘回传不存在任务：`POST /edge/push_results`
+- 实测结果：
+  - 均返回结构化 `detail = {code, message, next_step}`
+  - 典型返回码覆盖 `400 / 404`
+  - 结果中心和边缘执行链路现在已经能稳定返回“原因 + 下一步”，不是裸英文错误
+
+### 27. 训练中心导出 / 改派 / 重试失败已切换成结构化错误
+- 实测失败场景：
+  - 车号文本训练数据导出时使用无效敏感等级：`POST /training/car-number-labeling/export-text-assets`
+  - 对成功作业执行改派：`POST /training/jobs/{job_id}/reassign`
+  - 对成功作业执行重试：`POST /training/jobs/{job_id}/retry`
+- 实测结果：
+  - 都返回结构化 `detail = {code, message, next_step}`
+  - 典型错误码覆盖：
+    - `sensitivity_level_invalid`
+    - `training_job_reassign_succeeded_forbidden`
+    - `training_job_retry_status_invalid`
+  - 训练中心高频控制动作现在已经能稳定返回“原因 + 下一步”，不再把 `SUCCEEDED job cannot be reassigned` 这类原始英文直接暴露给用户
+
+### 28. 任务中心 / 模型中心 / 资产中心剩余高频错误已切换成结构化错误
+- 实测失败场景：
+  - 不存在任务详情：`GET /tasks/missing-task`
+  - 删除不存在任务：`DELETE /tasks/missing-task`
+  - 预检扫描使用不存在资产：`POST /tasks/preflight-inspect`
+  - 流水线缺模型注册：`POST /pipelines/register`
+- 实测结果：
+  - 都返回结构化 `detail = {code, message, next_step}`，覆盖 `task_not_found / asset_not_found / pipeline_models_missing`
+  - 任务中心的详情/删除、预检扫描，以及模型/流水线注册类高频失败场景，已经不再直接暴露原始英文错误
+  - 资产中心、模型中心、结果中心、训练中心、边缘执行链路当前都已经接入同一套结构化错误模型
+
 ### 25. 登录失败 / 权限不足已切换成结构化错误
 - 后端接口：
   - `POST /auth/login`
@@ -296,6 +344,30 @@
 - 说明：
   - 这轮改动把登录、权限不足、训练机器/边缘设备凭据失败统一到了 `code + message + next_step`
   - 前端公共 API 层会优先展示这类结构化错误，不再依赖原始英文 detail
+
+### 26. 资产预览 / 数据集预览 / 流水线注册发布错误已结构化
+- 后端接口：
+  - `GET /assets/{asset_id}/content`
+  - `GET /assets/dataset-versions/{version_id}/preview`
+  - `GET /assets/dataset-versions/{version_id}/preview-file`
+  - `POST /pipelines/register`
+  - `POST /pipelines/release`
+- 实测结果：
+  - 访问不存在资源内容时返回 `404`：
+    - `code = asset_not_found`
+    - `message = 资源不存在，或当前账号看不到这条资源。`
+  - 访问不存在数据集版本预览时返回 `404`：
+    - `code = dataset_version_not_found`
+    - `message = 数据集版本不存在，或当前账号看不到这版数据集。`
+  - 发布不存在流水线时返回 `404`：
+    - `code = pipeline_not_found`
+    - `message = 流水线不存在，或当前账号看不到这条流水线。`
+  - 注册空流水线配置时返回 `400`：
+    - `code = pipeline_models_missing`
+    - `message = 流水线至少要绑定一版路由模型或专家模型后才能注册。`
+- 说明：
+  - 这轮改动把资产中心和流水线中心里最常见的一批裸英文失败场景后端化了
+  - 前端无需再靠字符串匹配猜测错误含义，就能直接显示“原因 + 下一步”
   - 从任务页“带入下方精确任务”、创建成功、结果页查询成功等动作会自动切到对应工作区
 
 ### 22. 页面级走查与默认术语减负阶段性收口

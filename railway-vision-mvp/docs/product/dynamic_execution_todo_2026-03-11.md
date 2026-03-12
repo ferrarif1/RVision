@@ -2,7 +2,7 @@
 
 - Owner: Engineering
 - Status: In Execution
-- Last Updated: 2026-03-12 10:22 CST
+- Last Updated: 2026-03-12 11:39 CST
 - Scope: 作为当前持续推进的动态执行面板，记录“正在做 / 下一步 / 排队中 / 已完成”，并允许随时插入新需求
 - Source of Truth:
   - 当前真实执行盘点：[current_execution_backlog_2026-03-10.md](./current_execution_backlog_2026-03-10.md)
@@ -90,17 +90,23 @@
   - `frontend/assets/app.css`
   - `docs/qa/browser_walkthrough_report_2026-03-12.md`
 
-### T4. 统一错误提示模板
+### ~~T4. 统一错误提示模板~~
 
 - Priority: P1
-- Status: In Progress
+- Status: Done
 - Why:
   - 仍有不少后端原始错误会直接露给用户，影响成熟度。
 - Done When:
-  - 任务创建 / 快速识别 / 训练 / 审批 / 发布 / 结果导出这几条主链都尽量显示“原因 + 影响 + 下一步”
+  - ~~任务创建 / 快速识别 / 训练 / 审批 / 发布 / 结果导出这几条主链都尽量显示“原因 + 影响 + 下一步”~~
 - Evidence:
   - `backend/app/core/ui_errors.py`
   - `frontend/src/core/api.js`
+  - `backend/app/api/results.py`
+  - `backend/app/api/edge.py`
+  - `backend/app/api/training.py`
+  - `backend/app/api/tasks.py`
+  - `backend/app/api/models.py`
+  - `backend/app/api/assets.py`
   - `docs/product/current_execution_backlog_2026-03-10.md`
 
 ## 3. 排队中
@@ -191,6 +197,48 @@
 - Evidence:
   - `backend/app/api/auth.py`
   - `backend/app/security/dependencies.py`
+  - `docs/qa/live_chain_audit_2026-03-10.md`
+
+### D39. 资产预览 / 数据集预览 / 流水线注册发布错误改成结构化提示
+
+- Status: Done
+- Scope:
+  - 资产内容预览、数据集版本预览、数据集预览文件、流水线注册、流水线发布中的高频失败场景已改成结构化错误
+  - 失败时统一返回 `code + message + next_step`，覆盖资源不存在、数据集版本不存在、流水线不存在、流水线缺模型等场景
+- Evidence:
+  - `backend/app/api/assets.py`
+  - `backend/app/api/pipelines.py`
+  - `docs/qa/live_chain_audit_2026-03-10.md`
+
+### D40. 结果查询 / 结果截图 / 边缘拉资产回传结果 / 车号复核导出错误改成结构化提示
+
+- Status: Done
+- Scope:
+  - 结果查询、结果截图、结果导出训练数据、边缘拉资产、边缘回传结果、车号文本复核清单读取等高频失败场景已改成结构化错误
+  - `结果不存在 / 任务不存在 / 边缘资产不存在 / 数据集标签缺失 / 定位框非法` 这类错误会统一返回 `code + message + next_step`
+- Evidence:
+  - `backend/app/api/results.py`
+  - `backend/app/api/edge.py`
+### D41. 训练中心导出 / 改派 / 重试失败改成结构化提示
+
+- Status: Done
+- Scope:
+  - 车号文本训练数据导出、训练作业改派、训练作业重试、训练机器心跳和目标训练机器解析中的高频失败场景已改成结构化错误
+  - `敏感等级无效 / 待验证模型已存在 / 成功作业不能改派 / 非失败作业不能重试 / 目标训练机器不在线` 这类错误会统一返回 `code + message + next_step`
+- Evidence:
+  - `backend/app/api/training.py`
+  - `docs/qa/live_chain_audit_2026-03-10.md`
+
+### D42. 任务中心 / 模型中心 / 资产中心剩余高频错误改成结构化提示
+
+- Status: Done
+- Scope:
+  - 任务详情/删除任务、预检无模型、模型访问、模型包注册、ZIP 资源用途校验、数据集对比范围、数据集回滚条件、资源用途/敏感等级等高频错误已切换成结构化提示
+  - 主链上常见的 `task/model/asset not found`、`版本冲突`、`用途非法`、`ZIP 不合规` 这类错误现在统一返回 `code + message + next_step`
+- Evidence:
+  - `backend/app/api/tasks.py`
+  - `backend/app/api/models.py`
+  - `backend/app/api/assets.py`
   - `docs/qa/live_chain_audit_2026-03-10.md`
 
 ### D1. 训练 / 模型 / 流水线页补统一工作台概览

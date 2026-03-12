@@ -329,10 +329,20 @@ def edge_pull_asset(
 ):
     asset = db.query(DataAsset).filter(DataAsset.id == asset_id).first()
     if not asset:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "edge_asset_not_found",
+            "边缘设备请求的资产不存在。",
+            next_step="请确认资产编号是否正确，或重新下发一个有效任务。",
+        )
 
     if not os.path.exists(asset.storage_uri):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset file missing")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "edge_asset_file_missing",
+            "边缘设备请求的资产文件不存在。",
+            next_step="请重新上传资产，或让控制面重新分配有效资产。",
+        )
 
     with open(asset.storage_uri, "rb") as f:
         b64 = base64.b64encode(f.read()).decode("utf-8")
@@ -356,14 +366,24 @@ def edge_push_results(
 ):
     task = db.query(InferenceTask).filter(InferenceTask.id == payload.task_id).first()
     if not task:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "edge_task_not_found",
+            "边缘设备回传结果对应的任务不存在。",
+            next_step="请确认边缘设备使用的是最新任务，或重新拉取任务后再回传。",
+        )
     # Idempotency: tolerate edge retries after control-plane has already finalized the task.
     if task.finished_at and task.status in {TASK_STATUS_SUCCEEDED, TASK_STATUS_FAILED} and task.status == payload.status.value:
         return {"task_id": task.id, "status": task.status, "saved_results": 0, "idempotent": True}
 
     model = db.query(ModelRecord).filter(ModelRecord.id == task.model_id).first()
     if not model:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task model not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "edge_task_model_not_found",
+            "边缘设备执行任务时对应的模型不存在。",
+            next_step="请重新下发模型或重新创建任务后再执行。",
+        )
 
     settings = get_settings()
     screenshot_dir = os.path.join(settings.asset_repo_path, "screenshots")

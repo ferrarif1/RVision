@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.audit import actions
 from app.core.config import get_settings
+from app.core.ui_errors import raise_ui_error
 from app.db.database import get_db
 from app.db.models import DataAsset, DatasetVersion, Tenant
 from app.security.dependencies import AuthUser, require_roles
@@ -53,11 +54,21 @@ class DatasetVersionRollbackRequest(BaseModel):
 def _safe_original_file_name(file_name: str | None) -> tuple[str, str]:
     cleaned = os.path.basename(str(file_name or "").strip())
     if not cleaned:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing file name")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "asset_file_name_missing",
+            "上传文件缺少文件名，当前资源不能继续保存。",
+            next_step="请重新选择本地文件后再上传。",
+        )
     cleaned = cleaned[:MAX_FILE_NAME_LENGTH]
     ext = os.path.splitext(cleaned.lower())[1]
     if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported file type")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "asset_file_type_unsupported",
+            "当前文件类型不受支持。",
+            next_step="请上传图片、视频或 ZIP 数据集包。",
+        )
     return cleaned, ext
 
 
@@ -75,7 +86,12 @@ def _resolve_buyer_tenant_id(
             .first()
         )
         if not tenant:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid buyer_tenant_code")
+            raise_ui_error(
+                status.HTTP_400_BAD_REQUEST,
+                "buyer_tenant_invalid",
+                "目标买家租户编码无效，当前资源不能归档到这个客户范围。",
+                next_step="请重新选择一个有效买家，或留空改为当前默认范围。",
+            )
         return tenant.id
     return None
 
@@ -87,24 +103,41 @@ def _asset_type_from_extension(ext: str) -> str:
         return "image"
     if ext in ARCHIVE_EXTENSIONS:
         return "archive"
-    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported file type")
+    raise_ui_error(
+        status.HTTP_400_BAD_REQUEST,
+        "asset_file_type_unsupported",
+        "当前文件类型不受支持。",
+        next_step="请上传图片、视频或 ZIP 数据集包。",
+    )
 
 
 def _validate_archive_policy(ext: str, asset_purpose: str) -> None:
     if ext in ARCHIVE_EXTENSIONS and asset_purpose not in ARCHIVE_ALLOWED_PURPOSES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="ZIP dataset asset is only allowed for training, finetune or validation purpose",
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "archive_asset_purpose_invalid",
+            "ZIP 数据集包只适合训练、微调或验证，不适合直接在线识别。",
+            next_step="请把资源用途改成 training、finetune 或 validation 后再上传。",
         )
 
 
 def _normalize_archive_member(name: str) -> PurePosixPath:
     normalized = str(name or "").replace("\\", "/").strip()
     if not normalized:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Archive contains empty entry name")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "archive_entry_empty",
+            "ZIP 压缩包里存在空文件名条目，当前数据集不安全。",
+            next_step="请重新打包 ZIP，确保每个文件都有合法文件名。",
+        )
     member = PurePosixPath(normalized)
     if member.is_absolute() or any(part in {"", ".", ".."} for part in member.parts):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Archive contains unsafe entry path")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "archive_entry_unsafe",
+            "ZIP 压缩包里存在不安全路径，当前数据集不能导入。",
+            next_step="请清理包含绝对路径、空目录名或 .. 的条目后重新打包。",
+        )
     return member
 
 
@@ -118,14 +151,26 @@ def _inspect_archive_bundle(
         with zipfile.ZipFile(storage_uri) as zf:
             infos = zf.infolist()
     except zipfile.BadZipFile as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid ZIP archive") from exc
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "zip_archive_invalid",
+            "ZIP 压缩包无法解析，当前资源不能作为数据集使用。",
+            next_step="请确认 ZIP 文件完整可打开后，再重新上传。",
+        )
 
     if not infos:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ZIP archive is empty")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "zip_archive_empty",
+            "ZIP 压缩包是空的，当前资源没有可用样本。",
+            next_step="请把图片或视频放进 ZIP 后重新上传。",
+        )
     if len(infos) > max_entries:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"ZIP archive has too many entries, max allowed is {max_entries}",
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "zip_archive_entries_exceeded",
+            "ZIP 压缩包里的文件数量太多，超出平台限制。",
+            next_step=f"请裁剪压缩包内容，确保总条目数不超过 {max_entries} 后再上传。",
         )
 
     file_count = 0
@@ -150,9 +195,12 @@ def _inspect_archive_bundle(
         max_depth = max(max_depth, len(member.parts) - 1)
         total_uncompressed_bytes += max(info.file_size, 0)
         if total_uncompressed_bytes > max_uncompressed_bytes:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"ZIP archive is too large after decompression, max allowed is {max_uncompressed_bytes} bytes",
+            raise_ui_error(
+                status.HTTP_400_BAD_REQUEST,
+                "zip_archive_uncompressed_too_large",
+                "ZIP 压缩包解压后的总大小超出平台限制。",
+                next_step="请减少样本数量或压缩包内容后重新上传。",
+                raw_detail={"max_uncompressed_bytes": max_uncompressed_bytes},
             )
 
         ext = os.path.splitext(member.name.lower())[1]
@@ -169,9 +217,11 @@ def _inspect_archive_bundle(
 
     resource_count = image_count + video_count
     if resource_count <= 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="ZIP archive must contain at least one supported image or video file",
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "zip_archive_no_supported_media",
+            "ZIP 数据集里没有可识别的图片或视频。",
+            next_step="请确认压缩包里至少包含一张图片或一段视频后重新上传。",
         )
 
     return {
@@ -202,14 +252,22 @@ def _persist_upload_stream(file: UploadFile, target_dir: str, asset_id: str, ext
                     break
                 size += len(chunk)
                 if size > max_bytes:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"File too large, max allowed is {max_bytes} bytes",
+                    raise_ui_error(
+                        status.HTTP_400_BAD_REQUEST,
+                        "asset_file_too_large",
+                        "上传文件过大，超出当前平台限制。",
+                        next_step="请压缩文件体积，或拆分成更小的数据包后重新上传。",
+                        raw_detail={"max_bytes": max_bytes},
                     )
                 checksum.update(chunk)
                 output.write(chunk)
         if size <= 0:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file is not allowed")
+            raise_ui_error(
+                status.HTTP_400_BAD_REQUEST,
+                "asset_file_empty",
+                "上传文件为空，当前资源不能保存。",
+                next_step="请确认文件内容后重新上传。",
+            )
         os.replace(temp_uri, storage_uri)
         return storage_uri, checksum.hexdigest(), size
     except Exception:
@@ -268,22 +326,52 @@ def _serialize_asset(asset: DataAsset) -> dict:
 def _get_visible_asset_or_404(db: Session, asset_id: str, current_user: AuthUser) -> DataAsset:
     asset = db.query(DataAsset).filter(DataAsset.id == asset_id).first()
     if not asset:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "asset_not_found",
+            "资源不存在，或当前账号看不到这条资源。",
+            next_step="请回到资产中心刷新列表后，重新选择需要查看的资源。",
+        )
     if is_supplier_user(current_user.roles):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "asset_not_found",
+            "当前角色不能直接查看这类资源。",
+            next_step="请切换到平台或买家账号，再重新查看资产内容。",
+        )
     if is_buyer_user(current_user.roles) and asset.buyer_tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "asset_not_found",
+            "这条资源不在当前买家租户可见范围内。",
+            next_step="请返回资产中心，切换到当前租户下可见的资源。",
+        )
     return asset
 
 
 def _get_visible_dataset_version_or_404(db: Session, version_id: str, current_user: AuthUser) -> DatasetVersion:
     row = db.query(DatasetVersion).filter(DatasetVersion.id == version_id).first()
     if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset version not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "dataset_version_not_found",
+            "数据集版本不存在，或当前账号看不到这版数据集。",
+            next_step="请回到数据集版本列表刷新后，重新选择需要查看的版本。",
+        )
     if is_supplier_user(current_user.roles):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset version not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "dataset_version_not_found",
+            "当前角色不能直接查看这版数据集。",
+            next_step="请切换到平台或买家账号，再查看数据集版本。",
+        )
     if is_buyer_user(current_user.roles) and row.buyer_tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset version not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "dataset_version_not_found",
+            "这版数据集不在当前买家租户可见范围内。",
+            next_step="请返回版本列表，切换到当前租户下可见的版本。",
+        )
     return row
 
 
@@ -413,9 +501,19 @@ def _copy_file_with_checksum(source_path: str, target_path: str) -> tuple[str, i
 
 def _load_dataset_archive_payload(asset: DataAsset, *, preview_limit: int | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, dict[str, Any]]]:
     if asset.asset_type != "archive":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dataset preview is only available for archive assets")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "dataset_preview_archive_only",
+            "只有 ZIP 数据集包支持预览样本。",
+            next_step="请先选择一条 ZIP 数据集资源，再查看样本预览。",
+        )
     if not os.path.exists(asset.storage_uri):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset archive file missing")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "dataset_archive_missing",
+            "数据集压缩包文件已不存在，当前版本不能继续预览。",
+            next_step="请重新导出这版数据集，或回到列表选择仍可用的版本。",
+        )
 
     manifest: dict[str, Any] = {}
     samples: list[dict[str, Any]] = []
@@ -438,9 +536,19 @@ def _load_dataset_archive_payload(asset: DataAsset, *, preview_limit: int | None
                     if preview_limit is None or len(samples) < preview_limit:
                         samples.append(summary)
     except zipfile.BadZipFile as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid dataset archive") from exc
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "dataset_archive_invalid",
+            "数据集压缩包损坏，当前版本无法解析。",
+            next_step="请重新导出或重新上传这版数据集。",
+        )
     except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dataset archive metadata is malformed") from exc
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "dataset_archive_metadata_invalid",
+            "数据集压缩包里的元信息损坏，当前样本预览不完整。",
+            next_step="请重新生成这版数据集，再回来查看预览。",
+        )
     return manifest, samples, sample_map
 
 
@@ -619,7 +727,12 @@ def compare_dataset_versions(
 ):
     normalized_scope = str(change_scope or "all").strip().lower()
     if normalized_scope not in DATASET_COMPARE_SCOPES:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid change_scope")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "dataset_change_scope_invalid",
+            "数据集差异范围无效。",
+            next_step="请把差异范围改成 all、added、removed 或 changed 之一。",
+        )
     normalized_label = str(label or "").strip()
     normalized_review_status = str(review_status or "").strip()
     normalized_changed_field = str(changed_field or "").strip()
@@ -820,9 +933,19 @@ def rollback_dataset_version(
     row = _get_visible_dataset_version_or_404(db, version_id, current_user)
     asset = _get_visible_asset_or_404(db, row.asset_id, current_user)
     if asset.asset_type != "archive":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only archive dataset versions can be rolled back")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "dataset_rollback_archive_only",
+            "只有 ZIP 数据集版本支持回滚为新版本。",
+            next_step="请先选择一版 ZIP 数据集后再执行回滚。",
+        )
     if not os.path.exists(asset.storage_uri):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset archive file missing")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "dataset_archive_file_missing",
+            "这版数据集的压缩包文件已不存在。",
+            next_step="请重新导出或重新上传这版数据集后再执行回滚。",
+        )
 
     settings = get_settings()
     rollback_dir = os.path.join(settings.asset_repo_path, "generated_datasets")
@@ -934,9 +1057,19 @@ def preview_dataset_version(
     row = _get_visible_dataset_version_or_404(db, version_id, current_user)
     asset = _get_visible_asset_or_404(db, row.asset_id, current_user)
     if asset.asset_type != "archive":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dataset preview is only available for archive assets")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "dataset_preview_archive_only",
+            "只有 ZIP 数据集包支持预览样本。",
+            next_step="请先选择一条 ZIP 数据集资源，再查看样本预览。",
+        )
     if not os.path.exists(asset.storage_uri):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset archive file missing")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "dataset_archive_missing",
+            "数据集压缩包文件已不存在，当前版本不能继续预览。",
+            next_step="请重新导出这版数据集，或回到列表选择仍可用的版本。",
+        )
 
     manifest: dict = {}
     samples: list[dict] = []
@@ -966,9 +1099,19 @@ def preview_dataset_version(
                         }
                     )
     except zipfile.BadZipFile as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid dataset archive") from exc
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "dataset_archive_invalid",
+            "数据集压缩包损坏，当前版本无法解析。",
+            next_step="请重新导出或重新上传这版数据集。",
+        )
     except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dataset archive metadata is malformed") from exc
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "dataset_archive_metadata_invalid",
+            "数据集压缩包里的元信息损坏，当前样本预览不完整。",
+            next_step="请重新生成这版数据集，再回来查看预览。",
+        )
 
     buyer = db.query(Tenant).filter(Tenant.id == row.buyer_tenant_id).first() if row.buyer_tenant_id else None
     return {
@@ -988,21 +1131,46 @@ def get_dataset_version_preview_file(
     row = _get_visible_dataset_version_or_404(db, version_id, current_user)
     asset = _get_visible_asset_or_404(db, row.asset_id, current_user)
     if asset.asset_type != "archive":
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dataset preview file is only available for archive assets")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "dataset_preview_file_archive_only",
+            "只有 ZIP 数据集包支持查看预览文件。",
+            next_step="请先选择 ZIP 数据集版本，再打开预览文件。",
+        )
     if not os.path.exists(asset.storage_uri):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset archive file missing")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "dataset_archive_missing",
+            "数据集压缩包文件已不存在，当前预览文件不能继续打开。",
+            next_step="请重新导出这版数据集，或回到列表选择仍可用的版本。",
+        )
 
     normalized = str(_normalize_archive_member(member))
     if not normalized.startswith(("previews/", "assets/")):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported dataset preview member")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "dataset_preview_member_unsupported",
+            "当前预览文件路径不受支持。",
+            next_step="请从平台提供的样本预览列表里重新点击可查看的文件。",
+        )
 
     try:
         with zipfile.ZipFile(asset.storage_uri) as zf:
             if normalized not in zf.namelist():
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset preview member missing")
+                raise_ui_error(
+                    status.HTTP_404_NOT_FOUND,
+                    "dataset_preview_member_missing",
+                    "当前预览文件在数据集压缩包里不存在。",
+                    next_step="请返回样本预览列表，重新选择一个仍存在的文件。",
+                )
             payload = zf.read(normalized)
     except zipfile.BadZipFile as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid dataset archive") from exc
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "dataset_archive_invalid",
+            "数据集压缩包损坏，当前预览文件无法读取。",
+            next_step="请重新导出这版数据集，再回来查看预览文件。",
+        )
 
     media_type = mimetypes.guess_type(normalized)[0] or "application/octet-stream"
     return Response(content=payload, media_type=media_type)
@@ -1016,9 +1184,19 @@ def get_asset_content(
 ):
     asset = _get_visible_asset_or_404(db, asset_id, current_user)
     if asset.asset_type not in {"image", "video", "screenshot"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Asset content preview is only available for image, video or screenshot assets")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "asset_content_preview_unsupported",
+            "当前资源类型不支持直接预览内容。",
+            next_step="请改为查看图片、视频或截图类型的资源。",
+        )
     if not os.path.exists(asset.storage_uri):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Asset file missing")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "asset_file_missing",
+            "资源记录仍在，但源文件已经丢失。",
+            next_step="请重新上传这条资源，或回到资产中心选择仍可用的资源。",
+        )
     media_type = {
         "image": "image/jpeg",
         "video": "video/mp4",
@@ -1044,10 +1222,20 @@ def upload_asset(
     original_file_name, ext = _safe_original_file_name(file.filename)
 
     if sensitivity_level not in {"L1", "L2", "L3"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid sensitivity_level")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "sensitivity_level_invalid",
+            "敏感等级无效。",
+            next_step="请把敏感等级改成 L1、L2 或 L3 之一。",
+        )
 
     if asset_purpose not in ASSET_PURPOSES:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid asset_purpose")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "asset_purpose_invalid",
+            "资源用途无效。",
+            next_step="请重新选择训练、验证、微调或推理用途。",
+        )
 
     _validate_archive_policy(ext, asset_purpose)
 

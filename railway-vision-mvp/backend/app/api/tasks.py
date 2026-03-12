@@ -384,7 +384,12 @@ def preflight_inspect_task_targets(
         task_types=effective_task_types,
     )
     if not latest_models:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No schedulable models available for preflight inspection")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "preflight_models_unavailable",
+            "当前没有可用于预检扫描的模型。",
+            next_step="请先发布至少一版可用模型，或在任务中心直接显式选择模型后再试。",
+        )
 
     created_tasks: list[tuple[InferenceTask, ModelRecord]] = []
     for task_type in PREFLIGHT_TASK_TYPES:
@@ -669,9 +674,19 @@ def get_task(
 ):
     task = db.query(InferenceTask).filter(InferenceTask.id == task_id).first()
     if not task:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "task_not_found",
+            "没有找到这条识别任务。",
+            next_step="请回到任务中心刷新列表后，重新选择任务。",
+        )
     if is_buyer_user(current_user.roles) and task.buyer_tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "task_not_found",
+            "没有找到这条识别任务。",
+            next_step="请确认你正在查看当前租户下的任务，或联系管理员检查任务归属。",
+        )
 
     result_count = db.query(InferenceResult).filter(InferenceResult.task_id == task.id).count()
     model = db.query(ModelRecord).filter(ModelRecord.id == task.model_id).first() if task.model_id else None
@@ -761,9 +776,19 @@ def delete_task(
 ):
     task = db.query(InferenceTask).filter(InferenceTask.id == task_id).first()
     if not task:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "task_not_found",
+            "没有找到这条识别任务。",
+            next_step="请回到任务中心刷新列表后，重新选择任务。",
+        )
     if is_buyer_user(current_user.roles) and task.buyer_tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "task_not_found",
+            "没有找到这条识别任务。",
+            next_step="请确认你正在操作当前租户下的任务，或联系管理员检查任务归属。",
+        )
 
     db.delete(task)
     db.commit()

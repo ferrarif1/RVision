@@ -292,16 +292,32 @@ def _parse_json_or_none(value: str | None) -> dict[str, Any] | None:
     try:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON metadata field") from exc
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "training_metadata_json_invalid",
+            "填写的 JSON 元数据格式不正确。",
+            next_step="请检查 JSON 语法，例如逗号、引号和大括号是否完整。",
+            raw_detail=str(exc),
+        )
     if not isinstance(parsed, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="JSON metadata field must be an object")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "training_metadata_json_object_required",
+            "JSON 元数据必须是对象格式。",
+            next_step="请使用 {\"key\": \"value\"} 这样的对象格式填写。",
+        )
     return parsed
 
 
 def _load_car_number_labeling_rows() -> list[dict[str, str]]:
     manifest_path = _car_number_labeling_manifest_path()
     if not manifest_path.exists():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Car-number labeling manifest not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "labeling_manifest_not_found",
+            "没有找到车号文本复核清单。",
+            next_step="请先生成车号文本复核清单，或确认 demo_data 已正确准备。",
+        )
     with manifest_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         return [dict(row) for row in reader]
@@ -309,7 +325,12 @@ def _load_car_number_labeling_rows() -> list[dict[str, str]]:
 
 def _rewrite_car_number_labeling_files(rows: list[dict[str, str]]) -> None:
     if not rows:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Labeling manifest is empty")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "labeling_manifest_empty",
+            "车号文本复核清单为空。",
+            next_step="请先准备待复核样本，再继续保存或导出。",
+        )
     manifest_path = _car_number_labeling_manifest_path()
     jsonl_path = _car_number_labeling_jsonl_path()
     summary_path = _car_number_labeling_summary_path()
@@ -494,11 +515,21 @@ def _export_car_number_text_dataset(*, allow_suggestions: bool) -> dict[str, Any
         source_counts[text_source] = source_counts.get(text_source, 0) + 1
         accepted.append(item)
     if len(accepted) < 2:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Not enough labeled rows to export OCR text dataset")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "ocr_text_dataset_not_enough_rows",
+            "可用于导出训练数据的已确认样本还不够。",
+            next_step="请先继续复核更多车号文本，至少准备训练集和验证集的有效样本。",
+        )
     train_rows = [row for row in accepted if str(row.get("split_hint") or "") == "train"]
     validation_rows = [row for row in accepted if str(row.get("split_hint") or "") == "validation"]
     if not train_rows or not validation_rows:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Need both train and validation rows to export OCR text dataset")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "ocr_text_dataset_split_missing",
+            "导出训练数据时需要同时具备训练集和验证集样本。",
+            next_step="请确认样本里同时有 train 和 validation 两种切分后再导出。",
+        )
     output_dir = _car_number_text_dataset_dir()
     train_bundle = _write_car_number_text_bundle(
         rows=train_rows,
@@ -550,7 +581,13 @@ def _inspect_local_dataset_archive(storage_path: Path) -> dict[str, Any]:
         with zipfile.ZipFile(storage_path) as zf:
             infos = zf.infolist()
     except zipfile.BadZipFile as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Generated OCR dataset bundle is invalid") from exc
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "ocr_dataset_bundle_invalid",
+            "生成出来的 OCR 数据包格式不正确。",
+            next_step="请重新导出一次训练数据；如果仍然失败，请检查原始标注清单是否完整。",
+            raw_detail=str(exc),
+        )
 
     preview_members: list[str] = []
     image_count = 0
@@ -631,9 +668,19 @@ def _register_car_number_text_dataset_asset(
 ) -> dict[str, Any]:
     source_bundle = _resolve_repo_relative_path(str(bundle_summary.get("zip_path") or ""))
     if not source_bundle.exists() or not source_bundle.is_file():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Exported OCR dataset bundle file not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "ocr_dataset_bundle_not_found",
+            "刚导出的 OCR 数据包文件不存在。",
+            next_step="请重新执行一次导出训练数据，确认导出完成后再继续。",
+        )
     if sensitivity_level not in {"L1", "L2", "L3"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid sensitivity_level")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "sensitivity_level_invalid",
+            "敏感等级无效。",
+            next_step="请把敏感等级改成 L1、L2 或 L3 之一。",
+        )
 
     settings = get_settings()
     os.makedirs(settings.asset_repo_path, exist_ok=True)
@@ -1031,9 +1078,19 @@ def _worker_matches_selector(job: TrainingJob, worker: TrainingWorker) -> bool:
 def _get_worker_job_or_403(db: Session, worker_code: str, job_id: str) -> TrainingJob:
     job = db.query(TrainingJob).filter(TrainingJob.id == job_id).first()
     if not job:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Training job not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "training_job_not_found",
+            "没有找到这条训练作业。",
+            next_step="请回到训练中心刷新作业列表后，重新选择要操作的作业。",
+        )
     if not job.assigned_worker_code or job.assigned_worker_code != worker_code:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Training job assigned to a different worker")
+        raise_ui_error(
+            status.HTTP_403_FORBIDDEN,
+            "training_job_worker_mismatch",
+            "这条训练作业分配给了另一台训练机器。",
+            next_step="请刷新训练机器状态后重新拉取作业，或在训练中心改派到当前机器。",
+        )
     return job
 
 
@@ -1044,9 +1101,12 @@ def _control_note(value: str | None) -> str | None:
 
 def _ensure_retryable(job: TrainingJob, action_name: str) -> None:
     if job.candidate_model_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Training job already linked a candidate model, cannot {action_name}",
+        raise_ui_error(
+            status.HTTP_409_CONFLICT,
+            "training_job_candidate_already_linked",
+            "这条训练作业已经关联了待验证模型，不能继续当前操作。",
+            next_step="请先查看当前待验证模型，或创建一条新的训练作业后再继续。",
+            raw_detail={"action": action_name},
         )
 
 
@@ -1054,17 +1114,37 @@ def _resolve_target_worker(db: Session, worker_code: str | None, worker_host: st
     clean_code = _clean_optional(worker_code)
     clean_host = _clean_optional(worker_host)
     if not clean_code and not clean_host:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="worker_code or worker_host is required")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "training_target_worker_required",
+            "改派训练作业前需要指定目标训练机器。",
+            next_step="请填写训练机器编号或机器地址后再重试。",
+        )
 
     target_worker = None
     if clean_code:
         target_worker = db.query(TrainingWorker).filter(TrainingWorker.worker_code == clean_code).first()
         if not target_worker:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target worker not found")
+            raise_ui_error(
+                status.HTTP_404_NOT_FOUND,
+                "training_target_worker_not_found",
+                "没有找到目标训练机器。",
+                next_step="请回到训练中心刷新训练机器列表后，重新选择目标机器。",
+            )
         if target_worker.status != "ACTIVE":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Target worker is not ACTIVE")
+            raise_ui_error(
+                status.HTTP_400_BAD_REQUEST,
+                "training_target_worker_inactive",
+                "目标训练机器当前不在线，不能直接改派。",
+                next_step="请先让目标训练机器恢复在线，再重新改派作业。",
+            )
         if clean_host and str(target_worker.host or "").strip().lower() != clean_host.lower():
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="worker_code does not match worker_host")
+            raise_ui_error(
+                status.HTTP_400_BAD_REQUEST,
+                "training_target_worker_host_mismatch",
+                "训练机器编号和机器地址不匹配。",
+                next_step="请确认你填写的是同一台训练机器的编号和地址。",
+            )
         clean_host = clean_host or _clean_optional(target_worker.host)
     elif clean_host:
         target_worker = next(
@@ -1466,7 +1546,12 @@ def cancel_training_job(
 ):
     job = _get_training_job_or_404(db, job_id, current_user)
     if job.status in TRAINING_JOB_TERMINAL_STATUSES:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Training job already terminal")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "training_job_already_terminal",
+            "这条训练作业已经结束，不能再取消。",
+            next_step="请查看作业结果，或创建/重试新的训练作业。",
+        )
 
     previous_status = job.status
     note = _control_note(payload.note)
@@ -1507,7 +1592,12 @@ def retry_training_job(
 ):
     job = _get_training_job_or_404(db, job_id, current_user)
     if job.status not in {TRAINING_JOB_STATUS_FAILED, TRAINING_JOB_STATUS_CANCELLED}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only FAILED or CANCELLED jobs can be retried")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "training_job_retry_status_invalid",
+            "只有失败或已取消的训练作业才能重试。",
+            next_step="请先选择状态为失败或已取消的作业，再执行重试。",
+        )
     _ensure_retryable(job, "retry")
 
     previous_status = job.status
@@ -1557,9 +1647,19 @@ def reassign_training_job(
 ):
     job = _get_training_job_or_404(db, job_id, current_user)
     if job.status == TRAINING_JOB_STATUS_RUNNING:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="RUNNING job cannot be reassigned directly, cancel it first")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "training_job_reassign_running_forbidden",
+            "正在运行的训练作业不能直接改派。",
+            next_step="请先取消当前作业，等它停下后再改派到其他训练机器。",
+        )
     if job.status == TRAINING_JOB_STATUS_SUCCEEDED:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SUCCEEDED job cannot be reassigned")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "training_job_reassign_succeeded_forbidden",
+            "已经成功完成的训练作业不能改派。",
+            next_step="请直接查看训练结果，或基于当前结果创建新的训练作业。",
+        )
     if job.status in TRAINING_JOB_TERMINAL_STATUSES:
         _ensure_retryable(job, "reassign")
 
@@ -1781,7 +1881,12 @@ def training_worker_heartbeat(
 ):
     worker = db.query(TrainingWorker).filter(TrainingWorker.id == worker_ctx.id).first()
     if not worker:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Training worker not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "training_worker_not_found",
+            "当前训练机器不存在，不能继续上报心跳。",
+            next_step="请重新登记训练机器，或重新执行本机训练机器启动命令。",
+        )
 
     worker.host = payload.host or worker.host
     worker.status = payload.status

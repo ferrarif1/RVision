@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.audit import actions
+from app.core.ui_errors import raise_ui_error
 from app.db.database import get_db
 from app.db.models import InferenceResult, InferenceRun, InferenceTask
 from app.security.dependencies import AuthUser, require_roles
@@ -70,18 +71,38 @@ def _serialize_result_row(row: InferenceResult, run: InferenceRun | None = None)
 def _get_task_or_404(db: Session, task_id: str, current_user: AuthUser) -> InferenceTask:
     task = db.query(InferenceTask).filter(InferenceTask.id == task_id).first()
     if not task:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "task_not_found",
+            "没有找到这个识别任务。",
+            next_step="请确认任务编号是否正确，或回到任务中心重新选择任务。",
+        )
     if is_buyer_user(current_user.roles) and task.buyer_tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "task_not_found",
+            "没有找到这个识别任务。",
+            next_step="请确认你正在查看当前租户下的任务，或联系管理员检查任务归属。",
+        )
     return task
 
 
 def _get_result_or_404(db: Session, result_id: str, current_user: AuthUser) -> InferenceResult:
     result = db.query(InferenceResult).filter(InferenceResult.id == result_id).first()
     if not result:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Result not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "result_not_found",
+            "没有找到这条识别结果。",
+            next_step="请确认结果编号是否正确，或回到结果中心重新查询。",
+        )
     if is_buyer_user(current_user.roles) and result.buyer_tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Result not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "result_not_found",
+            "没有找到这条识别结果。",
+            next_step="请确认你正在查看当前租户下的结果，或联系管理员检查结果归属。",
+        )
     return result
 
 
@@ -90,18 +111,39 @@ def _normalize_review_predictions(predictions: list[ReviewPredictionInput]) -> l
     for index, item in enumerate(predictions):
         label = str(item.label or "").strip()
         if not label:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Prediction #{index + 1} is missing label")
+            raise_ui_error(
+                status.HTTP_400_BAD_REQUEST,
+                "review_prediction_label_missing",
+                f"第 {index + 1} 条修订结果缺少标签。",
+                next_step="请先给这条修订结果补上标签，再保存复核。",
+            )
         text = str(item.text or "").strip() or None
         bbox = item.bbox
         if bbox is not None:
             if len(bbox) != 4:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Prediction #{index + 1} bbox must have 4 integers")
+                raise_ui_error(
+                    status.HTTP_400_BAD_REQUEST,
+                    "review_prediction_bbox_length_invalid",
+                    f"第 {index + 1} 条修订结果的定位框必须包含 4 个整数。",
+                    next_step="请按 x1, y1, x2, y2 的格式填写定位框。",
+                )
             try:
                 x1, y1, x2, y2 = [int(value) for value in bbox]
             except (TypeError, ValueError) as exc:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Prediction #{index + 1} bbox must contain integers") from exc
+                raise_ui_error(
+                    status.HTTP_400_BAD_REQUEST,
+                    "review_prediction_bbox_not_integer",
+                    f"第 {index + 1} 条修订结果的定位框必须是整数。",
+                    next_step="请检查定位框坐标，确保 4 个值都是整数。",
+                    raw_detail=str(exc),
+                )
             if min(x1, y1, x2, y2) < 0 or x2 <= x1 or y2 <= y1:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Prediction #{index + 1} bbox is invalid")
+                raise_ui_error(
+                    status.HTTP_400_BAD_REQUEST,
+                    "review_prediction_bbox_invalid",
+                    f"第 {index + 1} 条修订结果的定位框无效。",
+                    next_step="请确认 x2 大于 x1、y2 大于 y1，并且坐标都不小于 0。",
+                )
             bbox = [x1, y1, x2, y2]
         normalized.append(
             {
@@ -274,14 +316,21 @@ def export_results_as_dataset(
 ):
     asset_purpose = str(payload.asset_purpose or "").strip()
     if asset_purpose not in DATASET_EXPORT_ALLOWED_PURPOSES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="asset_purpose must be training, validation or finetune",
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "result_dataset_purpose_invalid",
+            "数据用途只能是训练、验证或微调。",
+            next_step="请把数据用途改成 training、validation 或 finetune 之一。",
         )
 
     dataset_label = str(payload.dataset_label or "").strip()
     if not dataset_label:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="dataset_label is required")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "result_dataset_label_required",
+            "导出训练数据前需要填写数据集标签。",
+            next_step="请先填写一个容易识别的数据集标签，再继续导出。",
+        )
 
     try:
         exported = export_tasks_to_dataset_asset(
@@ -295,7 +344,13 @@ def export_results_as_dataset(
         db.commit()
     except ValueError as exc:
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "result_dataset_export_invalid",
+            "这批结果暂时不能整理成训练数据。",
+            next_step="请检查任务选择、数据用途和当前结果状态后重试。",
+            raw_detail=str(exc),
+        )
     except Exception:
         db.rollback()
         raise
@@ -398,14 +453,20 @@ def get_result_screenshot(
     db: Session = Depends(get_db),
     current_user: AuthUser = Depends(require_roles(*RESULT_READ_ROLES)),
 ):
-    result = db.query(InferenceResult).filter(InferenceResult.id == result_id).first()
-    if not result:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Result not found")
-    if is_buyer_user(current_user.roles) and result.buyer_tenant_id != current_user.tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Result not found")
+    result = _get_result_or_404(db, result_id, current_user)
     if not result.screenshot_uri:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Screenshot not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "result_screenshot_not_found",
+            "这条结果还没有可查看的截图。",
+            next_step="请先重新执行任务或查看其他带截图的结果。",
+        )
     if not os.path.exists(result.screenshot_uri):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Screenshot file missing")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "result_screenshot_file_missing",
+            "结果截图文件已不存在。",
+            next_step="请重新执行一次任务生成截图，或联系管理员检查资源文件。",
+        )
 
     return FileResponse(result.screenshot_uri, media_type="image/jpeg", filename=f"{result_id}.jpg")

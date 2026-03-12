@@ -85,9 +85,20 @@ def _parse_json_or_none(value: str | None) -> dict[str, Any] | None:
     try:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON metadata field") from exc
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "model_metadata_json_invalid",
+            "填写的 JSON 元信息格式不正确。",
+            next_step="请检查 JSON 语法，例如逗号、引号和大括号是否完整。",
+            raw_detail=str(exc),
+        )
     if not isinstance(parsed, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="JSON metadata field must be an object")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "model_metadata_json_object_required",
+            "JSON 元信息必须是对象格式。",
+            next_step="请使用 {\"key\": \"value\"} 这样的对象格式填写。",
+        )
     return parsed
 
 
@@ -372,14 +383,24 @@ def _latest_release_record(db: Session, model_id: str) -> ModelRelease | None:
 def _get_accessible_model_or_404(db: Session, current_user: AuthUser, model_id: str) -> ModelRecord:
     model = db.query(ModelRecord).filter(ModelRecord.id == model_id).first()
     if not model:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "model_not_found",
+            "模型不存在，或当前账号看不到这版模型。",
+            next_step="请回到模型中心刷新列表后，重新选择模型。",
+        )
 
     if is_platform_user(current_user.roles):
         return model
 
     if is_supplier_user(current_user.roles):
         if model.owner_tenant_id != current_user.tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
+            raise_ui_error(
+                status.HTTP_404_NOT_FOUND,
+                "model_not_found",
+                "模型不存在，或当前账号看不到这版模型。",
+                next_step="请确认你正在查看当前供应商租户下的模型。",
+            )
         return model
 
     if is_buyer_user(current_user.roles):
@@ -394,9 +415,19 @@ def _get_accessible_model_or_404(db: Session, current_user: AuthUser, model_id: 
             targets = release.target_buyers or []
             if not targets or (buyer_code and buyer_code in targets):
                 return model
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "model_not_found",
+            "模型不存在，或当前账号看不到这版模型。",
+            next_step="请确认模型已发布到当前买方范围，或改选一版已发布模型。",
+        )
 
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    raise_ui_error(
+        status.HTTP_403_FORBIDDEN,
+        "model_access_forbidden",
+        "当前账号没有权限访问这版模型。",
+        next_step="请切换到具备模型权限的账号，或回到当前角色默认工作区。",
+    )
 
 
 @router.get("")
@@ -780,11 +811,26 @@ def register_model_package(
     current_user: AuthUser = Depends(require_roles(*MODEL_SUBMIT_ROLES)),
 ):
     if not package.filename.endswith(".zip"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only .zip model package is allowed")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "model_package_zip_required",
+            "这里只接受 ZIP 模型包。",
+            next_step="请重新打包成 .zip 后再上传。",
+        )
     if model_source_type not in {"initial_algorithm", "pretrained_seed", "finetuned_candidate", "delivery_candidate"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid model_source_type")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "model_source_type_invalid",
+            "模型来源填写无效。",
+            next_step="请重新选择初始算法、预训练模型、微调候选或交付候选。",
+        )
     if model_type not in {MODEL_TYPE_ROUTER, MODEL_TYPE_EXPERT}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid model_type")
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "model_type_invalid",
+            "模型类型填写无效。",
+            next_step="请重新选择路由模型或专家模型。",
+        )
 
     package_bytes = package.file.read()
     settings = get_settings()
@@ -792,7 +838,13 @@ def register_model_package(
     try:
         parsed = parse_and_validate_model_package(package_bytes, settings.model_signing_public_key)
     except ModelPackageError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "model_package_invalid",
+            "模型包校验失败，当前包不能继续注册。",
+            next_step="请确认模型包签名、加密和 manifest 都正确后重新上传。",
+            raw_detail=str(exc),
+        )
 
     existing = (
         db.query(ModelRecord)
@@ -803,7 +855,12 @@ def register_model_package(
         .first()
     )
     if existing:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Model code+version already exists")
+        raise_ui_error(
+            status.HTTP_409_CONFLICT,
+            "model_version_conflict",
+            "同一模型编码和版本已经存在。",
+            next_step="请更换一个新的模型版本号后再提交。",
+        )
 
     model_id = str(uuid.uuid4())
     os.makedirs(settings.model_repo_path, exist_ok=True)
