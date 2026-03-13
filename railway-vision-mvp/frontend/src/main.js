@@ -17,6 +17,7 @@ const routes = [
   { name: 'models', pattern: 'models', requiresAuth: true, permission: 'model.view', label: '模型', navPage: 'models' },
   { name: 'training', pattern: 'training', requiresAuth: true, permission: 'training.job.view', label: '训练', navPage: 'training' },
   { name: 'carNumberLabeling', pattern: 'training/car-number-labeling', requiresAuth: true, permission: 'training.job.view', label: '车号文本复核', navPage: 'training', parentPath: 'training' },
+  { name: 'inspectionOcrLabeling', pattern: 'training/inspection-ocr/:task_type', requiresAuth: true, permission: 'training.job.view', label: '巡检文字复核', navPage: 'training', parentPath: 'training' },
   { name: 'pipelines', pattern: 'pipelines', requiresAuth: true, permission: 'model.view', label: '流水线', navPage: 'pipelines' },
   { name: 'tasks', pattern: 'tasks', requiresAuth: true, permission: 'task.create', label: '任务', navPage: 'tasks' },
   { name: 'taskDetail', pattern: 'tasks/:task_id', requiresAuth: true, permission: 'task.create', label: '任务详情', navPage: 'tasks', parentPath: 'tasks' },
@@ -134,6 +135,16 @@ function buildRouteView(route) {
       showBack: true,
       backPath: 'training',
       breadcrumb: [{ label: '训练', path: 'training' }, { label: '车号文本复核' }],
+    };
+  }
+  if (route.name === 'inspectionOcrLabeling') {
+    const taskType = String(route.params?.task_type || '').trim() || 'inspection-ocr';
+    return {
+      label: '巡检文字复核',
+      navPage: 'training',
+      showBack: true,
+      backPath: 'training',
+      breadcrumb: [{ label: '训练', path: 'training' }, { label: taskType }, { label: '巡检文字复核' }],
     };
   }
   if (route.name === 'guide') {

@@ -1,6 +1,8 @@
 import base64
 import csv
 import hashlib
+import importlib.util
+import io
 import json
 import os
 import secrets
@@ -11,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -59,7 +61,19 @@ WORKER_STATUS_PATTERN = "^(ACTIVE|INACTIVE|UNHEALTHY)$"
 WORKER_UPDATE_STATUS_PATTERN = "^(RUNNING|SUCCEEDED|FAILED|CANCELLED)$"
 MODEL_TYPE_PATTERN = "^(router|expert)$"
 REVIEW_STATUS_PATTERN = "^(pending|done|needs_check)$"
-REPO_ROOT = Path(__file__).resolve().parents[3]
+def _detect_repo_root() -> Path:
+    here = Path(__file__).resolve()
+    preferred_markers = ("config", "demo_data")
+    for candidate in here.parents:
+        if all((candidate / marker).exists() for marker in preferred_markers):
+            return candidate
+    for candidate in (Path("/app"), here.parents[2] if len(here.parents) > 2 else here.parent):
+        if all((candidate / marker).exists() for marker in preferred_markers):
+            return candidate
+    return here.parents[2] if len(here.parents) > 2 else here.parent
+
+
+REPO_ROOT = _detect_repo_root()
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 
@@ -156,6 +170,45 @@ class CarNumberTextTrainingJobCreateRequest(CarNumberTextDatasetAssetImportReque
     worker_code: str | None = Field(default=None, description="指定训练机编码 / Optional worker code")
     worker_host: str | None = Field(default=None, description="指定训练机 host / Optional worker host")
     spec: dict[str, Any] = Field(default_factory=dict, description="训练参数覆盖 / Optional spec overrides")
+
+
+class InspectionOcrLabelingReviewRequest(BaseModel):
+    final_text: str | None = Field(default=None, description="人工确认后的文本 / Reviewed OCR text")
+    review_status: str = Field(default="pending", pattern=REVIEW_STATUS_PATTERN, description="复核状态 / pending|done|needs_check")
+    reviewer: str | None = Field(default=None, description="复核人 / Reviewer")
+    notes: str | None = Field(default=None, description="备注 / Notes")
+
+
+class InspectionOcrDatasetExportRequest(BaseModel):
+    allow_suggestions: bool = Field(default=False, description="当 final_text 为空时，是否允许使用 ocr_suggestion / Allow OCR suggestion fallback")
+    allow_proxy_seeded: bool = Field(default=False, description="是否允许带代理回灌真值继续导出 / Allow proxy-seeded truths for cold-start training")
+
+
+class InspectionOcrDatasetAssetImportRequest(BaseModel):
+    allow_suggestions: bool = Field(default=False, description="当 final_text 为空时，是否允许使用 ocr_suggestion / Allow OCR suggestion fallback")
+    allow_proxy_seeded: bool = Field(default=False, description="是否允许带代理回灌真值继续导出 / Allow proxy-seeded truths for cold-start training")
+    use_case: str = Field(default="", description="业务场景；为空时按任务类型自动生成 / Optional use case")
+    intended_model_code: str = Field(default="", description="目标模型编码；为空时默认使用 task_type / Optional intended model code")
+    sensitivity_level: str = Field(default="L2", description="敏感级别 / L1|L2|L3")
+
+
+class InspectionOcrTrainingJobCreateRequest(InspectionOcrDatasetAssetImportRequest):
+    training_kind: str = Field(default="finetune", pattern=TRAINING_KIND_PATTERN, description="训练类型 / train|finetune|evaluate")
+    target_version: str | None = Field(default=None, description="目标版本；为空时自动生成 / Optional explicit target version")
+    base_model_id: str | None = Field(default=None, description="基础模型 ID；为空时自动选择同编码模型 / Optional base model ID")
+    worker_code: str | None = Field(default=None, description="指定训练机编码 / Optional worker code")
+    worker_host: str | None = Field(default=None, description="指定训练机 host / Optional worker host")
+    spec: dict[str, Any] = Field(default_factory=dict, description="训练参数覆盖 / Optional spec overrides")
+
+
+class InspectionOcrBulkImportSummary(BaseModel):
+    total_rows: int = Field(default=0, description="CSV 总行数（不含表头） / Total CSV rows")
+    matched_rows: int = Field(default=0, description="命中 sample_id 的行数 / Rows matched to existing samples")
+    updated_rows: int = Field(default=0, description="成功更新条数 / Updated rows")
+    would_update_rows: int = Field(default=0, description="预检查模式下将会更新的条数 / Rows that would be updated in preview mode")
+    skipped_rows: int = Field(default=0, description="跳过条数 / Skipped rows")
+    missing_sample_ids: list[str] = Field(default_factory=list, description="未命中的 sample_id / Missing sample ids")
+    unchanged_sample_ids: list[str] = Field(default_factory=list, description="内容未变化的 sample_id / Unchanged sample ids")
 
 
 def _job_visible_to_user(job: TrainingJob, current_user: AuthUser) -> bool:
@@ -259,6 +312,116 @@ def _car_number_text_dataset_dir() -> Path:
 
 def _car_number_text_dataset_summary_path() -> Path:
     return _car_number_text_dataset_dir() / "car_number_ocr_text_dataset_summary.json"
+
+
+def _inspection_dataset_blueprints_path() -> Path:
+    return REPO_ROOT / "config" / "railcar_inspection_dataset_blueprints.json"
+
+
+def _load_inspection_dataset_blueprints() -> dict[str, Any]:
+    path = _inspection_dataset_blueprints_path()
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    tasks = payload.get("tasks") or {}
+    return tasks if isinstance(tasks, dict) else {}
+
+
+def _inspection_labeling_dir(task_type: str) -> Path:
+    override = str(os.getenv("INSPECTION_LABELING_BASE_DIR") or "").strip()
+    suffix = f"{task_type}_labeling"
+    candidates = [Path(override) / suffix] if override else []
+    candidates.extend(
+        [
+            REPO_ROOT / "demo_data" / "generated_datasets" / suffix,
+            Path("/app/demo_data/generated_datasets") / suffix,
+        ]
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _inspection_labeling_manifest_path(task_type: str) -> Path:
+    return _inspection_labeling_dir(task_type) / "manifest.csv"
+
+
+def _inspection_labeling_jsonl_path(task_type: str) -> Path:
+    return _inspection_labeling_dir(task_type) / "manifest.jsonl"
+
+
+def _inspection_labeling_summary_path(task_type: str) -> Path:
+    return _inspection_labeling_dir(task_type) / "summary.json"
+
+
+def _inspection_dataset_output_dir(task_type: str) -> Path:
+    override = str(os.getenv("INSPECTION_DATASET_BASE_DIR") or "").strip()
+    suffix = f"{task_type}_dataset"
+    candidates = [Path(override) / suffix] if override else []
+    candidates.extend(
+        [
+            REPO_ROOT / "demo_data" / "generated_datasets" / suffix,
+            Path("/app/demo_data/generated_datasets") / suffix,
+        ]
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _load_inspection_labeling_rows(task_type: str) -> list[dict[str, str]]:
+    manifest_path = _inspection_labeling_manifest_path(task_type)
+    if not manifest_path.exists():
+        return []
+    with manifest_path.open("r", encoding="utf-8", newline="") as handle:
+        return [dict(row) for row in csv.DictReader(handle)]
+
+
+def _resolve_image_path(row: dict[str, str], *, manifest_path: Path) -> Path | None:
+    crop_rel = str(row.get("crop_file") or "").strip()
+    if crop_rel:
+        crop_path = (manifest_path.parent / crop_rel).resolve()
+        if crop_path.exists() and crop_path.is_file():
+            return crop_path
+    source_rel = str(row.get("source_file") or "").strip()
+    if source_rel:
+        source_path = (manifest_path.parent / source_rel).resolve()
+        if source_path.exists() and source_path.is_file():
+            return source_path
+        alt_path = (REPO_ROOT / source_rel).resolve()
+        if alt_path.exists() and alt_path.is_file():
+            return alt_path
+    return None
+
+
+def _get_inspection_blueprint_or_404(task_type: str) -> dict[str, Any]:
+    blueprints = _load_inspection_dataset_blueprints()
+    blueprint = blueprints.get(task_type)
+    if not isinstance(blueprint, dict):
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "inspection_task_not_found",
+            "巡检任务类型不存在，或当前工作区还没初始化。",
+            next_step="请回到训练中心确认任务类型，或先生成对应的数据工作区模板。",
+        )
+    return blueprint
+
+
+def _get_inspection_ocr_blueprint_or_404(task_type: str) -> dict[str, Any]:
+    blueprint = _get_inspection_blueprint_or_404(task_type)
+    if str(blueprint.get("dataset_kind") or "").strip() != "ocr_text":
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "inspection_task_not_ocr_text",
+            "当前任务不是文字识别工作区，不能进入文字复核。",
+            next_step="请改用定检标记识别或性能标记识别这类文字识别任务。",
+        )
+    return blueprint
 
 
 def _resolve_repo_relative_path(path_value: str | Path) -> Path:
@@ -379,6 +542,86 @@ def _rewrite_car_number_labeling_files(rows: list[dict[str, str]]) -> None:
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _rewrite_inspection_labeling_files(task_type: str, rows: list[dict[str, str]]) -> None:
+    blueprint = _get_inspection_blueprint_or_404(task_type)
+    if not rows:
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "inspection_labeling_manifest_empty",
+            "巡检任务复核清单为空。",
+            next_step="请先准备待复核样本，再继续保存或导出。",
+        )
+    manifest_path = _inspection_labeling_manifest_path(task_type)
+    jsonl_path = _inspection_labeling_jsonl_path(task_type)
+    summary_path = _inspection_labeling_summary_path(task_type)
+    fieldnames = list(rows[0].keys())
+    with manifest_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    jsonl_path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    summary = {}
+    if summary_path.exists():
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            summary = {}
+    review_status_counts: dict[str, int] = {}
+    final_text_rows = 0
+    suggestion_rows = 0
+    high_quality_suggestion_rows = 0
+    crop_ready_rows = 0
+    split_counts: dict[str, int] = {}
+    for row in rows:
+        review_key = str(row.get("review_status") or "pending").strip() or "pending"
+        review_status_counts[review_key] = review_status_counts.get(review_key, 0) + 1
+        if str(row.get("final_text") or "").strip():
+            final_text_rows += 1
+        if str(row.get("ocr_suggestion") or "").strip():
+            suggestion_rows += 1
+            if float(row.get("ocr_suggestion_quality") or 0.0) >= 1.0:
+                high_quality_suggestion_rows += 1
+        if str(row.get("crop_file") or "").strip():
+            crop_ready_rows += 1
+        split_key = str(row.get("split_hint") or "").strip() or "unassigned"
+        split_counts[split_key] = split_counts.get(split_key, 0) + 1
+    summary.update(
+        {
+            "status": "ok",
+            "generated_at": datetime.utcnow().isoformat(),
+            "task_type": task_type,
+            "task_label": str(blueprint.get("label") or task_type),
+            "dataset_kind": str(blueprint.get("dataset_kind") or ""),
+            "dataset_key_prefix": str(blueprint.get("dataset_key_prefix") or ""),
+            "annotation_format": str(blueprint.get("annotation_format") or ""),
+            "sample_target_min": int(blueprint.get("sample_target_min") or 0),
+            "sample_target_recommended": int(blueprint.get("sample_target_recommended") or 0),
+            "structured_fields": list(blueprint.get("structured_fields") or []),
+            "capture_profile": blueprint.get("capture_profile") or {},
+            "qa_targets": blueprint.get("qa_targets") or {},
+            "review_status_values": list(blueprint.get("review_status_values") or []),
+            "workspace_dir": _relative_repo_path(_inspection_labeling_dir(task_type)),
+            "manifest_csv": _relative_repo_path(manifest_path),
+            "manifest_jsonl": _relative_repo_path(jsonl_path),
+            "capture_plan_csv": _relative_repo_path(_inspection_labeling_dir(task_type) / "capture_plan.csv"),
+            "crops_dir": _relative_repo_path(_inspection_labeling_dir(task_type) / "crops"),
+            "row_count": len(rows),
+            "crop_ready_rows": crop_ready_rows,
+            "suggestion_rows": suggestion_rows,
+            "review_status_counts": review_status_counts,
+            "final_text_rows": final_text_rows,
+            "ready_rows": final_text_rows,
+            "ready_ratio": round((final_text_rows / len(rows)), 4) if rows else 0.0,
+            "split_counts": split_counts,
+            "notes": list(blueprint.get("notes") or []),
+        }
+    )
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
 def _labeling_item_summary(row: dict[str, str]) -> dict[str, Any]:
     final_text = str(row.get("final_text") or "").strip()
     suggestion = str(row.get("ocr_suggestion") or "").strip()
@@ -412,6 +655,77 @@ def _labeling_item_summary(row: dict[str, str]) -> dict[str, Any]:
     }
 
 
+def _inspection_ocr_labeling_item_summary(task_type: str, row: dict[str, str]) -> dict[str, Any]:
+    blueprint = _get_inspection_ocr_blueprint_or_404(task_type)
+    final_text = str(row.get("final_text") or "").strip().upper()
+    suggestion = str(row.get("ocr_suggestion") or "").strip().upper()
+    reviewer = str(row.get("reviewer") or "").strip()
+    proxy_seeded = reviewer == "proxy_from_car_number_truth"
+    if proxy_seeded:
+        review_origin_label = "代理回灌"
+    elif reviewer:
+        review_origin_label = "人工复核"
+    else:
+        review_origin_label = "尚未确认"
+    return {
+        "sample_id": str(row.get("sample_id") or "").strip(),
+        "task_type": task_type,
+        "task_label": str(blueprint.get("label") or task_type),
+        "split_hint": str(row.get("split_hint") or "").strip(),
+        "source_file": str(row.get("source_file") or "").strip(),
+        "crop_file": str(row.get("crop_file") or "").strip(),
+        "label_class": str(row.get("label_class") or "").strip(),
+        "review_status": str(row.get("review_status") or "pending").strip() or "pending",
+        "reviewer": reviewer,
+        "proxy_seeded": proxy_seeded,
+        "review_origin_label": review_origin_label,
+        "notes": str(row.get("notes") or "").strip(),
+        "final_text": final_text,
+        "ocr_suggestion": suggestion,
+        "ocr_suggestion_confidence": float(row.get("ocr_suggestion_confidence") or 0) if str(row.get("ocr_suggestion_confidence") or "").strip() else None,
+        "ocr_suggestion_quality": float(row.get("ocr_suggestion_quality") or 0) if str(row.get("ocr_suggestion_quality") or "").strip() else None,
+        "ocr_suggestion_engine": str(row.get("ocr_suggestion_engine") or "").strip(),
+        "has_final_text": bool(final_text),
+        "has_suggestion": bool(suggestion),
+        "bbox": [
+            int(row.get("bbox_x1") or 0),
+            int(row.get("bbox_y1") or 0),
+            int(row.get("bbox_x2") or 0),
+            int(row.get("bbox_y2") or 0),
+        ],
+    }
+
+
+def _inspection_suggestion_priority_label(item: dict[str, Any]) -> str:
+    quality = item.get("ocr_suggestion_quality")
+    if quality is None:
+        return "无建议"
+    if float(quality) >= 1.0:
+        return "高质量建议"
+    if float(quality) >= 0.8:
+        return "中质量建议"
+    return "低质量建议"
+
+
+def _inspection_item_sort_key(item: dict[str, Any]) -> tuple:
+    review_status = str(item.get("review_status") or "")
+    proxy_seeded = bool(item.get("proxy_seeded"))
+    has_final = bool(item.get("has_final_text"))
+    quality = float(item.get("ocr_suggestion_quality") or 0.0)
+    has_suggestion = bool(item.get("has_suggestion"))
+    split = str(item.get("split_hint") or "")
+    status_rank = {"needs_check": 0, "pending": 1, "done": 2}.get(review_status, 3)
+    split_rank = {"validation": 0, "train": 1}.get(split, 2)
+    return (
+        status_rank,
+        0 if proxy_seeded else 1,
+        0 if (not has_final and has_suggestion) else 1,
+        -quality,
+        split_rank,
+        str(item.get("sample_id") or ""),
+    )
+
+
 def _resolve_car_number_text(row: dict[str, str], *, allow_suggestions: bool) -> tuple[str, str]:
     final_text = str(row.get("final_text") or "").strip().upper()
     if final_text and validate_car_number_text(final_text)["valid"]:
@@ -421,6 +735,552 @@ def _resolve_car_number_text(row: dict[str, str], *, allow_suggestions: bool) ->
         if suggestion and validate_car_number_text(suggestion)["valid"]:
             return validate_car_number_text(suggestion)["normalized_text"], "ocr_suggestion"
     return "", ""
+
+
+def _resolve_inspection_ocr_text(row: dict[str, str], *, allow_suggestions: bool) -> tuple[str, str]:
+    final_text = str(row.get("final_text") or "").strip().upper()
+    if final_text:
+        return final_text, "final_text"
+    if allow_suggestions:
+        suggestion = str(row.get("ocr_suggestion") or "").strip().upper()
+        if suggestion:
+            return suggestion, "ocr_suggestion"
+    return "", ""
+
+
+def _inspection_crop_quality_score(task_type: str, row: dict[str, str]) -> float:
+    crop_rel = str(row.get("crop_file") or "").strip()
+    if not crop_rel:
+        return 0.0
+    crop_path = _inspection_labeling_dir(task_type) / crop_rel
+    if not crop_path.exists() or not crop_path.is_file():
+        return 0.0
+    width = max(int(row.get("bbox_x2") or 0) - int(row.get("bbox_x1") or 0), 0)
+    height = max(int(row.get("bbox_y2") or 0) - int(row.get("bbox_y1") or 0), 0)
+    area_score = min((width * height) / 100000.0, 8.0)
+    width_score = min(width / 220.0, 2.5)
+    height_score = min(height / 90.0, 2.0)
+    split_bonus = 0.15 if str(row.get("split_hint") or "").strip() == "validation" else 0.0
+    return round(area_score + width_score + height_score + split_bonus, 4)
+
+
+def _inspection_starter_samples(task_type: str, rows: list[dict[str, str]], *, limit: int = 8) -> list[dict[str, Any]]:
+    ranked: list[tuple[float, dict[str, str]]] = []
+    for row in rows:
+        if str(row.get("final_text") or "").strip():
+            continue
+        if str(row.get("review_status") or "").strip() == "done":
+            continue
+        score = _inspection_crop_quality_score(task_type, row)
+        if score <= 0:
+            continue
+        ranked.append((score, row))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    starters = []
+    for score, row in ranked[:limit]:
+        starters.append(
+            {
+                "sample_id": str(row.get("sample_id") or "").strip(),
+                "split_hint": str(row.get("split_hint") or "").strip(),
+                "source_file": str(row.get("source_file") or "").strip(),
+                "crop_file": str(row.get("crop_file") or "").strip(),
+                "quality_score": score,
+                "review_status": str(row.get("review_status") or "pending").strip() or "pending",
+            }
+        )
+    return starters
+
+
+def _inspection_proxy_replacement_samples(task_type: str, rows: list[dict[str, str]], *, limit: int = 8) -> list[dict[str, Any]]:
+    ranked: list[tuple[float, dict[str, str]]] = []
+    for row in rows:
+        reviewer = str(row.get("reviewer") or "").strip()
+        if reviewer != "proxy_from_car_number_truth":
+            continue
+        if not str(row.get("final_text") or "").strip():
+            continue
+        score = _inspection_crop_quality_score(task_type, row)
+        ranked.append((score, row))
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    samples = []
+    for score, row in ranked[:limit]:
+        samples.append(
+            {
+                "sample_id": str(row.get("sample_id") or "").strip(),
+                "split_hint": str(row.get("split_hint") or "").strip(),
+                "source_file": str(row.get("source_file") or "").strip(),
+                "crop_file": str(row.get("crop_file") or "").strip(),
+                "quality_score": score,
+                "review_status": str(row.get("review_status") or "pending").strip() or "pending",
+                "review_origin_label": "代理回灌",
+            }
+        )
+    return samples
+
+
+def _inspection_proxy_seeded_rows(task_type: str) -> list[dict[str, str]]:
+    rows = _load_inspection_labeling_rows(task_type)
+    return [
+        row
+        for row in rows
+        if str(row.get("reviewer") or "").strip() == "proxy_from_car_number_truth"
+        and str(row.get("final_text") or "").strip()
+    ]
+
+
+def _inspection_high_quality_suggestion_candidate_rows(task_type: str) -> list[dict[str, str]]:
+    rows = _load_inspection_labeling_rows(task_type)
+    candidates: list[tuple[float, dict[str, str]]] = []
+    for row in rows:
+        if str(row.get("final_text") or "").strip():
+            continue
+        suggestion = str(row.get("ocr_suggestion") or "").strip()
+        if not suggestion:
+            continue
+        quality = float(row.get("ocr_suggestion_quality") or 0.0)
+        if quality < 1.0:
+            continue
+        score = quality * 100.0 + _inspection_crop_quality_score(task_type, row)
+        candidates.append((score, row))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return [row for _, row in candidates]
+
+
+def _inspection_high_quality_suggestion_samples(task_type: str, rows: list[dict[str, str]], *, limit: int = 8) -> list[dict[str, Any]]:
+    sample_rows = _inspection_high_quality_suggestion_candidate_rows(task_type)
+    samples: list[dict[str, Any]] = []
+    for row in sample_rows[:limit]:
+        samples.append(
+            {
+                "sample_id": str(row.get("sample_id") or "").strip(),
+                "split_hint": str(row.get("split_hint") or "").strip(),
+                "source_file": str(row.get("source_file") or "").strip(),
+                "crop_file": str(row.get("crop_file") or "").strip(),
+                "ocr_suggestion": str(row.get("ocr_suggestion") or "").strip(),
+                "ocr_suggestion_quality": float(row.get("ocr_suggestion_quality") or 0.0),
+                "ocr_suggestion_confidence": float(row.get("ocr_suggestion_confidence") or 0.0),
+                "quality_score": _inspection_crop_quality_score(task_type, row),
+                "review_status": str(row.get("review_status") or "pending").strip() or "pending",
+                "review_origin_label": "高质量建议",
+            }
+        )
+    return samples
+
+
+def _inspection_ocr_training_readiness(task_type: str, rows: list[dict[str, str]]) -> dict[str, Any]:
+    reviewed_rows = [row for row in rows if str(row.get("final_text") or "").strip()]
+    clean_rows = [
+        row for row in reviewed_rows
+        if str(row.get("reviewer") or "").strip()
+        and str(row.get("reviewer") or "").strip() != "proxy_from_car_number_truth"
+    ]
+    proxy_rows = [
+        row for row in reviewed_rows
+        if str(row.get("reviewer") or "").strip() == "proxy_from_car_number_truth"
+    ]
+    clean_train = sum(1 for row in clean_rows if str(row.get("split_hint") or "").strip() == "train")
+    clean_validation = sum(1 for row in clean_rows if str(row.get("split_hint") or "").strip() == "validation")
+    all_train = sum(1 for row in reviewed_rows if str(row.get("split_hint") or "").strip() == "train")
+    all_validation = sum(1 for row in reviewed_rows if str(row.get("split_hint") or "").strip() == "validation")
+    cold_start_ready = len(reviewed_rows) >= 2 and all_train > 0 and all_validation > 0
+    normal_ready = len(proxy_rows) == 0 and len(clean_rows) >= 2 and clean_train > 0 and clean_validation > 0
+    blockers: list[str] = []
+    if proxy_rows:
+        blockers.append("proxy_truth_present")
+    if len(clean_rows) < 2:
+        blockers.append("manual_truth_not_enough")
+    if clean_train == 0:
+        blockers.append("manual_train_split_missing")
+    if clean_validation == 0:
+        blockers.append("manual_validation_split_missing")
+    if normal_ready:
+        status = "ready"
+        label = "可正常训练"
+        next_step = "可以直接导出训练包、注册训练资产，或继续创建训练作业。"
+    elif cold_start_ready:
+        status = "cold_start_only"
+        label = "仅冷启动可训练"
+        next_step = "当前可用于冷启动验证，但建议先替换代理回灌真值，再进入正式训练。"
+    else:
+        status = "blocked"
+        label = "仍不可导出"
+        if proxy_rows:
+            next_step = "请先优先替换代理回灌样本，并确保 train 和 validation 都有人工确认真值。"
+        else:
+            next_step = "请继续补人工确认真值，并确保 train 和 validation 都至少各有 1 条。"
+    replacement_progress_pct = round((len(clean_rows) / (len(clean_rows) + len(proxy_rows))) * 100, 1) if (len(clean_rows) + len(proxy_rows)) else 0.0
+    suggestion_rows = [row for row in rows if str(row.get("ocr_suggestion") or "").strip()]
+    high_quality_suggestion_rows = [
+        row
+        for row in suggestion_rows
+        if float(row.get("ocr_suggestion_quality") or 0.0) >= 1.0
+    ]
+    high_quality_review_candidates = _inspection_high_quality_suggestion_candidate_rows(task_type)
+    return {
+        "status": status,
+        "label": label,
+        "normal_export_ready": normal_ready,
+        "cold_start_export_ready": cold_start_ready,
+        "next_step": next_step,
+        "blockers": blockers,
+        "manual_reviewed_rows": len(clean_rows),
+        "proxy_seeded_rows": len(proxy_rows),
+        "clean_train_rows": clean_train,
+        "clean_validation_rows": clean_validation,
+        "reviewed_train_rows": all_train,
+        "reviewed_validation_rows": all_validation,
+        "replacement_progress_pct": replacement_progress_pct,
+        "remaining_proxy_rows": len(proxy_rows),
+        "suggestion_rows": len(suggestion_rows),
+        "high_quality_suggestion_rows": len(high_quality_suggestion_rows),
+        "high_quality_review_candidate_rows": len(high_quality_review_candidates),
+    }
+
+
+def _render_inspection_proxy_queue_csv(task_type: str, rows: list[dict[str, str]]) -> str:
+    header = [
+        "sample_id",
+        "task_type",
+        "split_hint",
+        "source_file",
+        "crop_file",
+        "final_text",
+        "review_status",
+        "reviewer",
+        "notes",
+        "quality_score",
+    ]
+    sink = io.StringIO()
+    writer = csv.DictWriter(sink, fieldnames=header)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(
+            {
+                "sample_id": str(row.get("sample_id") or "").strip(),
+                "task_type": task_type,
+                "split_hint": str(row.get("split_hint") or "").strip(),
+                "source_file": str(row.get("source_file") or "").strip(),
+                "crop_file": str(row.get("crop_file") or "").strip(),
+                "final_text": str(row.get("final_text") or "").strip(),
+                "review_status": str(row.get("review_status") or "").strip(),
+                "reviewer": str(row.get("reviewer") or "").strip(),
+                "notes": str(row.get("notes") or "").strip(),
+                "quality_score": str(_inspection_crop_quality_score(task_type, row)),
+            }
+        )
+    return sink.getvalue()
+
+
+def _render_inspection_high_quality_queue_csv(task_type: str, rows: list[dict[str, str]]) -> str:
+    header = [
+        "sample_id",
+        "task_type",
+        "split_hint",
+        "source_file",
+        "crop_file",
+        "ocr_suggestion",
+        "ocr_suggestion_quality",
+        "ocr_suggestion_confidence",
+        "final_text",
+        "review_status",
+        "reviewer",
+        "notes",
+        "quality_score",
+    ]
+    sink = io.StringIO()
+    writer = csv.DictWriter(sink, fieldnames=header)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(
+            {
+                "sample_id": str(row.get("sample_id") or "").strip(),
+                "task_type": task_type,
+                "split_hint": str(row.get("split_hint") or "").strip(),
+                "source_file": str(row.get("source_file") or "").strip(),
+                "crop_file": str(row.get("crop_file") or "").strip(),
+                "ocr_suggestion": str(row.get("ocr_suggestion") or "").strip(),
+                "ocr_suggestion_quality": str(row.get("ocr_suggestion_quality") or "").strip(),
+                "ocr_suggestion_confidence": str(row.get("ocr_suggestion_confidence") or "").strip(),
+                "final_text": str(row.get("final_text") or "").strip(),
+                "review_status": str(row.get("review_status") or "").strip(),
+                "reviewer": str(row.get("reviewer") or "").strip(),
+                "notes": str(row.get("notes") or "").strip(),
+                "quality_score": str(_inspection_crop_quality_score(task_type, row)),
+            }
+        )
+    return sink.getvalue()
+
+
+def _build_inspection_proxy_review_pack(task_type: str, rows: list[dict[str, str]]) -> bytes:
+    payload = io.BytesIO()
+    csv_text = _render_inspection_proxy_queue_csv(task_type, rows)
+    readme = "\n".join(
+        [
+            f"Inspection OCR proxy replacement pack: {task_type}",
+            "",
+            "包含内容：",
+            "- proxy_replacement_queue.csv：待替换代理真值队列",
+            "- crops/：当前裁剪图",
+            "- sources/：对应原图（若存在）",
+            "",
+            "建议流程：",
+            "1. 打开 proxy_replacement_queue.csv",
+            "2. 结合 crops/ 和 sources/ 人工确认真实文本",
+            "3. 修改 final_text / review_status / reviewer / notes",
+            "4. 在系统里使用“导入离线复核 CSV”批量导回",
+            "",
+            "注意：",
+            "- 当前导出的 final_text 可能仍是代理回灌文本，只能作为参考",
+            "- 未看清时请改为 needs_check，不要保留错误真值",
+        ]
+    )
+    with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("proxy_replacement_queue.csv", csv_text)
+        zf.writestr("README.txt", readme)
+        manifest_path = _inspection_labeling_manifest_path(task_type)
+        for row in rows:
+            sample_id = str(row.get("sample_id") or "").strip() or secrets.token_hex(4)
+            crop_path = _resolve_image_path({"crop_file": row.get("crop_file")}, manifest_path=manifest_path)
+            if crop_path and crop_path.exists() and crop_path.is_file():
+                ext = crop_path.suffix or ".jpg"
+                zf.write(crop_path, arcname=f"crops/{sample_id}{ext}")
+            source_path = _resolve_image_path({"source_file": row.get("source_file")}, manifest_path=manifest_path)
+            if source_path and source_path.exists() and source_path.is_file():
+                ext = source_path.suffix or ".jpg"
+                zf.write(source_path, arcname=f"sources/{sample_id}{ext}")
+    return payload.getvalue()
+
+
+def _build_inspection_high_quality_review_pack(task_type: str, rows: list[dict[str, str]]) -> bytes:
+    payload = io.BytesIO()
+    csv_text = _render_inspection_high_quality_queue_csv(task_type, rows)
+    readme = "\n".join(
+        [
+            f"Inspection OCR high-quality suggestion pack: {task_type}",
+            "",
+            "包含内容：",
+            "- high_quality_suggestion_queue.csv：高质量建议待确认队列",
+            "- crops/：当前裁剪图",
+            "- sources/：对应原图（若存在）",
+            "",
+            "建议流程：",
+            "1. 优先浏览这批高质量建议样本",
+            "2. 结合 crops/ 和 sources/ 判断 OCR 建议是否可直接采纳",
+            "3. 在 CSV 中填写或修正 final_text / review_status / reviewer / notes",
+            "4. 回到系统使用“导入离线复核 CSV”批量导回",
+            "",
+            "注意：",
+            "- 高质量建议仍然只是建议，不等于真值",
+            "- 看不清时请标记 needs_check，不要直接保存为 done",
+        ]
+    )
+    with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("high_quality_suggestion_queue.csv", csv_text)
+        zf.writestr("README.txt", readme)
+        manifest_path = _inspection_labeling_manifest_path(task_type)
+        for row in rows:
+            sample_id = str(row.get("sample_id") or "").strip() or secrets.token_hex(4)
+            crop_path = _resolve_image_path({"crop_file": row.get("crop_file")}, manifest_path=manifest_path)
+            if crop_path and crop_path.exists() and crop_path.is_file():
+                ext = crop_path.suffix or ".jpg"
+                zf.write(crop_path, arcname=f"crops/{sample_id}{ext}")
+            source_path = _resolve_image_path({"source_file": row.get("source_file")}, manifest_path=manifest_path)
+            if source_path and source_path.exists() and source_path.is_file():
+                ext = source_path.suffix or ".jpg"
+                zf.write(source_path, arcname=f"sources/{sample_id}{ext}")
+    return payload.getvalue()
+
+
+def _summarize_inspection_ocr_import(
+    task_type: str,
+    *,
+    text: str,
+    importer: str,
+    apply_updates: bool,
+) -> InspectionOcrBulkImportSummary:
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames or "sample_id" not in reader.fieldnames:
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "inspection_ocr_import_missing_columns",
+            "导入 CSV 缺少必要列 sample_id。",
+            next_step="请使用系统导出的代理替换队列表头，至少保留 sample_id 和 final_text。",
+        )
+    rows = _load_inspection_labeling_rows(task_type)
+    if not rows:
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "inspection_ocr_import_workspace_empty",
+            "当前工作区没有可更新的样本。",
+            next_step="请先生成巡检 OCR 工作区，再导入复核 CSV。",
+        )
+    row_index = {str(row.get("sample_id") or "").strip(): idx for idx, row in enumerate(rows)}
+    total_rows = 0
+    matched_rows = 0
+    updated_rows = 0
+    would_update_rows = 0
+    skipped_rows = 0
+    missing_sample_ids: list[str] = []
+    unchanged_sample_ids: list[str] = []
+    changed = False
+    for incoming in reader:
+        total_rows += 1
+        sample_id = str(incoming.get("sample_id") or "").strip()
+        if not sample_id:
+            skipped_rows += 1
+            continue
+        idx = row_index.get(sample_id)
+        if idx is None:
+            missing_sample_ids.append(sample_id)
+            continue
+        matched_rows += 1
+        final_text = str(incoming.get("final_text") or "").strip().upper()
+        review_status = str(incoming.get("review_status") or "").strip() or ("done" if final_text else "pending")
+        reviewer = str(incoming.get("reviewer") or "").strip() or importer
+        notes = str(incoming.get("notes") or "").strip()
+        current = dict(rows[idx])
+        next_row = dict(current)
+        next_row["final_text"] = final_text
+        next_row["review_status"] = review_status
+        next_row["reviewer"] = reviewer
+        next_row["notes"] = notes
+        if next_row == current:
+            unchanged_sample_ids.append(sample_id)
+            skipped_rows += 1
+            continue
+        if apply_updates:
+            rows[idx] = next_row
+            updated_rows += 1
+            changed = True
+        else:
+            would_update_rows += 1
+    if apply_updates and changed:
+        _rewrite_inspection_labeling_files(task_type, rows)
+    return InspectionOcrBulkImportSummary(
+        total_rows=total_rows,
+        matched_rows=matched_rows,
+        updated_rows=updated_rows,
+        would_update_rows=would_update_rows,
+        skipped_rows=skipped_rows,
+        missing_sample_ids=missing_sample_ids[:20],
+        unchanged_sample_ids=unchanged_sample_ids[:20],
+    )
+
+
+_INSPECTION_DATASET_MODULE: Any | None = None
+
+
+def _load_inspection_dataset_builder_module() -> Any:
+    global _INSPECTION_DATASET_MODULE
+    if _INSPECTION_DATASET_MODULE is not None:
+        return _INSPECTION_DATASET_MODULE
+    script_path = REPO_ROOT / "docker" / "scripts" / "build_inspection_task_dataset.py"
+    spec = importlib.util.spec_from_file_location("vistral_build_inspection_task_dataset", script_path)
+    if spec is None or spec.loader is None:
+        raise_ui_error(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "inspection_dataset_builder_unavailable",
+            "巡检任务训练包生成器不可用。",
+            next_step="请检查 docker/scripts/build_inspection_task_dataset.py 是否存在，再重试。",
+        )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _INSPECTION_DATASET_MODULE = module
+    return module
+
+
+def _export_inspection_ocr_dataset(task_type: str, *, allow_suggestions: bool) -> dict[str, Any]:
+    _get_inspection_ocr_blueprint_or_404(task_type)
+    module = _load_inspection_dataset_builder_module()
+    manifest_path = _inspection_labeling_manifest_path(task_type)
+    output_dir = _inspection_dataset_output_dir(task_type)
+    try:
+        return module.build_bundles(
+            task_type=task_type,
+            manifest_path=manifest_path,
+            output_dir=output_dir,
+            allow_suggestions=allow_suggestions,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if "need at least 2 reviewed rows" in detail:
+            raise_ui_error(
+                status.HTTP_400_BAD_REQUEST,
+                "inspection_ocr_dataset_not_enough_rows",
+                "可用于导出训练数据的已确认文本样本还不够。",
+                next_step="请先继续复核更多文本，至少准备训练集和验证集的有效样本。",
+                raw_detail=detail,
+            )
+        if "both train and validation rows are required" in detail:
+            raise_ui_error(
+                status.HTTP_400_BAD_REQUEST,
+                "inspection_ocr_dataset_split_missing",
+                "导出训练包时需要同时具备训练集和验证集样本。",
+                next_step="请确认 manifest 里同时有 train 和 validation 两种切分后再导出。",
+                raw_detail=detail,
+            )
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "inspection_ocr_dataset_export_failed",
+            "巡检文字训练包导出失败。",
+            next_step="请检查复核文本、切分字段和 crop 文件后再重试。",
+            raw_detail=detail,
+        )
+
+
+def _ensure_inspection_proxy_seeded_allowed(task_type: str, *, allow_proxy_seeded: bool) -> None:
+    if allow_proxy_seeded:
+        return
+    rows = _load_inspection_labeling_rows(task_type)
+    proxy_rows = [
+        row
+        for row in rows
+        if str(row.get("reviewer") or "").strip() == "proxy_from_car_number_truth"
+        and str(row.get("final_text") or "").strip()
+    ]
+    if not proxy_rows:
+        return
+    raise_ui_error(
+        status.HTTP_400_BAD_REQUEST,
+        "inspection_ocr_proxy_truth_present",
+        "当前工作区里还有代理回灌真值，默认不建议直接导出训练包。",
+        next_step="请先在巡检文字复核页使用“仅看代理回灌 / 优先替换代理真值”把这些样本替换成真实标记文本；如果只是做冷启动验证，再勾选“允许带代理真值继续训练”。",
+        raw_detail={
+            "task_type": task_type,
+            "proxy_seeded_rows": len(proxy_rows),
+            "sample_ids": [str(row.get("sample_id") or "").strip() for row in proxy_rows[:8]],
+        },
+    )
+
+
+def _default_inspection_ocr_training_spec(task_type: str, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    trainer_by_task = {
+        "inspection_mark_ocr": "inspection_mark_ocr_local",
+        "performance_mark_ocr": "performance_mark_ocr_local",
+    }
+    base = {
+        "trainer": trainer_by_task.get(task_type, "inspection_ocr_local"),
+        "epochs": 6,
+        "learning_rate": 0.0005,
+        "batch_size": 12,
+        "image_size": [224, 96],
+        "text_head": "ctc",
+        "augmentation": {
+            "motion_blur": 0.12,
+            "brightness": 0.18,
+            "contrast": 0.18,
+            "perspective": 0.1,
+        },
+    }
+    if not isinstance(overrides, dict):
+        return base
+    merged = dict(base)
+    for key, value in overrides.items():
+        if key == "augmentation" and isinstance(value, dict) and isinstance(merged.get("augmentation"), dict):
+            merged["augmentation"] = {**merged["augmentation"], **value}
+        else:
+            merged[key] = value
+    return merged
 
 
 def _write_car_number_text_bundle(
@@ -807,6 +1667,168 @@ def _register_car_number_text_dataset_asset(
     }
 
 
+def _register_inspection_ocr_dataset_asset(
+    *,
+    task_type: str,
+    task_label: str,
+    db: Session,
+    current_user: AuthUser,
+    request: Request,
+    bundle_summary: dict[str, Any],
+    export_summary: dict[str, Any],
+    asset_purpose: str,
+    use_case: str,
+    intended_model_code: str,
+    sensitivity_level: str,
+) -> dict[str, Any]:
+    source_bundle = _resolve_repo_relative_path(str(bundle_summary.get("zip_path") or ""))
+    if not source_bundle.exists() or not source_bundle.is_file():
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "inspection_ocr_dataset_bundle_not_found",
+            "刚导出的巡检文字数据包文件不存在。",
+            next_step="请重新执行一次导出训练数据，确认导出完成后再继续。",
+        )
+    if sensitivity_level not in {"L1", "L2", "L3"}:
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "sensitivity_level_invalid",
+            "敏感等级无效。",
+            next_step="请把敏感等级改成 L1、L2 或 L3 之一。",
+        )
+
+    settings = get_settings()
+    os.makedirs(settings.asset_repo_path, exist_ok=True)
+    asset_id = str(uuid.uuid4())
+    ext = source_bundle.suffix or ".zip"
+    target_path = Path(settings.asset_repo_path) / f"{asset_id}{ext}"
+    checksum, file_size = _copy_file_with_checksum(source_bundle, target_path)
+    dataset_label = str(bundle_summary.get("dataset_label") or f"{task_type}-{asset_purpose}").strip()
+    source_uri = f"vistral://training/inspection-ocr/{task_type}/export-dataset/{asset_purpose}"
+    meta = {
+        "size": file_size,
+        "extension": ext,
+        "asset_purpose": asset_purpose,
+        "dataset_label": dataset_label,
+        "use_case": use_case,
+        "intended_model_code": intended_model_code,
+        "task_type": task_type,
+        "task_label": task_label,
+        "label_sources": export_summary.get("label_sources") or {},
+        "reviewer_counts": export_summary.get("reviewer_counts") or {},
+        "proxy_seeded_rows": int(export_summary.get("proxy_seeded_rows") or 0),
+        "generated_from": f"{task_type}_labeling_review",
+        "accepted_rows": export_summary.get("accepted_rows"),
+        "split": bundle_summary.get("split"),
+        **_inspect_local_dataset_archive(target_path),
+    }
+    buyer_tenant_id = current_user.tenant_id if is_buyer_user(current_user.roles) else None
+    reusable_asset = _find_reusable_local_dataset_asset(
+        db,
+        checksum=checksum,
+        file_name=source_bundle.name,
+        sensitivity_level=sensitivity_level,
+        buyer_tenant_id=buyer_tenant_id,
+        source_uri=source_uri,
+        meta=meta,
+    )
+    if reusable_asset:
+        if target_path.exists():
+            target_path.unlink()
+        asset = reusable_asset
+        reused = True
+    else:
+        asset = DataAsset(
+            id=asset_id,
+            file_name=source_bundle.name,
+            asset_type="archive",
+            storage_uri=str(target_path),
+            source_uri=source_uri,
+            sensitivity_level=sensitivity_level,
+            checksum=checksum,
+            buyer_tenant_id=buyer_tenant_id,
+            meta=meta,
+            uploaded_by=current_user.id,
+        )
+        db.add(asset)
+        db.commit()
+        db.refresh(asset)
+        reused = False
+        record_audit(
+            db,
+            action=actions.ASSET_UPLOAD,
+            resource_type="asset",
+            resource_id=asset.id,
+            detail={
+                "file_name": asset.file_name,
+                "size": file_size,
+                "asset_purpose": asset_purpose,
+                "asset_type": asset.asset_type,
+                "dataset_label": dataset_label,
+                "use_case": use_case,
+                "intended_model_code": intended_model_code,
+                "generated_from": f"{task_type}_labeling_review",
+            },
+            request=request,
+            actor=current_user,
+        )
+
+    version_summary = {
+        "task_type": task_type,
+        "task_label": task_label,
+        "resource_count": bundle_summary.get("sample_count") or 0,
+        "task_count": bundle_summary.get("sample_count") or 0,
+        "reviewed_task_count": bundle_summary.get("sample_count") or 0,
+        "label_vocab": [str(task_type)],
+        "label_sources": export_summary.get("label_sources") or {},
+        "reviewer_counts": export_summary.get("reviewer_counts") or {},
+        "proxy_seeded_rows": int(export_summary.get("proxy_seeded_rows") or 0),
+        "generated_from": f"{task_type}_labeling_review",
+        "generated_at": export_summary.get("generated_at"),
+        "accepted_rows": export_summary.get("accepted_rows"),
+        "skipped_missing_label": export_summary.get("skipped_missing_label"),
+    }
+    dataset_version = create_dataset_version_record(
+        db,
+        asset=asset,
+        dataset_label=dataset_label,
+        dataset_key=str(bundle_summary.get("dataset_key") or dataset_label),
+        asset_purpose=asset_purpose,
+        source_type="inspection_ocr_export",
+        summary=version_summary,
+        created_by=current_user.id,
+    )
+    db.commit()
+    db.refresh(dataset_version)
+    db.refresh(asset)
+    record_audit(
+        db,
+        action=actions.DATASET_VERSION_CREATE,
+        resource_type="dataset_version",
+        resource_id=dataset_version.id,
+        detail={
+            "dataset_key": dataset_version.dataset_key,
+            "dataset_label": dataset_version.dataset_label,
+            "version": dataset_version.version,
+            "asset_id": asset.id,
+            "asset_purpose": asset_purpose,
+            "source_type": "inspection_ocr_export",
+            "task_type": task_type,
+        },
+        request=request,
+        actor=current_user,
+    )
+    return {
+        "asset_id": asset.id,
+        "dataset_version_id": dataset_version.id,
+        "dataset_label": dataset_version.dataset_label,
+        "dataset_key": dataset_version.dataset_key,
+        "version": dataset_version.version,
+        "asset_purpose": asset_purpose,
+        "reused_asset": reused,
+    }
+
+
 def _export_car_number_text_assets_internal(
     *,
     payload: CarNumberTextDatasetAssetImportRequest,
@@ -843,6 +1865,65 @@ def _export_car_number_text_assets_internal(
     )
     return {
         "status": "ok",
+        "export": export_summary,
+        "training_asset": train_asset,
+        "validation_asset": validation_asset,
+        "prefill": {
+            "train_asset_ids": [train_asset["asset_id"]],
+            "validation_asset_ids": [validation_asset["asset_id"]],
+            "dataset_label": train_asset["dataset_label"],
+            "training_dataset_version_id": train_asset["dataset_version_id"],
+            "validation_dataset_version_id": validation_asset["dataset_version_id"],
+            "intended_model_code": intended_model_code,
+        },
+    }
+
+
+def _export_inspection_ocr_assets_internal(
+    *,
+    task_type: str,
+    payload: InspectionOcrDatasetAssetImportRequest,
+    request: Request,
+    db: Session,
+    current_user: AuthUser,
+) -> dict[str, Any]:
+    blueprint = _get_inspection_ocr_blueprint_or_404(task_type)
+    _ensure_inspection_proxy_seeded_allowed(task_type, allow_proxy_seeded=payload.allow_proxy_seeded)
+    export_summary = _export_inspection_ocr_dataset(task_type, allow_suggestions=payload.allow_suggestions)
+    intended_model_code = str(payload.intended_model_code or "").strip() or task_type
+    use_case = str(payload.use_case or "").strip() or f"railcar-{task_type.replace('_', '-')}"
+    train_bundle = export_summary.get("bundles", {}).get("train") or {}
+    validation_bundle = export_summary.get("bundles", {}).get("validation") or {}
+    train_asset = _register_inspection_ocr_dataset_asset(
+        task_type=task_type,
+        task_label=str(blueprint.get("label") or task_type),
+        db=db,
+        current_user=current_user,
+        request=request,
+        bundle_summary=train_bundle,
+        export_summary=export_summary,
+        asset_purpose="training",
+        use_case=use_case,
+        intended_model_code=intended_model_code,
+        sensitivity_level=payload.sensitivity_level,
+    )
+    validation_asset = _register_inspection_ocr_dataset_asset(
+        task_type=task_type,
+        task_label=str(blueprint.get("label") or task_type),
+        db=db,
+        current_user=current_user,
+        request=request,
+        bundle_summary=validation_bundle,
+        export_summary=export_summary,
+        asset_purpose="validation",
+        use_case=use_case,
+        intended_model_code=intended_model_code,
+        sensitivity_level=payload.sensitivity_level,
+    )
+    return {
+        "status": "ok",
+        "task_type": task_type,
+        "task_label": str(blueprint.get("label") or task_type),
         "export": export_summary,
         "training_asset": train_asset,
         "validation_asset": validation_asset,
@@ -1037,6 +2118,33 @@ def _serialize_worker(db: Session, worker: TrainingWorker) -> dict[str, Any]:
         "last_job_at": worker.last_job_at,
         "outstanding_jobs": pending_count,
         "created_at": worker.created_at,
+    }
+
+
+def _latest_job_for_target_model_code(db: Session, target_model_code: str) -> dict[str, Any] | None:
+    job = (
+        db.query(TrainingJob)
+        .filter(TrainingJob.target_model_code == target_model_code)
+        .order_by(TrainingJob.created_at.desc())
+        .first()
+    )
+    return _serialize_job(db, job) if job else None
+
+
+def _latest_model_for_task_type(db: Session, task_type: str) -> dict[str, Any] | None:
+    model = (
+        db.query(ModelRecord)
+        .filter(ModelRecord.model_code == task_type)
+        .order_by(ModelRecord.created_at.desc())
+        .first()
+    )
+    if not model:
+        return None
+    return {
+        **_model_summary(model),
+        "status": model.status,
+        "task_type": model.model_code,
+        "created_at": model.created_at,
     }
 
 
@@ -1373,6 +2481,131 @@ def get_car_number_labeling_summary(
     return summary_payload
 
 
+@router.get("/inspection-workspaces/summary")
+def get_inspection_workspace_summary(
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_READ_ROLES)),
+):
+    _ = current_user
+    blueprints = _load_inspection_dataset_blueprints()
+    items: list[dict[str, Any]] = []
+    for task_type, blueprint in blueprints.items():
+        workspace_dir = _inspection_labeling_dir(task_type)
+        rows = _load_inspection_labeling_rows(task_type)
+        dataset_kind = str(blueprint.get("dataset_kind") or "").strip()
+        completed_rows = 0
+        needs_check_rows = 0
+        pending_rows = 0
+        split_counts: dict[str, int] = {}
+        suggestion_rows = 0
+        for row in rows:
+            review_status = str(row.get("review_status") or "pending").strip() or "pending"
+            if review_status == "needs_check":
+                needs_check_rows += 1
+            elif review_status == "done":
+                completed_rows += 1
+            else:
+                pending_rows += 1
+            if str(row.get("ocr_suggestion") or "").strip():
+                suggestion_rows += 1
+            split_key = str(row.get("split_hint") or "").strip() or "unassigned"
+            split_counts[split_key] = split_counts.get(split_key, 0) + 1
+        crop_ready_rows = sum(1 for row in rows if str(row.get("crop_file") or "").strip())
+        if dataset_kind == "ocr_text":
+            ready_rows = sum(1 for row in rows if str(row.get("final_text") or "").strip())
+            starter_samples = _inspection_starter_samples(task_type, rows)
+            proxy_replacement_samples = _inspection_proxy_replacement_samples(task_type, rows)
+            manual_reviewed_rows = sum(
+                1
+                for row in rows
+                if str(row.get("final_text") or "").strip()
+                and str(row.get("reviewer") or "").strip()
+                and str(row.get("reviewer") or "").strip() != "proxy_from_car_number_truth"
+            )
+            training_readiness = _inspection_ocr_training_readiness(task_type, rows)
+        else:
+            ready_rows = sum(1 for row in rows if str(row.get("label_value") or row.get("final_label") or "").strip())
+            starter_samples = []
+            proxy_replacement_samples = []
+            manual_reviewed_rows = 0
+            training_readiness = {}
+
+        dataset_dir = _inspection_dataset_output_dir(task_type)
+        latest_dataset_summary = None
+        summary_path = dataset_dir / f"{task_type}_dataset_summary.json"
+        if summary_path.exists():
+            try:
+                latest_dataset_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                latest_dataset_summary = None
+
+        items.append(
+            {
+                "task_type": task_type,
+                "task_label": str(blueprint.get("label") or task_type),
+                "dataset_kind": dataset_kind,
+                "sample_target_min": int(blueprint.get("sample_target_min") or 0),
+                "sample_target_recommended": int(blueprint.get("sample_target_recommended") or 0),
+                "annotation_format": str(blueprint.get("annotation_format") or ""),
+                "dataset_key_prefix": str(blueprint.get("dataset_key_prefix") or ""),
+                "review_status_values": list(blueprint.get("review_status_values") or []),
+                "label_values": list(blueprint.get("label_values") or []),
+                "structured_fields": list(blueprint.get("structured_fields") or []),
+                "capture_profile": blueprint.get("capture_profile") or {},
+                "qa_targets": blueprint.get("qa_targets") or {},
+                "notes": list(blueprint.get("notes") or []),
+                "workspace_dir": _relative_repo_path(workspace_dir),
+                "manifest_csv": _relative_repo_path(workspace_dir / "manifest.csv"),
+                "summary_json": _relative_repo_path(workspace_dir / "summary.json"),
+                "capture_plan_csv": _relative_repo_path(workspace_dir / "capture_plan.csv"),
+                "dataset_output_dir": _relative_repo_path(dataset_dir),
+                "row_count": len(rows),
+                "crop_ready_rows": crop_ready_rows,
+                "suggestion_rows": suggestion_rows,
+                "ready_rows": ready_rows,
+                "reviewed_rows": ready_rows,
+                "manual_reviewed_rows": manual_reviewed_rows,
+                "proxy_seeded_rows": sum(1 for row in rows if str(row.get("reviewer") or "").strip() == "proxy_from_car_number_truth"),
+                "ready_ratio": round((ready_rows / len(rows)), 4) if rows else 0.0,
+                "completed_rows": completed_rows,
+                "pending_rows": pending_rows,
+                "needs_check_rows": needs_check_rows,
+                "split_counts": split_counts,
+                "latest_dataset_summary": latest_dataset_summary,
+                "bootstrap_command": (
+                    f"python3 docker/scripts/bootstrap_inspection_labeling_workspace.py --task-type {task_type} "
+                    "--output-dir demo_data/generated_datasets"
+                ),
+                "prepare_proxy_command": (
+                    f"python3 docker/scripts/prepare_inspection_ocr_proxy_crops.py --task-type {task_type}"
+                    if dataset_kind == "ocr_text"
+                    else ""
+                ),
+                "generate_suggestions_command": (
+                    f"python3 docker/scripts/generate_inspection_ocr_suggestions.py --task-type {task_type}"
+                    if dataset_kind == "ocr_text"
+                    else ""
+                ),
+                "build_command": (
+                    f"python3 docker/scripts/build_inspection_task_dataset.py --task-type {task_type} "
+                    f"--manifest demo_data/generated_datasets/{task_type}_labeling/manifest.csv "
+                    f"--output-dir demo_data/generated_datasets/{task_type}_dataset"
+                    + (" --allow-suggestions" if dataset_kind == "ocr_text" else "")
+                ),
+                "starter_samples": starter_samples,
+                "proxy_replacement_samples": proxy_replacement_samples,
+                "training_readiness": training_readiness,
+                "latest_training_job": _latest_job_for_target_model_code(db, task_type),
+                "latest_candidate_model": _latest_model_for_task_type(db, task_type),
+            }
+        )
+    return {
+        "status": "ok",
+        "workspace_count": len(items),
+        "items": items,
+    }
+
+
 @router.get("/car-number-labeling/items")
 def list_car_number_labeling_items(
     q: str | None = Query(default=None, description="关键词搜索 / Search sample_id, source_file, suggestion, final_text"),
@@ -1515,6 +2748,446 @@ def export_car_number_text_training_job(
         target_version=_clean_optional(payload.target_version) or _auto_target_version(intended_model_code),
         worker_selector=worker_selector,
         spec=_default_car_number_training_spec(payload.spec),
+    )
+    job = create_training_job(create_payload, request=request, db=db, current_user=current_user)
+    return {
+        **asset_result,
+        "job": job,
+        "resolved_base_model": _model_summary(base_model),
+        "resolved_spec": create_payload.spec,
+    }
+
+
+@router.get("/inspection-ocr/{task_type}/summary")
+def get_inspection_ocr_labeling_summary(
+    task_type: str,
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_READ_ROLES)),
+):
+    _ = current_user
+    blueprint = _get_inspection_ocr_blueprint_or_404(task_type)
+    rows = _load_inspection_labeling_rows(task_type)
+    summary_payload = {}
+    summary_path = _inspection_labeling_summary_path(task_type)
+    if summary_path.exists():
+        try:
+            summary_payload = json.loads(summary_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            summary_payload = {}
+    review_status_counts: dict[str, int] = {}
+    final_text_rows = 0
+    suggestion_rows = 0
+    crop_ready_rows = 0
+    proxy_seeded_rows = 0
+    manual_reviewed_rows = 0
+    high_quality_suggestion_rows = 0
+    for row in rows:
+        status_key = str(row.get("review_status") or "pending").strip() or "pending"
+        review_status_counts[status_key] = review_status_counts.get(status_key, 0) + 1
+        if str(row.get("final_text") or "").strip():
+            final_text_rows += 1
+            reviewer = str(row.get("reviewer") or "").strip()
+            if reviewer == "proxy_from_car_number_truth":
+                proxy_seeded_rows += 1
+            elif reviewer:
+                manual_reviewed_rows += 1
+        if str(row.get("ocr_suggestion") or "").strip():
+            suggestion_rows += 1
+            if float(row.get("ocr_suggestion_quality") or 0.0) >= 1.0:
+                high_quality_suggestion_rows += 1
+        if str(row.get("crop_file") or "").strip():
+            crop_ready_rows += 1
+    readiness = _inspection_ocr_training_readiness(task_type, rows)
+    high_quality_suggestion_samples = _inspection_high_quality_suggestion_samples(task_type, rows)
+    summary_payload.update(
+        {
+            "task_type": task_type,
+            "task_label": str(blueprint.get("label") or task_type),
+            "annotated_rows": len(rows),
+            "crop_ready_rows": crop_ready_rows,
+            "review_status_counts": review_status_counts,
+            "final_text_rows": final_text_rows,
+            "final_text_ratio": round((final_text_rows / len(rows)), 4) if rows else 0.0,
+            "suggestion_rows": suggestion_rows,
+            "suggestion_ratio": round((suggestion_rows / len(rows)), 4) if rows else 0.0,
+            "high_quality_suggestion_rows": high_quality_suggestion_rows,
+            "high_quality_review_candidate_rows": len(high_quality_suggestion_samples),
+            "proxy_seeded_rows": proxy_seeded_rows,
+            "manual_reviewed_rows": manual_reviewed_rows,
+            "structured_fields": list(blueprint.get("structured_fields") or []),
+            "capture_profile": blueprint.get("capture_profile") or {},
+            "qa_targets": blueprint.get("qa_targets") or {},
+            "notes": list(blueprint.get("notes") or []),
+            "starter_samples": _inspection_starter_samples(task_type, rows),
+            "proxy_replacement_samples": _inspection_proxy_replacement_samples(task_type, rows),
+            "high_quality_suggestion_samples": high_quality_suggestion_samples,
+            "training_readiness": readiness,
+        }
+    )
+    export_summary_path = _inspection_dataset_output_dir(task_type) / f"{task_type}_dataset_summary.json"
+    if export_summary_path.exists():
+        try:
+            export_summary = json.loads(export_summary_path.read_text(encoding="utf-8"))
+            summary_payload["latest_export"] = {
+                "generated_at": export_summary.get("generated_at"),
+                "accepted_rows": export_summary.get("accepted_rows"),
+                "skipped_missing_label": export_summary.get("skipped_missing_label"),
+                "label_sources": export_summary.get("label_sources") or {},
+                "output_dir": export_summary.get("output_dir"),
+                "bundles": export_summary.get("bundles") or {},
+            }
+        except json.JSONDecodeError:
+            summary_payload["latest_export"] = None
+    return summary_payload
+
+
+@router.get("/inspection-ocr/{task_type}/items")
+def list_inspection_ocr_labeling_items(
+    task_type: str,
+    q: str | None = Query(default=None, description="关键词搜索 / Search sample_id, source_file, suggestion, final_text"),
+    review_status: str | None = Query(default=None, pattern=REVIEW_STATUS_PATTERN, description="复核状态 / pending|done|needs_check"),
+    has_final_text: bool | None = Query(default=None, description="是否已有 final_text / Has reviewed text"),
+    has_suggestion: bool | None = Query(default=None, description="是否有 OCR 建议 / Has OCR suggestion"),
+    high_quality_suggestion: bool | None = Query(default=None, description="是否只看高质量建议 / Filter high-quality suggestion rows"),
+    proxy_seeded: bool | None = Query(default=None, description="是否只看代理回灌真值 / Filter proxy-seeded rows"),
+    split_hint: str | None = Query(default=None, description="数据集切分 / train|validation"),
+    limit: int = Query(default=80, ge=1, le=500, description="返回条数 / Max items"),
+    offset: int = Query(default=0, ge=0, description="偏移量 / Offset"),
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_READ_ROLES)),
+):
+    _ = current_user
+    _get_inspection_ocr_blueprint_or_404(task_type)
+    rows = _load_inspection_labeling_rows(task_type)
+    token = str(q or "").strip().lower()
+    filtered = []
+    for row in rows:
+        item = _inspection_ocr_labeling_item_summary(task_type, row)
+        if token:
+            searchable = " ".join(
+                [
+                    item["sample_id"],
+                    item["source_file"],
+                    item["ocr_suggestion"],
+                    item["final_text"],
+                    item["notes"],
+                ]
+            ).lower()
+            if token not in searchable:
+                continue
+        if review_status and item["review_status"] != review_status:
+            continue
+        if split_hint and item["split_hint"] != split_hint:
+            continue
+        if has_final_text is not None and item["has_final_text"] != has_final_text:
+            continue
+        if has_suggestion is not None and item["has_suggestion"] != has_suggestion:
+            continue
+        if high_quality_suggestion is not None:
+            item_high_quality = float(item.get("ocr_suggestion_quality") or 0.0) >= 1.0
+            if item_high_quality != high_quality_suggestion:
+                continue
+        if proxy_seeded is not None and item["proxy_seeded"] != proxy_seeded:
+            continue
+        filtered.append(item)
+    filtered.sort(key=_inspection_item_sort_key)
+    total = len(filtered)
+    page = filtered[offset: offset + limit]
+    return {
+        "task_type": task_type,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "items": page,
+    }
+
+
+@router.get("/inspection-ocr/{task_type}/items/{sample_id}/crop")
+def get_inspection_ocr_labeling_crop(
+    task_type: str,
+    sample_id: str,
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_READ_ROLES)),
+):
+    _ = current_user
+    _get_inspection_ocr_blueprint_or_404(task_type)
+    rows = _load_inspection_labeling_rows(task_type)
+    matched = next((row for row in rows if str(row.get("sample_id") or "").strip() == sample_id), None)
+    if not matched:
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "inspection_ocr_sample_not_found",
+            "没有找到这条巡检文字样本。",
+            next_step="请回到样本列表重新选择，或刷新工作区后再试。",
+        )
+    crop_rel = str(matched.get("crop_file") or "").strip()
+    if crop_rel:
+        crop_path = _inspection_labeling_dir(task_type) / crop_rel
+        if crop_path.exists() and crop_path.is_file():
+            return FileResponse(crop_path)
+    source_file = str(matched.get("source_file") or "").strip()
+    if source_file:
+        source_path = _resolve_image_path(matched, manifest_path=_inspection_labeling_manifest_path(task_type))
+        if source_path and source_path.exists() and source_path.is_file():
+            return FileResponse(source_path)
+    raise_ui_error(
+        status.HTTP_404_NOT_FOUND,
+        "inspection_ocr_crop_not_found",
+        "这条样本的裁剪图或原图不存在。",
+        next_step="请重新生成代理裁剪，或检查 source_file / crop_file 路径是否有效。",
+    )
+
+
+@router.get("/inspection-ocr/{task_type}/items/{sample_id}/source")
+def get_inspection_ocr_labeling_source(
+    task_type: str,
+    sample_id: str,
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_READ_ROLES)),
+):
+    _ = current_user
+    _get_inspection_ocr_blueprint_or_404(task_type)
+    rows = _load_inspection_labeling_rows(task_type)
+    matched = next((row for row in rows if str(row.get("sample_id") or "").strip() == sample_id), None)
+    if not matched:
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "inspection_ocr_sample_not_found",
+            "没有找到这条巡检文字样本。",
+            next_step="请回到样本列表重新选择，或刷新工作区后再试。",
+        )
+    source_path = _resolve_image_path({"source_file": matched.get("source_file")}, manifest_path=_inspection_labeling_manifest_path(task_type))
+    if source_path and source_path.exists() and source_path.is_file():
+        return FileResponse(source_path)
+    raise_ui_error(
+        status.HTTP_404_NOT_FOUND,
+        "inspection_ocr_source_not_found",
+        "这条样本的原始图片不存在。",
+        next_step="请检查 source_file 路径，或重新生成这批巡检工作区样本。",
+    )
+
+
+@router.get("/inspection-ocr/{task_type}/export-proxy-queue")
+def export_inspection_proxy_queue_csv(
+    task_type: str,
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_READ_ROLES)),
+):
+    _ = current_user
+    _get_inspection_ocr_blueprint_or_404(task_type)
+    rows = _inspection_proxy_seeded_rows(task_type)
+    csv_text = _render_inspection_proxy_queue_csv(task_type, rows)
+    filename = f"{task_type}_proxy_replacement_queue.csv"
+    return Response(
+        content=csv_text,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/inspection-ocr/{task_type}/export-review-pack")
+def export_inspection_proxy_review_pack(
+    task_type: str,
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_READ_ROLES)),
+):
+    _ = current_user
+    _get_inspection_ocr_blueprint_or_404(task_type)
+    rows = _inspection_proxy_seeded_rows(task_type)
+    archive = _build_inspection_proxy_review_pack(task_type, rows)
+    filename = f"{task_type}_proxy_review_pack.zip"
+    return Response(
+        content=archive,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/inspection-ocr/{task_type}/export-high-quality-queue")
+def export_inspection_high_quality_queue_csv(
+    task_type: str,
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_READ_ROLES)),
+):
+    _ = current_user
+    _get_inspection_ocr_blueprint_or_404(task_type)
+    rows = _inspection_high_quality_suggestion_candidate_rows(task_type)
+    csv_text = _render_inspection_high_quality_queue_csv(task_type, rows)
+    filename = f"{task_type}_high_quality_suggestion_queue.csv"
+    return Response(
+        content=csv_text,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/inspection-ocr/{task_type}/export-high-quality-pack")
+def export_inspection_high_quality_review_pack(
+    task_type: str,
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_READ_ROLES)),
+):
+    _ = current_user
+    _get_inspection_ocr_blueprint_or_404(task_type)
+    rows = _inspection_high_quality_suggestion_candidate_rows(task_type)
+    archive = _build_inspection_high_quality_review_pack(task_type, rows)
+    filename = f"{task_type}_high_quality_suggestion_pack.zip"
+    return Response(
+        content=archive,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/inspection-ocr/{task_type}/preview-import-reviews")
+async def preview_inspection_ocr_reviews_import(
+    task_type: str,
+    file: UploadFile = File(..., description="巡检 OCR 复核 CSV / Inspection OCR review CSV"),
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_CREATE_ROLES)),
+):
+    _ = current_user
+    _get_inspection_ocr_blueprint_or_404(task_type)
+    filename = str(file.filename or "").strip().lower()
+    if not filename.endswith(".csv"):
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "inspection_ocr_import_invalid_file",
+            "导入文件必须是 CSV。",
+            next_step="请先导出代理替换队列 CSV，再在表格里填写 final_text 后重新导入。",
+        )
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "inspection_ocr_import_invalid_encoding",
+            "导入 CSV 编码无法识别。",
+            next_step="请使用 UTF-8 编码保存 CSV 后再导入。",
+        )
+    importer = str(current_user.username or current_user.id or "bulk_import_preview").strip()
+    return _summarize_inspection_ocr_import(task_type, text=text, importer=importer, apply_updates=False)
+
+
+@router.post("/inspection-ocr/{task_type}/import-reviews")
+async def import_inspection_ocr_reviews(
+    task_type: str,
+    file: UploadFile = File(..., description="巡检 OCR 复核 CSV / Inspection OCR review CSV"),
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_CREATE_ROLES)),
+):
+    _get_inspection_ocr_blueprint_or_404(task_type)
+    filename = str(file.filename or "").strip().lower()
+    if not filename.endswith(".csv"):
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "inspection_ocr_import_invalid_file",
+            "导入文件必须是 CSV。",
+            next_step="请先导出代理替换队列 CSV，再在表格里填写 final_text 后重新导入。",
+        )
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "inspection_ocr_import_invalid_encoding",
+            "导入 CSV 编码无法识别。",
+            next_step="请使用 UTF-8 编码保存 CSV 后再导入。",
+        )
+    importer = str(current_user.username or current_user.id or "bulk_import").strip()
+    return _summarize_inspection_ocr_import(task_type, text=text, importer=importer, apply_updates=True)
+
+
+@router.post("/inspection-ocr/{task_type}/items/{sample_id}/review")
+def update_inspection_ocr_labeling_review(
+    task_type: str,
+    sample_id: str,
+    payload: InspectionOcrLabelingReviewRequest,
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_CREATE_ROLES)),
+):
+    _ = current_user
+    _get_inspection_ocr_blueprint_or_404(task_type)
+    rows = _load_inspection_labeling_rows(task_type)
+    matched_index = next((idx for idx, row in enumerate(rows) if str(row.get("sample_id") or "").strip() == sample_id), None)
+    if matched_index is None:
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "inspection_ocr_sample_not_found",
+            "没有找到这条巡检文字样本。",
+            next_step="请回到样本列表重新选择，或刷新工作区后再试。",
+        )
+    row = dict(rows[matched_index])
+    row["final_text"] = str(payload.final_text or "").strip().upper()
+    row["review_status"] = payload.review_status
+    row["reviewer"] = str(payload.reviewer or "").strip()
+    row["notes"] = str(payload.notes or "").strip()
+    rows[matched_index] = row
+    _rewrite_inspection_labeling_files(task_type, rows)
+    return {
+        "status": "ok",
+        "item": _inspection_ocr_labeling_item_summary(task_type, row),
+    }
+
+
+@router.post("/inspection-ocr/{task_type}/export-dataset")
+def export_inspection_ocr_dataset(
+    task_type: str,
+    payload: InspectionOcrDatasetExportRequest,
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_CREATE_ROLES)),
+):
+    _ = current_user
+    _ensure_inspection_proxy_seeded_allowed(task_type, allow_proxy_seeded=payload.allow_proxy_seeded)
+    return _export_inspection_ocr_dataset(task_type, allow_suggestions=payload.allow_suggestions)
+
+
+@router.post("/inspection-ocr/{task_type}/export-assets")
+def export_inspection_ocr_assets(
+    task_type: str,
+    payload: InspectionOcrDatasetAssetImportRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_CREATE_ROLES)),
+):
+    return _export_inspection_ocr_assets_internal(
+        task_type=task_type,
+        payload=payload,
+        request=request,
+        db=db,
+        current_user=current_user,
+    )
+
+
+@router.post("/inspection-ocr/{task_type}/export-training-job")
+def export_inspection_ocr_training_job(
+    task_type: str,
+    payload: InspectionOcrTrainingJobCreateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_CREATE_ROLES)),
+):
+    asset_result = _export_inspection_ocr_assets_internal(
+        task_type=task_type,
+        payload=payload,
+        request=request,
+        db=db,
+        current_user=current_user,
+    )
+    intended_model_code = str(payload.intended_model_code or "").strip() or task_type
+    base_model = _resolve_default_base_model(
+        db=db,
+        current_user=current_user,
+        intended_model_code=intended_model_code,
+        base_model_id=payload.base_model_id,
+    )
+    worker_selector: dict[str, Any] = {}
+    worker_code = _clean_optional(payload.worker_code)
+    worker_host = _clean_optional(payload.worker_host)
+    if worker_code:
+        worker_selector["worker_codes"] = [worker_code]
+    if worker_host:
+        worker_selector["hosts"] = [worker_host]
+    create_payload = TrainingJobCreateRequest(
+        asset_ids=asset_result["prefill"]["train_asset_ids"],
+        validation_asset_ids=asset_result["prefill"]["validation_asset_ids"],
+        base_model_id=base_model.id if base_model else None,
+        owner_tenant_id=base_model.owner_tenant_id if base_model else None,
+        training_kind=payload.training_kind,
+        target_model_code=intended_model_code,
+        target_version=_clean_optional(payload.target_version) or _auto_target_version(intended_model_code),
+        worker_selector=worker_selector,
+        spec=_default_inspection_ocr_training_spec(task_type, payload.spec),
     )
     job = create_training_job(create_payload, request=request, db=db, current_user=current_user)
     return {

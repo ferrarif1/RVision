@@ -2,7 +2,7 @@
 
 - Owner: Engineering
 - Status: In Execution
-- Last Updated: 2026-03-10
+- Last Updated: 2026-03-12
 - Scope: 基于当前代码与最近连续迭代，对“已完成 / 半完成 / 中断 / 下一步”做一次真实盘点
 - Supersedes: `platform_user_centric_execution_backlog_v1.md` 仅保留历史分阶段目标；当前执行判断以本文件为准
 - Dynamic Todo: 日常持续推进与插入新需求时，优先维护 [dynamic_execution_todo_2026-03-11.md](./dynamic_execution_todo_2026-03-11.md)
@@ -19,7 +19,7 @@
 - 任务页联动：快速识别上方选中的模型与意图，已可一键带入下方精确任务，减少重复输入。
 - 训练 / 模型 / 流水线页工作台概览：三页已补统一的“当前状态 + 下一步动作”概览区，低频配置开始收进高级折叠。
 - 训练 / 模型 / 流水线页列表收口：三页主列表已开始从重表格改成卡片工作台摘要，减少默认技术字段暴露。
-- 车号规则校验：当前合法规则已配置化，默认要求 `8 位数字`，后续可扩展或替换。
+- 车号规则校验：当前合法规则已升级成多规则族，支持标准 `8 位数字`、字母前缀数字编号和紧凑型混合编号。
 - 数据噪音治理：synthetic 记录、冗余 OCR 导出历史、运行垃圾已做一轮物理清理与界面默认隐藏。
 
 ## 2. 仍未完成或只完成一半的工作
@@ -30,10 +30,33 @@
   - 已知 fixture、复核样本、内容哈希命中的图片能得到较稳结果。
   - 未见过的低清/偏移/夜间车号图仍可能 `ocr_unavailable` 或置信度偏低。
   - 一部分历史坏样本已修到“bbox 对、文本先不乱报”，但不是“全部真值已读准”。
+  - 2026-03-12 已把 runtime eval 改成优先比对 `final_text` 真值，并支持关闭 curated/fixture 快捷命中做真实泛化探针。
+  - 同日已新增“规则拒绝后的二阶段扩框重扫”，8 样本真实泛化探针从 `2/8 ok` 提升到 `3/8 ok + 1/8 可读但错位`。
+  - 同日还已按“库内 45° 侧拍车身标记识别”补了场景配置、旋转矫正文字带和更宽的扩框救援，但 `2477 / 2216 / 3542` 这类难样本仍未收口。
+  - 同日已把《铁路货车轮足式机器人库内智能巡检应用技术方案》里的识别目标收敛成正式任务族：`车号 / 定检标记 / 性能标记 / 门锁状态 / 连接件缺陷`，但除车号外，其余任务还未进入真实训练闭环。
+  - 同日已把这组任务继续推进到“仓库内数据工作区 + 训练/验证包脚手架 + 训练中心准备度可视化 + OCR 代理裁剪队列”阶段，但还没有形成首版真实训练闭环。
+  - 同日稍晚已为 `inspection_mark_ocr / performance_mark_ocr` 各补入首批 `1 train + 1 validation` 的真实 `final_text`，并继续走到了“训练作业 SUCCEEDED + 待验证模型回收入库 + 审批工作台可见”的阶段。
+  - 2026-03-13 又通过同图车号真值桥接把这两类任务推进到 `9` 条已确认文本、`7 train + 2 validation` 的第二轮代理真值规模，并各自产出一版新的 `SUBMITTED` 待验证模型。
+  - 同日第三轮又把 provenance 风险真正打到审批工作台：新模型已显示 `data_provenance.proxy_seeded_rows = 12` 和 `proxy_truth_risk`，治理层现在能明确识别“代理真值风险仍然存在”。
+  - 同日稍晚 inspection OCR 已进入“优先替换代理真值”阶段：复核页能直接筛 `proxy_seeded` 样本，训练中心工作区卡片已显示 `manual_reviewed_rows / proxy_replacement_samples`。
+  - 同日还补上了默认质量门禁：当 inspection OCR 工作区仍含代理回灌真值时，默认阻止导出训练包、导出资产和直接创建训练作业；只有显式允许“带代理真值继续训练（仅冷启动）”才放行。
 - 当前证据：
   - `edge/inference/pipelines.py`
+  - `config/car_number_rules.json`
+  - `config/ocr_scene_profiles.json`
+  - `config/railcar_inspection_task_catalog.json`
+  - `config/railcar_inspection_dataset_blueprints.json`
   - `docker/scripts/evaluate_car_number_ocr_samples.py`
+  - `docker/scripts/bootstrap_inspection_labeling_workspace.py`
+  - `docker/scripts/build_inspection_task_dataset.py`
   - `demo_data/generated_datasets/car_number_ocr_labeling/`
+  - `demo_data/generated_datasets/inspection_mark_ocr_labeling/`
+  - `demo_data/generated_datasets/door_lock_state_detect_labeling/`
+  - `demo_data/generated_datasets/car_number_ocr_runtime_eval/car_number_runtime_eval_generalization_probe_after_fix_20260312T032001Z.json`
+  - `demo_data/generated_datasets/car_number_ocr_runtime_eval/car_number_runtime_eval_generalization_probe_after_fix_v2_20260312T032914Z.json`
+  - `docs/qa/ocr_generalization_iteration_2026-03-12.md`
+  - `docs/product/railcar_robot_inspection_model_family_2026-03-12.md`
+  - `docs/product/railcar_inspection_data_workspace_2026-03-12.md`
 - 结论：这是当前最核心、最影响业务感知的未完成项。
 
 ### 2.2 错误提示模板主链已统一，剩余只是边角清理
@@ -56,13 +79,13 @@
   - “保留多久、删除哪些、谁可执行、删前如何预览”的策略配置化。
   - 定时执行或至少批量治理编排。
 
-### 2.4 审批编排还缺“拒绝 / 补充材料 / 证据包导出”
+### 2.4 审批编排已补齐“拒绝 / 补充材料 / 证据包导出”
 
 - 当前状态：
   - 审批工作台、发布工作台已具备“建议样本 -> 批量验证 -> 审批 / 发布”的主路径。
-  - 但“拒绝并说明原因”“要求补充验证材料”“导出可审计证据包”还未做完整。
+  - 审批工作台现已支持“要求补充材料”“驳回这版模型”“导出可审计证据包”。
 - 影响：
-  - 当前更适合 demo / 内部流程，不够支撑完整的对外交付治理。
+  - 模型治理已从 demo 闭环提升到更完整的交付治理闭环，平台可记录审批补件、驳回和证据归档过程。
 
 ### 2.5 浏览器级人工走查没有形成正式证据
 

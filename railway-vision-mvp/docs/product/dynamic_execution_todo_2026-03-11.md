@@ -2,56 +2,67 @@
 
 - Owner: Engineering
 - Status: In Execution
-- Last Updated: 2026-03-12 11:39 CST
-- Scope: 作为当前持续推进的动态执行面板，记录“正在做 / 下一步 / 排队中 / 已完成”，并允许随时插入新需求
+- Last Updated: 2026-03-13 13:54 CST
+- Scope: 当前持续推进的真实执行面板。只保留“仍未完成 / 正在推进 / 已验证完成”的事项，不保留重复里程碑和过时状态。
 - Source of Truth:
   - 当前真实执行盘点：[current_execution_backlog_2026-03-10.md](./current_execution_backlog_2026-03-10.md)
   - 真实运行审计：[../qa/live_chain_audit_2026-03-10.md](../qa/live_chain_audit_2026-03-10.md)
-  - 浏览器走查清单：[../qa/browser_walkthrough_checklist_2026-03-11.md](../qa/browser_walkthrough_checklist_2026-03-11.md)
-  - 新用户可用性审查：[novice_user_usability_audit_2026-03-11.md](./novice_user_usability_audit_2026-03-11.md)
+  - 页面级走查清单：[../qa/browser_walkthrough_checklist_2026-03-11.md](../qa/browser_walkthrough_checklist_2026-03-11.md)
+  - 巡检任务数据工作区：[railcar_inspection_data_workspace_2026-03-12.md](./railcar_inspection_data_workspace_2026-03-12.md)
 
 ## 使用规则
 
-- 新需求进入后，先落到本文件，再决定是否插队。
-- 每项任务都要记录：
-  - `Priority`
-  - `Status`
-  - `Why`
-  - `Done When`
-  - `Evidence`
-- 一轮代码变更完成后，必须同步更新：
-  - 本清单状态
-  - 相关业务/QA 文档
+- 新需求先记入本文件，再决定是否插队。
+- 每完成一段独立工作，主动收口：
+  - 更新本清单
+  - 更新相关业务/QA文档
+  - 标记完成项为删除线
+- 只记录真实落地能力，不把目标态写成已完成。
 
-## 1. 正在执行
+## 1. 当前主状态
+
+- 平台主链已可运行：
+  - 资产
+  - 任务
+  - 结果
+  - 训练
+  - 待验证模型
+  - 审批
+  - 发布
+- 高复杂页面已完成“页内导航 + 默认视图减负 + 技术详情后置”。
+- 高优先级错误提示模板已完成结构化统一。
+- 数据治理已前台化。
+- 审批治理已补齐“补材料 / 驳回 / 证据包”。
+- 当前唯一持续中的核心主线：`T5 OCR 真实泛化继续推进`。
+
+## 2. 已完成的核心任务
 
 ### ~~T1. 全站控制台页继续去技术噪音~~
 
 - Priority: P0
 - Status: Done
 - Why:
-  - 高复杂页面的“整页平铺”问题已经基本收口，但默认视图里仍有少量技术字段和工程味，需要继续做页面级收边。
-- Done When:
-  - ~~训练 / 模型 / 流水线三页默认视图都优先呈现“当前状态 + 下一步动作 + 关键摘要”~~
-  - ~~长 ID / hash / 内部状态只出现在 `技术详情`~~
-  - ~~关键列表和工作台之间的视觉节奏一致~~
-  - ~~全站关键页面建立统一的高科技玻璃层、渐变光晕和顺滑 hover / 切换反馈~~
-  - ~~高复杂功能页不再把多套功能直接堆在同一屏，而是通过页内导航或二级导航引导进入~~
+  - 高复杂页面原先存在整页平铺、多功能堆叠、技术字段默认暴露的问题。
+- Done:
+  - ~~训练 / 模型 / 流水线 / 任务 / 结果 / 资产 / 审计 / 首页 / 车号文本复核完成页内导航化~~
+  - ~~默认视图优先显示状态、下一步动作、业务摘要~~
+  - ~~长 ID / hash / 内部状态后置到 `技术详情`~~
+  - ~~统一玻璃层、渐变光晕、悬停反馈和选中态~~
 - Evidence:
   - `frontend/src/pages/index.js`
   - `frontend/assets/app.css`
   - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
+  - `docs/qa/browser_walkthrough_report_2026-03-12.md`
 
 ### ~~T2. 页面级人工走查制度化~~
 
 - Priority: P0
 - Status: Done
 - Why:
-  - 当前已有多轮真实 API smoke test，但还缺正式的页面级视觉与交互证据。
-- Done When:
-  - ~~至少完成任务页、结果页、训练页、模型页、流水线页的一轮逐项走查~~
-  - ~~走查结果以文档形式沉淀，而不是口头描述~~
+  - 需要把“感觉页面顺了”变成正式 QA 证据。
+- Done:
+  - ~~关键页走查清单建立~~
+  - ~~首轮走查报告沉淀~~
 - Evidence:
   - `docs/qa/browser_walkthrough_checklist_2026-03-11.md`
   - `docs/qa/browser_walkthrough_report_2026-03-12.md`
@@ -61,43 +72,41 @@
 - Priority: P0
 - Status: Done
 - Why:
-  - 虽然页面结构已经清楚很多，但从只懂少量概念的用户视角看，仍然存在术语负担和流程分叉过多的问题。
-- Done When:
-  - ~~高频页面默认视图里进一步减少平台内部术语~~
-  - ~~上传资产 -> 识别 -> 复核 -> 训练 -> 验证 -> 审批 -> 发布 形成更明显的单一路径~~
-  - ~~“把确认结果变成训练数据 / 待验证模型 / 审批 / 发布”等概念在 UI 中可自解释~~
-  - ~~高频表单里的 `asset_id / worker / model_id / task_id` 默认改写成更自然的用户语言，技术词退到括号或技术详情~~
+  - 默认可见区过去有大量平台内部术语，新用户不容易理解。
+- Done:
+  - ~~高频页面默认术语改成人话~~
+  - ~~主路径尽量收成单一路径~~
+  - ~~`asset_id / task_id / worker / model_id` 等默认转为业务语言~~
 - Evidence:
   - `docs/product/novice_user_usability_audit_2026-03-11.md`
   - `frontend/src/pages/index.js`
-  - `frontend/assets/app.css`
   - `docs/demo.md`
 
-## 2. 下一步自动执行
-
-### ~~T3. 任务页 / 结果页继续做页面级收边~~
+### ~~T3. 任务页 / 结果页页面级收边~~
 
 - Priority: P1
 - Status: Done
 - Why:
-  - 这是当前最常用的业务入口，任何长文本、折叠区、回跳问题都会直接影响感知。
-- Done When:
-  - ~~回跳链路、批量结果展开、长文本、技术详情折叠都按走查清单验证并修一轮~~
-  - ~~首页与高频卡片里的长文件名、长版本号、长技术字段不会再把卡片或网格撑乱~~
+  - 这是最常用的入口，最容易暴露体验问题。
+- Done:
+  - ~~任务页拆成“快速识别 / 创建任务 / 可选模型 / 任务列表”~~
+  - ~~结果页拆成“查询结果 / 下一步动作 / 变成训练数据 / 结果列表”~~
+  - ~~任务页和结果页进一步完成二级导航自动切换~~
+  - ~~长文本、长版本号、长 ID 溢出系统性修复~~
 - Evidence:
   - `frontend/src/pages/index.js`
-  - `docs/qa/browser_walkthrough_checklist_2026-03-11.md`
   - `frontend/assets/app.css`
-  - `docs/qa/browser_walkthrough_report_2026-03-12.md`
+  - `docs/qa/live_chain_audit_2026-03-10.md`
 
 ### ~~T4. 统一错误提示模板~~
 
 - Priority: P1
 - Status: Done
 - Why:
-  - 仍有不少后端原始错误会直接露给用户，影响成熟度。
-- Done When:
-  - ~~任务创建 / 快速识别 / 训练 / 审批 / 发布 / 结果导出这几条主链都尽量显示“原因 + 影响 + 下一步”~~
+  - 主链大量原始英文错误会直接暴露给用户。
+- Done:
+  - ~~任务 / 结果 / 训练 / 模型 / 流水线 / 资产 / 边缘执行主链统一结构化错误~~
+  - ~~前端统一按 `code / message / next_step` 展示~~
 - Evidence:
   - `backend/app/core/ui_errors.py`
   - `frontend/src/core/api.js`
@@ -107,523 +116,271 @@
   - `backend/app/api/tasks.py`
   - `backend/app/api/models.py`
   - `backend/app/api/assets.py`
-  - `docs/product/current_execution_backlog_2026-03-10.md`
-
-## 3. 排队中
-
-### T5. OCR 真实泛化继续推进
-
-- Priority: P1
-- Status: Queued
-- Why:
-  - 这是最影响业务价值的核心能力缺口。
-- Done When:
-  - 陌生低清图的 `ocr_unavailable` 和低置信度比例继续下降
-  - 形成更系统的 runtime eval 与难例桶
-- Evidence:
-  - `edge/inference/pipelines.py`
-  - `docker/scripts/evaluate_car_number_ocr_samples.py`
 
 ### ~~T6. 数据保留策略产品化~~
 
 - Priority: P2
 - Status: Done
 - Why:
-  - 已完成一轮“仅保留车号 OCR 当前主链 + 当前目标检测模型”的实际清理，但仍然是脚本入口，还没有前台化。
-- Done When:
-  - ~~至少形成统一入口、预览、执行、审计四件套~~
+  - 历史噪音和 synthetic 残留清理原先只靠脚本。
+- Done:
+  - ~~设置页新增 `数据治理` 工作区~~
+  - ~~支持预览、执行、权限和审计~~
 - Evidence:
   - `backend/app/api/settings.py`
   - `backend/app/services/data_governance_service.py`
   - `frontend/src/pages/index.js`
-  - `docker/scripts/cleanup_*`
 
-### T7. 审批治理补全
+### ~~T7. 审批治理补全~~
+
+- Priority: P2
+- Status: Done
+- Why:
+  - 原先审批只剩“通过”，没有治理闭环。
+- Done:
+  - ~~要求补材料~~
+  - ~~驳回模型~~
+  - ~~导出证据包~~
+- Evidence:
+  - `backend/app/api/models.py`
+  - `frontend/src/pages/index.js`
+  - `backend/tests/api_regression/test_models_release_gate.py`
+
+## 3. 当前唯一持续主线
+
+### T5. OCR 真实泛化继续推进
+
+- Priority: P1
+- Status: In Progress
+- Why:
+  - 这是当前最影响业务价值的核心能力缺口。
+  - 车号不再能简单假设成固定 8 位数字。
+  - 识别内容也不只限车号，已扩成正式巡检模型族。
+
+#### 3.1 已经做完的部分
+
+- 车号规则已从单一 `8 位数字` 升级成规则族：
+  - 标准 8 位数字
+  - 字母前缀数字编号
+  - 紧凑型混合编号
+- 巡检任务族已落地：
+  - `car_number_ocr`
+  - `inspection_mark_ocr`
+  - `performance_mark_ocr`
+  - `door_lock_state_detect`
+  - `connector_defect_detect`
+- 训练中心已接入巡检任务数据工作区：
+  - 建议样本量
+  - 拍摄距离 / 角度 / 图像要求
+  - 验收目标
+  - 结构化字段建议
+- inspection/performance OCR 已具备：
+  - 工作区模板
+  - 代理裁剪
+  - 自动建议
+  - 通用复核页
+  - 训练包导出
+  - 导出训练资产
+  - 直接创建训练作业
+  - 待验证模型回收
+  - 审批工作台可见
+- inspection/performance OCR 风险治理已到位：
+  - 审批工作台暴露 `proxy_truth_risk`
+  - 默认阻止带代理真值继续正式训练
+  - 只有显式允许“仅冷启动继续训练”才放行
+- inspection OCR 人工替换工具链已补齐：
+  - 原图联看
+  - 代理替换队列 CSV 导出
+  - 预检查 CSV 导入
+  - CSV 导回
+  - 人工替换工作包 ZIP
+- inspection/performance OCR 自动建议已进入“高质量建议优先复核”阶段：
+  - `仅看高质量建议`
+  - `优先确认高质量建议`
+  - `导出高质量建议队列`
+  - `导出高质量建议包`
+
+#### 3.2 当前真实状态
+
+- `inspection_mark_ocr`
+  - `row_count = 80`
+  - `crop_ready_rows = 77`
+  - `suggestion_rows = 59`
+  - `high_quality_suggestion_rows = 51`
+  - `high_quality_review_candidate_rows = 51`
+  - `reviewed_rows = 9`
+  - `manual_reviewed_rows = 3`
+  - `proxy_seeded_rows = 6`
+  - `training_readiness.status = cold_start_only`
+- `performance_mark_ocr`
+  - `row_count = 80`
+  - `crop_ready_rows = 77`
+  - `suggestion_rows = 57`
+  - `high_quality_suggestion_rows = 45`
+  - `reviewed_rows = 9`
+  - `manual_reviewed_rows = 3`
+  - `proxy_seeded_rows = 6`
+- inspection/performance OCR 已完成至少一轮真实训练闭环：
+  - 训练作业 `SUCCEEDED`
+  - 新模型 `SUBMITTED`
+  - 审批工作台可见
+
+#### 3.3 当前真正阻断点
+
+- inspection/performance OCR 不再缺：
+  - 页面
+  - 接口
+  - 导出
+  - 训练入口
+  - 审批入口
+- 当前真正阻断点只剩：
+  - 还需要把 `proxy_seeded` 样本替换成真实 `final_text`
+  - 让 inspection/performance OCR 从“仅冷启动可训练”推进到“可正常训练”
+
+#### 3.4 这一主线的完成标准
+
+- 陌生低清车号图的 `ocr_unavailable` 和低置信度比例继续下降
+- 形成稳定 runtime eval 和难例桶
+- `inspection_mark_ocr / performance_mark_ocr` 的真实人工真值继续增长
+- `proxy_seeded_rows` 显著下降
+- `training_readiness.status` 从 `cold_start_only` 推进到 `ready`
+- 再跑出至少一轮更高真实真值占比的新训练作业与待验证模型
+
+#### 3.5 证据
+
+- `edge/inference/pipelines.py`
+- `config/car_number_rules.json`
+- `config/ocr_scene_profiles.json`
+- `config/railcar_inspection_task_catalog.json`
+- `config/railcar_inspection_dataset_blueprints.json`
+- `backend/app/api/training.py`
+- `frontend/src/pages/index.js`
+- `docker/scripts/prepare_inspection_ocr_proxy_crops.py`
+- `docker/scripts/generate_inspection_ocr_suggestions.py`
+- `docker/scripts/bootstrap_inspection_labeling_workspace.py`
+- `docker/scripts/build_inspection_task_dataset.py`
+- `docker/scripts/seed_inspection_ocr_from_car_number_truth.py`
+- `docs/product/railcar_robot_inspection_model_family_2026-03-12.md`
+- `docs/product/railcar_inspection_data_workspace_2026-03-12.md`
+- `docs/qa/ocr_generalization_iteration_2026-03-12.md`
+- `docs/qa/live_chain_audit_2026-03-10.md`
+
+## 4. 下一步自动执行
+
+### N1. inspection/performance OCR 真实真值替换
+
+- Priority: P1
+- Status: Next
+- Why:
+  - 当前唯一真正阻断 inspection/performance OCR 继续迈进的就是 `proxy_seeded` 样本仍未替换完。
+- Done When:
+  - `inspection_mark_ocr.proxy_seeded_rows < 6`
+  - `performance_mark_ocr.proxy_seeded_rows < 6`
+  - `manual_reviewed_rows` 明显上升
+  - 至少完成一轮新的真实 `final_text` 导入
+- Evidence:
+  - `demo_data/generated_datasets/inspection_mark_ocr_labeling/manifest.csv`
+  - `demo_data/generated_datasets/performance_mark_ocr_labeling/manifest.csv`
+  - `backend/app/api/training.py`
+
+### N2. inspection/performance OCR 下一轮训练与审批验证
+
+- Priority: P1
+- Status: Next
+- Why:
+  - 只有替换真值后重新训练，才能验证风险是否真正下降。
+- Done When:
+  - 新训练作业 `SUCCEEDED`
+  - 新待验证模型入库
+  - 审批工作台里 `proxy_truth_risk` 弱化或数据比例下降
+- Evidence:
+  - `docs/qa/live_chain_audit_2026-03-10.md`
+  - `docs/product/railcar_inspection_data_workspace_2026-03-12.md`
+
+### N3. door_lock_state_detect / connector_defect_detect 进入真实样本闭环
 
 - Priority: P2
 - Status: Queued
 - Why:
-  - 当前审批更偏 demo 闭环，还缺拒绝、补材料、证据包导出。
+  - 这两类任务现在仍主要停在模板和准备度阶段。
 - Done When:
-  - 审批工作台支持拒绝 / 要求补材料 / 导出证据包
+  - 各自产出一版真实工作区样本
+  - 各自产出一版 train/validation bundle
+  - 至少一条训练作业闭环
 - Evidence:
-  - `backend/app/api/models.py`
-  - `frontend/src/pages/index.js`
+  - `demo_data/generated_datasets/door_lock_state_detect_labeling/`
+  - `demo_data/generated_datasets/connector_defect_detect_labeling/`
 
-## 4. 已完成（最近）
+## 5. 最近完成（保留最近一段）
 
-### D35. 页面级走查与默认术语减负阶段性收口
+### D68. inspection/performance OCR 代理裁剪与自动建议覆盖率提升
 
 - Status: Done
-- Scope:
-  - 任务、结果、训练、模型、流水线、资产、审计、首页、车号文本复核都已完成“页内导航 + 默认视图减负 + 技术详情后置”
-  - 高频默认术语已统一改成业务表达，工程词主要退到 `技术详情`
-  - 页面级走查结果已形成正式报告，而不是只留在即时汇报里
+- Result:
+  - `inspection_mark_ocr.suggestion_rows = 59`
+  - `performance_mark_ocr.suggestion_rows = 57`
 - Evidence:
-  - `docs/qa/browser_walkthrough_report_2026-03-12.md`
-  - `frontend/src/pages/index.js`
-  - `frontend/assets/app.css`
-  - `docs/demo.md`
+  - `config/railcar_inspection_dataset_blueprints.json`
+  - `docker/scripts/prepare_inspection_ocr_proxy_crops.py`
+  - `docker/scripts/generate_inspection_ocr_suggestions.py`
 
-### D36. 前端高频错误提示模板扩展（Round 2）
+### D69. inspection/performance OCR 建议质量分层与优先复核队列
 
 - Status: Done
-- Scope:
-  - 将模型、流水线、资产、训练、数据集预览、ZIP 校验等高频后端原始报错，统一翻成可操作的中文提示
-  - 保持“原因 + 建议下一步”语气，不再把接口原始英文直接暴露给用户
-- Evidence:
-  - `frontend/src/core/api.js`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D37. 设置页“数据治理”工作区与正式预览/执行接口
-
-- Status: Done
-- Scope:
-  - 设置页新增 `数据治理` 工作区，统一承接“只保留当前车号演示主链 / 清理 synthetic 残留 / 裁剪旧 OCR 导出历史”
-  - 后端新增 `/settings/data-governance` 预览接口和 `/settings/data-governance/run` 执行接口
-  - 平台管理员可执行，买家等角色只读预览；两类操作都会写审计
-- Evidence:
-  - `backend/app/api/settings.py`
-  - `backend/app/services/data_governance_service.py`
-  - `frontend/src/pages/index.js`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D38. 登录失败 / 权限不足 / 训练机器鉴权失败改成结构化错误
-
-- Status: Done
-- Scope:
-  - 登录失败、权限不足、训练机器/边缘设备凭据失败不再返回裸英文错误
-  - 后端统一返回 `code + message + next_step`，前端可直接展示“原因 + 下一步”
-- Evidence:
-  - `backend/app/api/auth.py`
-  - `backend/app/security/dependencies.py`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D39. 资产预览 / 数据集预览 / 流水线注册发布错误改成结构化提示
-
-- Status: Done
-- Scope:
-  - 资产内容预览、数据集版本预览、数据集预览文件、流水线注册、流水线发布中的高频失败场景已改成结构化错误
-  - 失败时统一返回 `code + message + next_step`，覆盖资源不存在、数据集版本不存在、流水线不存在、流水线缺模型等场景
-- Evidence:
-  - `backend/app/api/assets.py`
-  - `backend/app/api/pipelines.py`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D40. 结果查询 / 结果截图 / 边缘拉资产回传结果 / 车号复核导出错误改成结构化提示
-
-- Status: Done
-- Scope:
-  - 结果查询、结果截图、结果导出训练数据、边缘拉资产、边缘回传结果、车号文本复核清单读取等高频失败场景已改成结构化错误
-  - `结果不存在 / 任务不存在 / 边缘资产不存在 / 数据集标签缺失 / 定位框非法` 这类错误会统一返回 `code + message + next_step`
-- Evidence:
-  - `backend/app/api/results.py`
-  - `backend/app/api/edge.py`
-### D41. 训练中心导出 / 改派 / 重试失败改成结构化提示
-
-- Status: Done
-- Scope:
-  - 车号文本训练数据导出、训练作业改派、训练作业重试、训练机器心跳和目标训练机器解析中的高频失败场景已改成结构化错误
-  - `敏感等级无效 / 待验证模型已存在 / 成功作业不能改派 / 非失败作业不能重试 / 目标训练机器不在线` 这类错误会统一返回 `code + message + next_step`
+- Result:
+  - `inspection_mark_ocr.high_quality_suggestion_rows = 51`
+  - `performance_mark_ocr.high_quality_suggestion_rows = 45`
 - Evidence:
   - `backend/app/api/training.py`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D42. 任务中心 / 模型中心 / 资产中心剩余高频错误改成结构化提示
-
-- Status: Done
-- Scope:
-  - 任务详情/删除任务、预检无模型、模型访问、模型包注册、ZIP 资源用途校验、数据集对比范围、数据集回滚条件、资源用途/敏感等级等高频错误已切换成结构化提示
-  - 主链上常见的 `task/model/asset not found`、`版本冲突`、`用途非法`、`ZIP 不合规` 这类错误现在统一返回 `code + message + next_step`
-- Evidence:
-  - `backend/app/api/tasks.py`
-  - `backend/app/api/models.py`
-  - `backend/app/api/assets.py`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D1. 训练 / 模型 / 流水线页补统一工作台概览
-
-- Status: Done
-- Evidence:
   - `frontend/src/pages/index.js`
-  - `frontend/assets/app.css`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
 
-### D2. 三页主列表开始从重表格改成卡片摘要
+### D70. inspection/performance OCR 高质量建议导出与优先筛选闭环
 
 - Status: Done
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-
-### D3. 页面级浏览器走查清单已建立
-
-- Status: Done
-- Evidence:
-  - `docs/qa/browser_walkthrough_checklist_2026-03-11.md`
-  - `docs/README.md`
-
-### D4. 任务页 / 结果页默认视图继续去技术噪音
-
-- Status: Done (Round 2)
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `frontend/assets/app.css`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D5. 模型页拆成独立工作区
-
-- Status: Done
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `frontend/assets/app.css`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D6. 训练页 / 流水线页拆成独立工作区
-
-- Status: Done
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D7. 资产页 / 审计页 / 设备页拆成独立工作区
-
-- Status: Done
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D8. 资产页 / 审计页 / 设备页默认列表卡片化
-
-- Status: Done
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D9. 设置页 / 工作台总览继续去技术噪音
-
-- Status: Done
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D10. 训练页 / 任务详情页页面级收边（Round 1）
-
-- Status: Done
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/qa/browser_walkthrough_checklist_2026-03-11.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D13. 卡片列表长标题 / 长版本号 / 长编号系统性收边（Round 1）
-
-- Status: Done
-- Evidence:
-  - `frontend/assets/app.css`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D14. 表格 / 工作台摘要 / 详情区长文本溢出修复（Round 2）
-
-- Status: Done
-- Evidence:
-  - `frontend/assets/app.css`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D15. 详情页首屏 / 动作区 / 内联验证区溢出修复（Round 3）
-
-- Status: Done
-- Evidence:
-  - `frontend/assets/app.css`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D30. 高复杂功能页导航化主任务基本收口
-
-- Status: Done
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D31. 模型页 / 流水线页残余工程术语继续减负
-
-- Status: Done
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D32. 指南页 / 训练机管理 / 训练协作列表继续去工程术语
-
-- Status: Done
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D33. 结果页 / 模型评估区继续去英文指标名
-
-- Status: Done
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D34. 训练页 / 任务页高频卡片继续去技术字段名
-
-- Status: Done
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D16. 任务页 / 结果页改成页内导航驱动
-
-- Status: Done
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D17. 模型页 / 训练页继续改成分步导航
-
-- Status: Done
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D18. 流水线页继续改成分步导航
-
-- Status: Done
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D11. 全站工作台视觉系统强化（Round 1）
-
-- Status: Done
-- Evidence:
-  - `frontend/assets/app.css`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D12. 历史数据按“当前车号示例主链”完成一轮真实清理
-
-- Status: Done
-- Scope:
-  - 仅保留当前已发布 `car_number_ocr / object_detect / bolt_missing_detect / scene_router`
-  - 仅保留车号 OCR 当前训练来源、原始本地训练素材、当前演示流水线
-  - 删除旧候选模型、旧训练作业、历史重复 OCR 导出、`api-*` 回归残留、重复任务与截图
 - Result:
-  - `models: 30 -> 4`
-  - `training_jobs: 28 -> 2`
-  - `data_assets: 256 -> 15`
-  - `dataset_versions: 52 -> 2`
-  - `inference_tasks: 238 -> 16`
-  - `inference_results: 35`（清理后）
+  - 新增高质量建议专用导出接口
+  - 复核页新增高质量建议专用入口
+  - summary 新增 `high_quality_review_candidate_rows`
 - Evidence:
-  - `docker/scripts/cleanup_keep_current_demo_chain.py`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D13. 卡片列表长标题 / 长版本号 / 长编号系统性收边（Round 1）
-
-- Status: Done
-- Scope:
-  - 统一补齐 `selection-card / task-list-card / selection-summary / workbench-overview / metric-card / badge / mono / details-panel / page-hero-actions`
-  - 目标是长文件名、长版本号、长 ID 不再把卡片、按钮区和 Hero 动作区撑坏
-- Evidence:
-  - `frontend/assets/app.css`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D12. 模型页 / 流水线页工作台视觉强化（Round 1）
-
-- Status: Done
-- Evidence:
-  - `frontend/assets/app.css`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D13. 任务页 / 结果页高频卡片视觉强化（Round 1）
-
-- Status: Done
-- Evidence:
-  - `frontend/assets/app.css`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D14. 新用户可用性审查已建立
-
-- Status: Done
-- Evidence:
-  - `docs/product/novice_user_usability_audit_2026-03-11.md`
-
-### D19. 车号文本复核页改成导航式工作区
-
-- Status: Done
-- Scope:
-  - 将原本堆在一页里的筛选、样本队列、当前复核、导出训练四块拆成页内导航
-  - 默认先看复核总览；选中样本后自动切到“当前样本复核”
-  - 导出训练数据或直接开始训练时自动切到“导出与训练”
-- Evidence:
+  - `backend/app/api/training.py`
   - `frontend/src/pages/index.js`
-  - `docs/demo.md`
   - `docs/qa/live_chain_audit_2026-03-10.md`
 
-### D20. 工作台首页改成导航式入口
+### D71. inspection OCR 训练前判断产品化
 
 - Status: Done
-- Scope:
-  - 将首页“最近资产 / 最近模型 / 最近任务”从同屏平铺改成页内导航
-  - 首页当前只默认展示工作台总览，其他最近数据按需进入
+- Result:
+  - summary / workspace summary 已返回：
+    - `ready`
+    - `cold_start_only`
+    - `blocked`
+  - 前端直接显示：
+    - `可正常训练`
+    - `仅冷启动可训练`
+    - `仍不可导出`
 - Evidence:
+  - `backend/app/api/training.py`
   - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
 
-### D21. 任务详情页改成导航式详情页
+### D72. inspection OCR 人工替换工具链收口
 
 - Status: Done
-- Scope:
-  - 将任务详情拆成 `执行结论 / 下一步动作 / 技术详情`
-  - 默认先看执行结论，避免任务摘要、按钮区、原始 JSON 同屏平铺
+- Result:
+  - 原图联看
+  - 代理替换队列导出
+  - 预检查 CSV
+  - CSV 导回
+  - review pack 导出
 - Evidence:
+  - `backend/app/api/training.py`
   - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
+  - `docs/product/railcar_inspection_data_workspace_2026-03-12.md`
 
-### D22. 结果页“结果列表”改成二级导航
+## 6. 执行原则
 
-- Status: Done
-- Scope:
-  - 将结果列表内部拆成 `结果概览 / 模型表现 / 单条结果`
-  - 查询成功后默认先看整体结论，不再把概览、模型表现和单条结果卡同时摊开
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D23. 训练页“训练机器”工作区改成二级导航
-
-- Status: Done
-- Scope:
-  - 将训练页的“训练机器”拆成 `机器总览 / 登记与清理`
-  - 默认先看节点健康和可用机器，管理动作后置
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D24. 训练页“训练总览”改成二级导航
-
-- Status: Done
-- Scope:
-  - 将训练总览拆成 `运行告警 / 训练作业 / 训练结果摘要`
-  - 默认先看运行告警；查看作业和训练摘要按需进入
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D25. 训练页“准备训练”改成二级导航
-
-- Status: Done
-- Scope:
-  - 将“准备训练”拆成 `选择算法 / 选择训练机器`
-  - 默认先选算法；选中算法后自动引导到训练机器
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D26. 模型页“模型总览”改成二级导航
-
-- Status: Done
-- Scope:
-  - 将模型总览拆成 `工作台概览 / 模型列表`
-  - 默认先看当前焦点模型的判断，再按需进入完整模型列表
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D27. 流水线页“流水线总览”改成二级导航
-
-- Status: Done
-- Scope:
-  - 将流水线总览拆成 `工作台概览 / 流水线列表`
-  - 默认先看当前焦点流水线的判断，再按需进入完整列表
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D28. 资产页“资产总览”改成二级导航
-
-- Status: Done
-- Scope:
-  - 将资产总览拆成 `使用概览 / 资产列表`
-  - 默认先看用途分布和推荐下一步动作，再按需进入完整资产列表
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D29. 审计页“审计总览”改成二级导航
-
-- Status: Done
-- Scope:
-  - 将审计总览拆成 `工作台概览 / 最近动作`
-  - 默认先看留痕摘要，浏览最近动作按需进入
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D30. 高可见术语继续中文化并降低工程味
-
-- Status: Done
-- Scope:
-  - 继续清理训练页、任务页、结果页、模型页、流水线页里高频可见的技术术语
-  - 将 `task_id / asset_id / model_id / pipeline_id / plugin / task_type / Worker / Loss Curve / Accuracy Curve`
-    等用户默认可见文案替换成更自然的中文表达
-  - 同步把结果导出、训练内联验证、车号文本复核和最近数据卡的提示语改得更接近业务动作
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-### D31. 默认可见区术语减负阶段性收口
-
-- Status: Done
-- Scope:
-  - 将默认视图里高频出现的工程术语进一步替换为业务表达
-  - 覆盖训练中心、任务中心、结果中心、模型中心、流水线中心、资产中心、车号文本复核
-  - 将默认提示语、占位文案、成功提示和按钮文案改得更接近普通用户语言
-- Done definition:
-  - 高复杂页面默认视图不再优先暴露 `task_id / asset_id / model_id / pipeline_id / worker / plugin / bbox / engine / final_text`
-  - 这类词保留在技术详情、代码内部或接口契约中
-- Evidence:
-  - `frontend/src/pages/index.js`
-  - `docs/demo.md`
-  - `docs/qa/live_chain_audit_2026-03-10.md`
-
-## 5. 插入新需求的规则
-
-- 如果新需求直接阻断真实主链：
-  - 插到 `正在执行`
-- 如果新需求改善高频体验但不阻断主链：
-  - 插到 `下一步自动执行`
-- 如果新需求偏治理、自动化、后续增强：
-  - 插到 `排队中`
-
-## 6. 当前自动执行顺序
-
-1. 继续收任务页 / 结果页的页面级细节，按 QA checklist 一项项修。
-2. 回到训练 / 模型 / 流水线页，继续削弱默认技术字段和次级噪音。
-3. 扩统一错误模板到更多高频链路。
-4. 再继续推进 OCR 真实泛化。
+- 优先做真实阻断，不优先做新的展示层花样。
+- 优先把 inspection/performance OCR 从“有工具”推进到“有真实真值、可正常训练”。
+- 完成一段就主动收口：
+  - 更新本清单
+  - 更新相关文档
+  - 删除线标记完成项

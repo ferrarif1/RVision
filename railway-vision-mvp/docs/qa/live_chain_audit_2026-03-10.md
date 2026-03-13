@@ -6,6 +6,190 @@
 - 动态待办清单：`../product/dynamic_execution_todo_2026-03-11.md`
 - 页面级走查报告：`./browser_walkthrough_report_2026-03-12.md`
 
+## 2026-03-12 巡检 OCR 通用复核页已打通到“导出前阻断”
+
+- 后端新增：
+  - `GET /training/inspection-ocr/{task_type}/summary`
+  - `GET /training/inspection-ocr/{task_type}/items`
+  - `GET /training/inspection-ocr/{task_type}/items/{sample_id}/crop`
+  - `POST /training/inspection-ocr/{task_type}/items/{sample_id}/review`
+  - `POST /training/inspection-ocr/{task_type}/export-dataset`
+- 前端新增：
+  - 路由：`training/inspection-ocr/:task_type`
+  - 训练中心工作区卡片动作：`打开文字复核`
+- 真实验证：
+  - `platform_admin` 鉴权下：
+    - `inspection_mark_ocr / performance_mark_ocr` 的 `summary` 均返回 `200`
+    - `items` 均返回样本列表
+    - `crop` 可直接返回真实裁剪图
+    - `review` 可对现有样本做原样保存，返回 `200`
+    - `export-dataset` 现返回结构化 `400`
+      - `code = inspection_ocr_dataset_not_enough_rows`
+      - 原因：当前还没有足够的真实 `final_text`
+- 同轮继续落地：
+  - `inspection-workspaces/summary` 与 `inspection-ocr/{task_type}/summary` 现已返回 `starter_samples`
+  - 真实 smoke：
+    - `inspection_mark_ocr starter_samples = 8`
+    - `performance_mark_ocr starter_samples = 8`
+  - 用途：
+    - 先把最适合人工起步的一批 crop 推到前面，减少人工在 77 条样本里盲找
+- 说明：
+  - 这条链现在已经从“只看准备度”推进到“可直接人工补真值”
+  - 当前阻断点已不是接口缺失，而是缺少已确认文本样本
+
+## 2026-03-13 inspection OCR 离线 CSV 导入已补上“预检查再导入”
+
+- 后端新增：
+  - `POST /training/inspection-ocr/{task_type}/preview-import-reviews`
+- 前端新增：
+  - `预检查离线复核 CSV`
+- 真实验证：
+  - 先导出 `inspection_mark_ocr` 代理替换队列
+  - 再用同一份 CSV 调用预检查接口，真实返回：
+    - `total_rows = 6`
+    - `matched_rows = 6`
+    - `would_update_rows = 0`
+    - `skipped_rows = 6`
+    - `unchanged_sample_ids = 6`
+  - 再调用正式导入接口，结果仍保持：
+    - `updated_rows = 0`
+    - `skipped_rows = 6`
+    - `missing_sample_ids = []`
+- 说明：
+  - 现在 inspection OCR 的离线导回不再需要“先导再猜”
+  - 能先预判这份 CSV 会不会真正改动工作区，再决定是否正式导入
+
+## 2026-03-13 inspection OCR 已补“训练就绪判断”
+
+- 后端新增：
+  - `summary.training_readiness`
+  - `inspection-workspaces.items[].training_readiness`
+- 返回内容包括：
+  - `status`
+  - `label`
+  - `normal_export_ready`
+  - `cold_start_export_ready`
+  - `blockers`
+  - `replacement_progress_pct`
+- 当前真实状态（`inspection_mark_ocr`）：
+  - `status = cold_start_only`
+  - `normal_export_ready = false`
+  - `cold_start_export_ready = true`
+  - `manual_reviewed_rows = 3`
+  - `proxy_seeded_rows = 6`
+  - `replacement_progress_pct = 33.3`
+- 前端变化：
+  - 训练中心工作区卡片会直接显示：
+    - `训练就绪`
+    - 下一步建议
+  - 巡检 OCR 复核页摘要会直接显示：
+    - `可正常训练 / 仅冷启动可训练 / 仍不可导出`
+- 说明：
+  - inspection OCR 当前不再需要靠读多段说明文案来判断能不能继续训练
+  - 系统已经把状态直接归纳成可执行结论
+
+## 2026-03-13 任务页二级导航自动切换已收口
+
+- 新增结构：
+  - `快速识别` 内部拆成：
+    - `识别输入`
+    - `识别结果`
+  - `创建任务` 内部拆成：
+    - `填写任务`
+    - `创建反馈`
+- 自动切换规则：
+  - 预检完成后自动切到 `识别结果`
+  - 快速识别完成后自动停在 `识别结果`
+  - 从快速识别“带入下方精确任务”后自动切到 `填写任务`
+  - 创建任务成功后自动切到 `创建反馈`
+- 真实意义：
+  - 任务页不再只是一级导航分区
+  - 高频主链已经进一步收成“输入 -> 结果”和“填写 -> 反馈”的二级步骤
+
+## 2026-03-13 结果页查询后已自动切到更合适的二级分区
+
+- 新增行为：
+  - 结果页 `结果列表` 内部现在会按当前结果自动决定先打开哪块：
+    - 有低置信度 OCR -> `单条结果`
+    - 多模型非 OCR 结果 -> `模型表现`
+    - 其余 -> `结果概览`
+- 目的：
+  - 查询成功后不再每次都回到同一个默认概览
+  - 把用户直接带到更接近下一步动作的位置
+- 当前实现：
+  - OCR 低置信度场景会在结果查询摘要里明确提示：`已自动切到单条结果，优先复核低置信度内容`
+
+## 2026-03-12 巡检 OCR 已进入“真实训练包可产出”阶段
+
+- 真实操作：
+  - `inspection_mark_ocr`
+    - train：`135_104_1... -> 62264635`
+    - validation：`152_104_1... -> 50268504`
+  - `performance_mark_ocr`
+    - train：`135_104_1... -> 62264635`
+    - validation：`152_104_1... -> 50268504`
+- 真实导出：
+  - `POST /training/inspection-ocr/inspection_mark_ocr/export-dataset` -> `200`
+  - `POST /training/inspection-ocr/performance_mark_ocr/export-dataset` -> `200`
+- 真实产物：
+  - `demo_data/generated_datasets/inspection_mark_ocr_dataset/inspection_mark_ocr_train_bundle.zip`
+  - `demo_data/generated_datasets/inspection_mark_ocr_dataset/inspection_mark_ocr_validation_bundle.zip`
+  - `demo_data/generated_datasets/performance_mark_ocr_dataset/performance_mark_ocr_train_bundle.zip`
+  - `demo_data/generated_datasets/performance_mark_ocr_dataset/performance_mark_ocr_validation_bundle.zip`
+- 真实摘要：
+  - 两类任务当前都是 `accepted_rows = 2`
+  - train `1`
+  - validation `1`
+- 说明：
+  - 巡检 OCR 这条线现在的真实阻断点已经从“没有导出能力”变成“真实样本量太小，仍需继续补 `final_text` 扩规模”
+
+## 2026-03-12 训练中心已接入巡检任务数据工作区准备度
+
+- 后端新增：
+  - `GET /training/inspection-workspaces/summary`
+- 前端新增：
+  - 训练中心“巡检任务数据准备”工作区
+- 真实验证：
+  - `platform_admin` 鉴权下，接口返回 `workspace_count = 4`
+  - 返回的工作区：
+    - `inspection_mark_ocr`
+    - `performance_mark_ocr`
+    - `door_lock_state_detect`
+    - `connector_defect_detect`
+  - 每个工作区当前 `row_count = 0 / ready_rows = 0`，符合仓库里保留空模板、不常驻伪数据的策略
+- 运行修复：
+  - 修复 `backend/app/api/training.py` 在容器里把 `REPO_ROOT` 误判成 `/` 的问题
+  - 修复后 backend 能正确读取 `/app/config/railcar_inspection_dataset_blueprints.json` 与 `/app/demo_data/generated_datasets/*`
+- 同轮继续落地：
+  - 接口现在已返回：
+    - `sample_target_recommended`
+    - `capture_profile`
+    - `qa_targets`
+    - `structured_fields`
+  - 真实 smoke：
+    - `inspection_mark_ocr`
+    - `sample_target_recommended = 500`
+    - `view_angle_deg = 45`
+    - `qa_targets = {accuracy_good_condition_pct_min:97, accuracy_light_stain_pct_min:90, latency_s_max:0.5}`
+    - `structured_fields = [inspection_date, inspection_record, car_type_code]`
+
+## 2026-03-12 巡检任务族数据工作区与训练包脚手架落地
+
+- 新增蓝图配置：
+  - `config/railcar_inspection_dataset_blueprints.json`
+- 新增脚本：
+  - `docker/scripts/bootstrap_inspection_labeling_workspace.py`
+  - `docker/scripts/build_inspection_task_dataset.py`
+- 仓库内已生成空工作区模板：
+  - `inspection_mark_ocr_labeling`
+  - `performance_mark_ocr_labeling`
+  - `door_lock_state_detect_labeling`
+  - `connector_defect_detect_labeling`
+- smoke 验证已完成：
+  - `inspection_mark_ocr` 复核清单可打成 train/validation bundle
+  - `door_lock_state_detect` 复核清单可打成 train/validation bundle
+- 为避免把伪数据留在仓库常态目录，smoke bundle 已回收，只保留空模板与脚手架
+
 ## 已实测跑通的链路
 
 ### 1. 车号文本复核 -> 导出训练资产并打开训练页
@@ -73,6 +257,21 @@
 - 实测结果：
   - `can_release = true`
   - 发布后模型状态：`RELEASED`
+
+### 5b. 审批治理补全：补材料 / 驳回 / 证据包导出
+- 接口：
+  - `POST /models/request-evidence`
+  - `POST /models/reject`
+  - `GET /models/{id}/evidence-pack`
+- 实测结果：
+  - 新建待验证模型后，可先登记补材料要求，再导出证据包，最后执行驳回
+  - 真实 smoke：
+    - `governance_state = rejected`
+    - `timeline_entries = 3`
+    - 时间线已包含 `request_evidence / rejected`
+- 说明：
+  - 审批工作台不再只有“一键审批通过”
+  - 现在平台可以记录补件要求、驳回原因，并导出完整证据包做归档或对外交付说明
 
 ### 6. 买家使用已发布模型再次推理
 - 买家任务：`04860114-b8b8-4d5b-97c6-86b8a4bd375b`
@@ -742,3 +941,367 @@
   - `技术详情`
   - `原始结果数据`
   - `训练参数与输出摘要`
+
+## 2026-03-12 OCR 运行评估已切到“真实真值 + 可关闭 curated 快捷命中”
+
+- `docker/scripts/evaluate_car_number_ocr_samples.py` 已改成优先使用 `final_text` 做真值，不再把 `ocr_suggestion` 当成唯一基线。
+- 新增了三种关键评估开关：
+  - `--variant`
+  - `--rename-upload`
+  - `--disable-curated-match`
+- 这使得运行评估可以明确区分两类情况：
+  - 已知样本在 curated/fixture 快捷命中下是否稳定
+  - 关闭快捷命中后，真实 OCR 泛化是否仍能读出 8 位车号
+
+## 2026-03-12 OCR 二阶段扩框重扫已落地，真实泛化探针出现提升
+
+- 在 `edge/inference/pipelines.py` 中，`car_number_ocr` 已增加：
+  - 合法候选优先
+  - 规则拒绝前的二阶段扩框重扫
+  - 更多 Tesseract 预处理与 `psm` 组合
+- 真实 8 样本泛化探针对比：
+  - 第一轮报告：`car_number_runtime_eval_generalization_probe_after_fix_20260312T032001Z.json`
+    - `2/8 ok`
+    - `6/8 empty`
+  - 第二轮报告：`car_number_runtime_eval_generalization_probe_after_fix_v2_20260312T032914Z.json`
+    - `3/8 ok`
+    - `1/8 ground_truth_mismatch`
+    - `4/8 empty`
+- 结论：
+  - 方向有效，说明“扩框重扫”能救回一部分原先直接 `ocr_rule_rejected` 的样本
+  - 但真实泛化仍未收口，剩余难例主要是：
+    - 左侧/首位丢失
+    - 低清窄框下的整串错位
+
+## 2026-03-12 OCR 第三轮增强实验已回退
+
+- 试过的增强：
+  - `CLAHE / sharpen`
+  - 更激进的多 `psm` 穷举
+- 真实结果：
+  - 首样本从正确回退成 `40081221`
+  - 第二样本客户端轮询超时
+- 处理：
+  - 已把这轮实验性增强撤回
+  - 运行中的 `vistral_edge_agent` 保持在第二轮“扩框重扫”的稳定版本
+
+## 2026-03-12 OCR 场景配置对齐库内 45° 侧拍车身标记识别
+
+- 新增配置：
+  - `config/ocr_scene_profiles.json`
+  - 当前激活：`railcar_yard_side_view_v1`
+- 已预留目标：
+  - `车号`
+  - `定检标记`
+  - `性能标记`
+- OCR 推理新增：
+  - 可配置文字带搜索区
+  - `clahe / sharpen / top_hat / rectified` 变体
+  - 旋转矫正文字带
+  - 对合法 8 位候选更早接受
+  - 规则拒绝后的超宽扩框救援
+- 本地关闭 curated 命中的难样本 probe：
+  - `9664...jpg -> 62745500` 正确
+  - `6775...jpg -> 60460282`，仍与真值 `60460284` 有 1 位偏差
+  - `2477 / 2216 / 3542` 仍为 `ocr_rule_rejected`
+- 结论：
+  - 这轮完成了面向机器人巡检场景的能力准备
+  - 但 `T5` 仍未收口，下一步要继续做截断数字与位数补偿救援
+  - 后续补了“滑窗条带 + 投影细分”后，`2216` 已从空结果提升到可读，但读成 `35152220`，说明方向有效但假阳性约束还不够；`2477 / 3542` 仍未拉回
+  - 再后续补了“合法 8 位结果稳定性判别”后，`2216` 已从“错号”拉回为 `ocr_rule_rejected`；`6775` 仍与真值差 1 位，当前重点已转到字符级纠错而不是继续盲目放大 ROI
+
+## 2026-03-12 巡检任务扩成正式模型族，车号规则升级为多规则族
+
+- 新增配置：
+  - `config/car_number_rules.json`
+  - `config/railcar_inspection_task_catalog.json`
+- 本轮变化：
+  - 车号校验不再假设“只能是 8 位数字”，已升级成多规则族：
+    - 标准 8 位数字车号
+    - 字母前缀数字编号
+    - 紧凑型混合编号
+  - 平台任务目录已正式扩展到：
+    - `car_number_ocr`
+    - `inspection_mark_ocr`
+    - `performance_mark_ocr`
+    - `door_lock_state_detect`
+    - `connector_defect_detect`
+- 说明：
+  - 这是训练与选模基础设施升级，不代表这些新增任务已经有可发布模型
+  - 当前真实闭环仍以 `car_number_ocr` 为主，其它任务进入“设计完成、训练待推进”状态
+
+## 2026-03-12 训练中心已能承接巡检模型族首版训练预设
+
+- 前端变化：
+  - 训练中心新增首版预设：
+    - `定检标记 OCR · 标准微调`
+    - `性能标记 OCR · 标准微调`
+    - `门锁状态 · 标准训练`
+    - `连接件缺陷 · 标准训练`
+  - 切换预设时会自动建议对应的目标模型编码，并在“当前选择”里显示预设说明
+- 说明：
+  - 这是训练入口就绪，不代表这些任务已有真实训练数据和已发布模型
+
+## 2026-03-12 巡检 OCR 工作区已进入代理裁剪队列阶段
+
+- 新增脚本：
+  - `docker/scripts/prepare_inspection_ocr_proxy_crops.py`
+- 新增蓝图字段：
+  - `proxy_crop_profile`
+- 真实执行结果：
+  - `inspection_mark_ocr`：`80` 条整图样本中，`77` 条已生成代理裁剪，`77` 条进入 `needs_check`
+  - `performance_mark_ocr`：`80` 条整图样本中，`77` 条已生成代理裁剪，`77` 条进入 `needs_check`
+  - 两个工作区各有 `3` 条因 `_annotations.txt` 缺少 anchor，仍保持整图待处理
+- 训练中心摘要现已显示：
+  - `已裁剪候选区域`
+  - `生成代理裁剪` 命令
+- 后续新增：
+  - `已有文字建议`
+  - `生成文字建议` 命令
+- 结论：
+  - `inspection_mark_ocr / performance_mark_ocr` 已从“整图待处理清单”推进到“可直接人工复核 crop 队列”
+  - `door_lock_state_detect / connector_defect_detect` 仍停留在采集计划模板阶段，下一步需要真实近景图像
+  - 当前对两类 OCR 工作区跑了全量自动文字建议，但 `suggestion_rows = 0`
+  - 使用 `build_inspection_task_dataset.py --allow-suggestions` 做 smoke 打包时，真实返回 `need at least 2 reviewed rows to build train/validation bundles`
+  - 这说明当前阻断点已经从“没有裁剪图”前移到“没有真实文本真值 / 没有可用自动建议”
+
+## 2026-03-13 巡检 OCR 已完成“首版训练作业 -> 待验证模型”闭环
+
+- 本机训练机器已重新拉起并恢复为 `ACTIVE`
+  - `worker_code = local-train-worker`
+  - `heartbeat_age_sec ~= 1-2`
+- 真实训练作业：
+  - `train-4f1de3303e`
+    - `target_model_code = inspection_mark_ocr`
+    - `status = SUCCEEDED`
+    - `assigned_worker_code = local-train-worker`
+  - `train-796e22cd0c`
+    - `target_model_code = performance_mark_ocr`
+    - `status = SUCCEEDED`
+    - `assigned_worker_code = local-train-worker`
+- 真实待验证模型：
+  - `inspection_mark_ocr:v20260312.154741.13db`
+    - `model_id = 81c6fe9f-83fb-435d-87c1-376ef620b4fb`
+    - `status = SUBMITTED`
+    - `approval-workbench.can_approve = true`
+  - `performance_mark_ocr:v20260312.154742.a773`
+    - `model_id = b1027db7-e0c5-4de6-9ee8-4f6141706de9`
+    - `status = SUBMITTED`
+    - `approval-workbench.can_approve = true`
+- 说明：
+  - 巡检 OCR 这两类任务现在已经不再只是“工作区 + 裁剪队列 + 首版 ZIP”
+  - 它们已经进入：
+    - 首版文本训练包
+    - 训练作业
+    - 待验证模型
+    - 审批工作台可见
+  - 下一步真正的价值点，已经转成继续补更多真实 `final_text`，提升新模型的真实泛化意义
+
+## 2026-03-13 训练中心已直接回显巡检 OCR 的最新训练状态
+
+- `/training/inspection-workspaces/summary` 现在会直接返回：
+  - `latest_training_job`
+  - `latest_candidate_model`
+- 当前真实返回：
+  - `inspection_mark_ocr`
+    - 最近训练作业：`train-4f1de3303e`
+    - 当前待验证模型：`inspection_mark_ocr:v20260312.154741.13db`
+  - `performance_mark_ocr`
+    - 最近训练作业：`train-796e22cd0c`
+    - 当前待验证模型：`performance_mark_ocr:v20260312.154742.a773`
+- 这意味着训练中心里不再只看到“数据准备度”，而是能直接看到：
+  - 当前这条 inspection 任务已经训练到哪一步
+  - 有没有最新待验证模型
+  - 下一步该去训练作业还是模型审批
+
+## 2026-03-13 巡检 OCR 已完成第二轮代理真值扩样与再训练
+
+- 新增脚本：
+  - `docker/scripts/seed_inspection_ocr_from_car_number_truth.py`
+- 真实执行结果：
+  - `inspection_mark_ocr`
+    - `reviewed_rows = 9`
+    - `train = 7`
+    - `validation = 2`
+    - 第二轮训练作业：`train-71de4b1551`
+    - 新待验证模型：`inspection_mark_ocr:v20260313.001308.df11`
+    - `model_id = b7128198-4c38-4e40-ac8f-def3f92cb6ff`
+  - `performance_mark_ocr`
+    - `reviewed_rows = 9`
+    - `train = 7`
+    - `validation = 2`
+    - 第二轮训练作业：`train-c176e03416`
+    - 新待验证模型：`performance_mark_ocr:v20260313.001308.a946`
+    - `model_id = 90b64926-2b3d-49c1-ac8e-25ecbd19013b`
+- 真实验证：
+  - `GET /training/inspection-workspaces/summary`
+    - 两个任务都已返回最新 `job_code / model.version / reviewed_rows`
+  - `GET /models/{id}/approval-workbench`
+    - 两个新模型的审批工作台均可读
+- 说明：
+  - 这轮不是新增 UI，而是真正把巡检 OCR 从 `2` 条种子文本推进到了 `9` 条代理真值、`7+2` 的最小可训规模
+  - 下一步重点不再是“让它能训练”，而是继续扩大真实 `final_text` 覆盖，降低这批代理真值带来的偏差
+
+## 2026-03-13 巡检 OCR 第三轮已把代理真值风险显式打到审批工作台
+
+- 真实动作：
+  - 修复运行中 backend 对 `build_inspection_task_dataset.py` 的旧模块缓存问题
+  - 重新导出 inspection/performance OCR 训练资产
+  - 重新触发第三轮训练作业
+- 第三轮真实训练结果：
+  - `inspection_mark_ocr`
+    - 训练作业：`train-cc7fd43563`
+    - 新待验证模型：`inspection_mark_ocr:v20260313.010220.6bad`
+    - `model_id = 42587051-3c82-4f1f-9c69-dced1d3db0fe`
+  - `performance_mark_ocr`
+    - 训练作业：`train-498aa6d26e`
+    - 新待验证模型：`performance_mark_ocr:v20260313.010220.bbd5`
+    - `model_id = 0af8db90-7a14-4b36-a2dc-b08671f0077a`
+- 真实验证：
+  - `POST /training/inspection-ocr/inspection_mark_ocr/export-dataset`
+    - 返回 `reviewer_counts = {proxy_from_car_number_truth: 6, platform_admin: 3}`
+    - 返回 `proxy_seeded_rows = 6`
+  - `GET /models/{id}/approval-workbench`
+    - `readiness.validation_report.data_provenance.asset_count = 2`
+    - `readiness.validation_report.data_provenance.proxy_seeded_rows = 12`
+    - `readiness.validation_report.checks[*].code` 含 `proxy_truth_risk`
+- 说明：
+  - 这轮的价值不是再多产一版候选模型，而是把“代理真值训练出来的模型带风险”正式显式到治理层
+  - 现在审批人已经能在工作台里看到：这批模型当前仍混有多少代理回灌文本，不能把它当作纯真实真值训练结果
+
+## 2026-03-13 inspection OCR 已进入“优先替换代理真值”工作流
+
+- 新增能力：
+  - inspection OCR 复核页支持 `仅看代理回灌`
+  - 训练中心工作区卡片支持显示：
+    - `manual_reviewed_rows`
+    - `proxy_replacement_samples`
+  - 后端列表接口支持：
+    - `GET /training/inspection-ocr/{task_type}/items?proxy_seeded=true`
+- 真实验证：
+  - `GET /training/inspection-ocr/inspection_mark_ocr/summary`
+    - `proxy_seeded_rows = 6`
+    - `manual_reviewed_rows = 3`
+    - `proxy_replacement_samples = 6`
+  - `GET /training/inspection-ocr/inspection_mark_ocr/items?proxy_seeded=true&limit=3`
+    - `total = 6`
+    - `first_proxy_seeded = true`
+    - `first_origin = 代理回灌`
+  - `GET /training/inspection-workspaces/summary`
+    - `inspection_mark_ocr.proxy_seeded_rows = 6`
+    - `inspection_mark_ocr.manual_reviewed_rows = 3`
+    - `inspection_mark_ocr.proxy_replacement_samples = 6`
+- 说明：
+  - 现在真正的剩余工作已经收敛成“把代理回灌样本逐条替换成真实标记真值”
+  - 系统已经不再缺页面、缺接口、缺筛选，而是进入人工补真值和下一轮再训练阶段
+
+## 2026-03-13 inspection OCR 已增加“代理真值默认阻断”门禁
+
+- 新增能力：
+  - 当 inspection OCR 工作区仍含代理回灌真值时，默认阻止：
+    - 导出训练包
+    - 导出训练资产
+    - 直接创建训练作业
+  - 只有显式允许“带代理真值继续训练（仅冷启动）”时才放行
+- 真实验证：
+  - `POST /training/inspection-ocr/inspection_mark_ocr/export-dataset`
+    - 默认 -> `400 inspection_ocr_proxy_truth_present`
+    - 显式传 `allow_proxy_seeded = true` -> `200`
+      - `accepted_rows = 9`
+      - `train_rows = 7`
+- 说明：
+  - 这一步把 inspection OCR 的当前状态从“能继续往前走”收成了“默认安全，显式放行”
+  - 现在冷启动训练仍可做，但不会再把带代理真值的数据当成默认正常路径
+
+## 2026-03-13 inspection OCR 已补“原图联看 + 代理替换队列导出”
+
+- 新增能力：
+  - `GET /training/inspection-ocr/{task_type}/items/{sample_id}/source`
+    - 复核页可同时查看 crop 与原图
+  - `GET /training/inspection-ocr/{task_type}/export-proxy-queue`
+    - 可导出 `proxy_replacement_queue.csv` 给人工逐条替换代理回灌真值
+- 真实验证：
+  - `GET /training/inspection-ocr/inspection_mark_ocr/items/{sample_id}/source`
+    - `200`
+    - `content-type = image/jpeg`
+  - `GET /training/inspection-ocr/inspection_mark_ocr/export-proxy-queue`
+    - `200`
+    - `content-type = text/csv`
+- 说明：
+  - 这一步把 inspection OCR 从“只能在 crop 小图里猜文本”推进到更适合人工批量真值替换的状态
+  - 当前剩余主线工作可以更集中地落在“逐条替换代理真值”本身，而不是再补查看工具
+
+## 2026-03-13 inspection OCR 已补“离线复核 CSV 批量导回”
+
+- 新增能力：
+  - `POST /training/inspection-ocr/{task_type}/import-reviews`
+  - 支持把离线填写过的 CSV 批量回写到工作区
+- 真实验证：
+  - 先导出：
+    - `GET /training/inspection-ocr/inspection_mark_ocr/export-proxy-queue` -> `200`
+  - 再原样导回：
+    - `POST /training/inspection-ocr/inspection_mark_ocr/import-reviews`
+    - 返回：
+      - `updated_rows = 0`
+      - `skipped_rows = 6`
+      - `missing_sample_ids = []`
+- 说明：
+  - 当前 inspection OCR 已具备“导出队列 -> 离线补文本 -> 批量导回”的闭环
+  - 这让后续替换 `proxy_seeded` 样本不再被单条表单操作卡住
+
+## 2026-03-13 inspection OCR 已补“人工替换离线工作包”
+
+- 新增能力：
+  - `GET /training/inspection-ocr/{task_type}/export-review-pack`
+  - 导出 `proxy_review_pack.zip`
+- 真实验证：
+  - `GET /training/inspection-ocr/inspection_mark_ocr/export-review-pack`
+    - `200`
+    - `content-type = application/zip`
+    - ZIP 内包含：
+      - `proxy_replacement_queue.csv`
+      - `README.txt`
+      - `crops/*`
+      - `sources/*`
+    - 当前真实 inspection_mark_ocr review pack 内：
+      - `crop_entries = 6`
+      - `source_entries = 6`
+- 说明：
+  - inspection OCR 现在已经具备“导出工作包 -> 离线批量补真值 -> CSV 导回”的完整人工替换链路
+  - 这部分工具链可以视为阶段性收口
+
+## 2026-03-13 inspection/performance OCR 代理裁剪已改成更贴近真实标记区域
+
+- 新变化：
+  - `performance_mark_ocr` 代理裁剪不再围绕车号框整体扩张，而是优先截取“车号上方性能码带”
+  - `inspection_mark_ocr` 代理裁剪改成优先截取“车号下方检修记录 / 小字信息带”
+- 对应实现：
+  - `config/railcar_inspection_dataset_blueprints.json`
+  - `docker/scripts/prepare_inspection_ocr_proxy_crops.py`
+- 真实重裁结果：
+  - 两类任务都重新执行了 `--force` 代理裁剪
+  - `inspection_mark_ocr.crop_ready_rows = 77`
+  - `performance_mark_ocr.crop_ready_rows = 77`
+- 真实建议结果：
+  - `inspection_mark_ocr.suggestion_rows = 59`
+  - `performance_mark_ocr.suggestion_rows = 57`
+- 说明：
+  - 这意味着 inspection/performance OCR 已经从“几乎没有自动建议，只能纯人工起步”推进到“有大量可读建议，可作为人工起步参考”
+  - 但正式训练仍继续以人工确认的 `final_text` 为主，自动建议不能直接等价于真值
+
+## 2026-03-13 inspection/performance OCR 已补高质量建议专用复核闭环
+
+- 已新增后端接口：
+  - `GET /training/inspection-ocr/{task_type}/export-high-quality-queue`
+  - `GET /training/inspection-ocr/{task_type}/export-high-quality-pack`
+- 已新增前端入口：
+  - `仅看高质量建议`
+  - `优先确认高质量建议`
+  - `导出高质量建议队列`
+  - `导出高质量建议包`
+- 运行中 backend 函数级验证（`inspection_mark_ocr`）：
+  - `high_quality_suggestion_rows = 51`
+  - `high_quality_review_candidate_rows = 51`
+  - `high_quality_suggestion_samples = 8`
+  - 高质量建议队列导出：`text/csv; charset=utf-8`
+  - 高质量建议包导出：`application/zip`

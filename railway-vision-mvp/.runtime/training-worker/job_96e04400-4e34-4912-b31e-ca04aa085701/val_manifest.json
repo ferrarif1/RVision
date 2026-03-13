@@ -1,0 +1,68 @@
+[
+  {
+    "asset": {
+      "id": "b5f3aa64-a818-403c-a811-1f1d16f9d185",
+      "file_name": "inspection_mark_ocr_validation_bundle.zip",
+      "asset_type": "archive",
+      "sensitivity_level": "L2",
+      "checksum": "a777d25fd6b0a89da2239a1da6c1259dce733d4a54ee33984b123ae87c850545",
+      "meta": {
+        "size": 75736,
+        "split": "validation",
+        "use_case": "railcar-robot-inspection-proxy",
+        "extension": ".zip",
+        "task_type": "inspection_mark_ocr",
+        "task_label": "定检标记识别",
+        "dataset_key": "local-inspection-mark-ocr-validation",
+        "archive_kind": "zip_dataset",
+        "accepted_rows": 9,
+        "asset_purpose": "validation",
+        "dataset_label": "inspection_mark_ocr-validation",
+        "label_sources": {
+          "final_text": 9
+        },
+        "generated_from": "inspection_mark_ocr_labeling_review",
+        "dataset_version": "v4",
+        "archive_max_depth": 1,
+        "archive_file_count": 5,
+        "dataset_version_id": "486bbe94-8ed6-4163-af98-431e0025832f",
+        "archive_entry_count": 5,
+        "archive_image_count": 2,
+        "archive_video_count": 0,
+        "dataset_source_type": "inspection_ocr_export",
+        "intended_model_code": "inspection_mark_ocr",
+        "archive_resource_count": 2,
+        "archive_directory_count": 0,
+        "archive_preview_members": [
+          "images/152_104_1_jpg.rf.eba6c600559c380fbb840248861ba809_f1a9a22f5a.jpg",
+          "images/2480_104_0_jpg.rf.4ce0015df3828bde57ad8f7c3d55f05a_792cf1b26b.jpg"
+        ],
+        "archive_uncompressed_bytes": 76383,
+        "archive_ignored_entry_count": 3
+      },
+      "purpose": "validation"
+    },
+    "path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_96e04400-4e34-4912-b31e-ca04aa085701/val/val_1_b5f3aa64-a818-403c-a811-1f1d16f9d185_inspection_mark_ocr_validation_bundle.zip",
+    "size_bytes": 75736,
+    "archive_path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_96e04400-4e34-4912-b31e-ca04aa085701/val/val_1_b5f3aa64-a818-403c-a811-1f1d16f9d185_inspection_mark_ocr_validation_bundle.zip",
+    "extracted_dir": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_96e04400-4e34-4912-b31e-ca04aa085701/val/val_1_b5f3aa64-a818-403c-a811-1f1d16f9d185_inspection_mark_ocr_validation_bundle_dataset",
+    "members": [
+      {
+        "relative_path": "images/152_104_1_jpg.rf.eba6c600559c380fbb840248861ba809_f1a9a22f5a.jpg",
+        "path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_96e04400-4e34-4912-b31e-ca04aa085701/val/val_1_b5f3aa64-a818-403c-a811-1f1d16f9d185_inspection_mark_ocr_validation_bundle_dataset/images/152_104_1_jpg.rf.eba6c600559c380fbb840248861ba809_f1a9a22f5a.jpg",
+        "size_bytes": 35209
+      },
+      {
+        "relative_path": "images/2480_104_0_jpg.rf.4ce0015df3828bde57ad8f7c3d55f05a_792cf1b26b.jpg",
+        "path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_96e04400-4e34-4912-b31e-ca04aa085701/val/val_1_b5f3aa64-a818-403c-a811-1f1d16f9d185_inspection_mark_ocr_validation_bundle_dataset/images/2480_104_0_jpg.rf.4ce0015df3828bde57ad8f7c3d55f05a_792cf1b26b.jpg",
+        "size_bytes": 39231
+      }
+    ],
+    "resource_count": 2,
+    "ignored_entry_count": 3,
+    "archive_preview_members": [
+      "images/152_104_1_jpg.rf.eba6c600559c380fbb840248861ba809_f1a9a22f5a.jpg",
+      "images/2480_104_0_jpg.rf.4ce0015df3828bde57ad8f7c3d55f05a_792cf1b26b.jpg"
+    ]
+  }
+]

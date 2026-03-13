@@ -47,7 +47,7 @@ Vistral 把资产准备、供应商协作、模型治理、任务执行、结果
 - 训练作业创建 -> worker 拉取训练资产/基线模型 -> 生成候选模型 -> 平台自动回收入库 -> 前端集中展示关键指标、数据规模与候选模型入口
 - ZIP 数据集包上传 -> 资源计数与层级分析 -> worker 解包 -> 多资源训练输入
 - 快速识别 -> 预检扫描（候选标签 / 任务类型 / OCR 文本） -> 自动选模 -> 边缘检测 / OCR -> 标注图回传 -> 轻量修订（删误检/补框/拖拽缩放/修订文本） -> 数据集版本生成 -> 样本级差异对比、筛选、回滚与缩略图预览 -> 训练中心直接选用；“导出训练资产并打开训练页”只做预填，不会自动创建训练作业
-- 候选模型回收 -> 自动验证门禁（验证资产 / 指标 / best checkpoint / runtime 契约） -> 审批工作台自动推荐验证样本、批量创建验证任务、汇总运行结果 -> 发布工作台预填设备/买家/交付方式并先做风险评估 -> 流水线发布工作台预填设备/买家并确认发布 -> 平台审批与授权发布
+- 候选模型回收 -> 自动验证门禁（验证资产 / 指标 / best checkpoint / runtime 契约） -> 审批工作台自动推荐验证样本、批量创建验证任务、支持补材料 / 驳回 / 导出证据包 -> 发布工作台预填设备/买家/交付方式并先做风险评估 -> 流水线发布工作台预填设备/买家并确认发布 -> 平台审批与授权发布
 
 训练后验证现在也支持更短路径：
 
@@ -319,6 +319,82 @@ python3 docker/scripts/prepare_local_car_number_text_dataset.py \
 
 可选：
 - `--allow-suggestions`：在 `final_text` 为空时，临时使用 `ocr_suggestion` 先生成试验包
+
+### 方式C6：生成巡检任务族标注工作区
+
+```bash
+cd <repo-root>
+python3 docker/scripts/bootstrap_inspection_labeling_workspace.py --task-type inspection_mark_ocr --output-dir demo_data/generated_datasets
+python3 docker/scripts/bootstrap_inspection_labeling_workspace.py --task-type performance_mark_ocr --output-dir demo_data/generated_datasets
+python3 docker/scripts/bootstrap_inspection_labeling_workspace.py --task-type door_lock_state_detect --output-dir demo_data/generated_datasets
+python3 docker/scripts/bootstrap_inspection_labeling_workspace.py --task-type connector_defect_detect --output-dir demo_data/generated_datasets
+```
+
+生成目录：
+- `demo_data/generated_datasets/inspection_mark_ocr_labeling/`
+- `demo_data/generated_datasets/performance_mark_ocr_labeling/`
+- `demo_data/generated_datasets/door_lock_state_detect_labeling/`
+- `demo_data/generated_datasets/connector_defect_detect_labeling/`
+
+如果要把同图已复核车号真值回灌到巡检 OCR 工作区，作为首版代理文本，可继续执行：
+
+```bash
+cd <repo-root>
+python3 docker/scripts/seed_inspection_ocr_from_car_number_truth.py
+```
+
+当前真实状态：
+- `inspection_mark_ocr / performance_mark_ocr` 都已推进到 `9` 条已确认文本
+- 两类任务都已形成 `7 train + 2 validation` 的最小可训规模
+- 最新训练作业分别为 `train-71de4b1551 / train-c176e03416`
+- 最新待验证模型分别为 `inspection_mark_ocr:v20260313.001308.df11 / performance_mark_ocr:v20260313.001308.a946`
+- 第三轮治理验证模型分别为 `inspection_mark_ocr:v20260313.010220.6bad / performance_mark_ocr:v20260313.010220.bbd5`
+- 这两版模型在审批工作台里已真实显示：
+  - `data_provenance.proxy_seeded_rows = 12`
+  - `proxy_truth_risk`
+- inspection OCR 复核页现已支持：
+  - `仅看代理回灌`
+  - `优先替换代理真值`
+  - 工作区摘要显示 `manual_reviewed_rows / proxy_replacement_samples`
+- inspection OCR 复核页现在还支持：
+  - 同时查看 crop 和原图
+  - 直接导出 `proxy_replacement_queue.csv`
+- inspection OCR 现在还支持：
+  - 把离线补好的 CSV 批量导回工作区
+  - 也就是完整支持“导出队列 -> 预检查 CSV 会更新哪些样本 -> 表格补真值 -> 批量导回”
+- inspection OCR 现在还支持：
+  - 导出 `proxy_review_pack.zip`
+  - 包内同时带队列 CSV、README、crops、sources
+- inspection OCR 当前还带有默认质量门禁：
+  - 如果工作区仍含代理回灌真值，默认会阻止导出训练包、导出资产和直接创建训练作业
+  - 只有显式勾选 `允许带代理真值继续训练（仅冷启动）` 才会放行
+
+### 方式C7：把巡检任务复核清单打成训练 / 验证包
+
+```bash
+cd <repo-root>
+python3 docker/scripts/build_inspection_task_dataset.py \
+  --task-type inspection_mark_ocr \
+  --manifest demo_data/generated_datasets/inspection_mark_ocr_labeling/manifest.csv \
+  --output-dir demo_data/generated_datasets/inspection_mark_ocr_dataset \
+  --allow-suggestions
+
+python3 docker/scripts/build_inspection_task_dataset.py \
+  --task-type door_lock_state_detect \
+  --manifest demo_data/generated_datasets/door_lock_state_detect_labeling/manifest.csv \
+  --output-dir demo_data/generated_datasets/door_lock_state_detect_dataset
+```
+
+输出内容：
+- `<task_type>_train_bundle.zip`
+- `<task_type>_validation_bundle.zip`
+- `<task_type>_dataset_summary.json`
+
+训练中心已经同步提供首版预设：
+- `定检标记 OCR · 标准微调`
+- `性能标记 OCR · 标准微调`
+- `门锁状态 · 标准训练`
+- `连接件缺陷 · 标准训练`
 
 ### 方式D：发布 GO/NO-GO 门禁
 

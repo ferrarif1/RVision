@@ -1,0 +1,59 @@
+{
+  "active_profile": "railcar_yard_side_view_v1",
+  "profiles": {
+    "railcar_yard_side_view_v1": {
+      "label": "库内侧视车身标记识别",
+      "description": "面向机器狗/轮足机器人在库内沿车侧 45° 斜角拍摄的车号与文字标记识别。",
+      "camera_pose": {
+        "distance_m": [1.5, 2.0],
+        "view_angle_deg": 45,
+        "center_deviation_pct_max": 15
+      },
+      "text_band_search": {
+        "x_range": [0.02, 0.98],
+        "y_range": [0.16, 0.56]
+      },
+      "car_number_anchors": [
+        [0.10, 0.26, 0.28, 0.40],
+        [0.10, 0.30, 0.45, 0.44],
+        [0.18, 0.27, 0.48, 0.42],
+        [0.22, 0.28, 0.58, 0.39],
+        [0.20, 0.28, 0.58, 0.42],
+        [0.29, 0.30, 0.65, 0.40],
+        [0.28, 0.28, 0.72, 0.42],
+        [0.46, 0.28, 0.84, 0.42],
+        [0.58, 0.29, 0.99, 0.44],
+        [0.46, 0.28, 0.96, 0.43]
+      ],
+      "targets": {
+        "car_number": {
+          "label": "车号",
+          "type": "ocr",
+          "rule": "railcar_identifier_family_v1"
+        },
+        "inspection_mark": {
+          "label": "定检标记",
+          "type": "ocr",
+          "rule": "railcar_mixed_compact_v1",
+          "notes": "预留给后续结构化文本识别。"
+        },
+        "performance_mark": {
+          "label": "性能标记",
+          "type": "ocr",
+          "rule": "railcar_mixed_compact_v1",
+          "notes": "预留给后续结构化文本识别。"
+        },
+        "door_lock_state": {
+          "label": "门锁状态",
+          "type": "detect",
+          "notes": "用于后续锁闭/敞开识别。"
+        },
+        "connector_defect": {
+          "label": "连接件缺陷",
+          "type": "detect",
+          "notes": "预留给后续结构化文本识别。"
+        }
+      }
+    }
+  }
+}

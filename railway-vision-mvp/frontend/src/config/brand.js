@@ -34,6 +34,7 @@ export const STORAGE_KEYS = {
   prefillTaskDeviceCode: namespacedStorageKey('prefill_task_device_code'),
   prefillTaskHint: namespacedStorageKey('prefill_task_hint'),
   lastTaskId: namespacedStorageKey('last_task_id'),
+  inspectionOcrProxyOnly: namespacedStorageKey('inspection_ocr_proxy_only'),
 };
 
 const LEGACY_STORAGE_KEYS = {
@@ -58,6 +59,7 @@ const LEGACY_STORAGE_KEYS = {
   prefillTaskDeviceCode: 'rv_prefill_task_device_code',
   prefillTaskHint: 'rv_prefill_task_hint',
   lastTaskId: 'rv_last_task_id',
+  inspectionOcrProxyOnly: 'rv_inspection_ocr_proxy_only',
 };
 
 export function migrateLegacyStorageKeys(storage = window.localStorage) {

@@ -147,6 +147,17 @@ def _read_manifest(path: Path, limit: int) -> list[dict[str, str]]:
     return filtered[:limit] if limit > 0 else filtered
 
 
+def _ground_truth_text(row: dict[str, str]) -> tuple[str, str]:
+    final_text = str(row.get("final_text") or "").strip().upper()
+    review_status = str(row.get("review_status") or "").strip().lower()
+    if final_text and review_status == "done":
+        return final_text, "final_text"
+    suggestion = str(row.get("ocr_suggestion") or "").strip().upper()
+    if suggestion:
+        return suggestion, "ocr_suggestion"
+    return "", "none"
+
+
 def _poll_task(opener, api_base: str, token: str, task_id: str, timeout_seconds: int) -> dict[str, Any]:
     deadline = time.time() + timeout_seconds
     latest: dict[str, Any] = {}
@@ -171,13 +182,15 @@ def _fetch_expert_result(opener, api_base: str, token: str, task_id: str) -> dic
     return expert
 
 
-def _classify_issue(runtime_text: str, confidence: float | None, suggestion: str) -> str:
+def _classify_issue(runtime_text: str, confidence: float | None, ground_truth: str) -> str:
     if not runtime_text:
         return "empty"
     if confidence is None or confidence < 0.6:
         return "low_confidence"
-    if suggestion and runtime_text != suggestion:
-        return "suggestion_mismatch"
+    if ground_truth and runtime_text != ground_truth:
+        return "ground_truth_mismatch"
+    if not ground_truth:
+        return "no_ground_truth"
     return "ok"
 
 
@@ -201,6 +214,8 @@ def run_eval(args: argparse.Namespace) -> dict[str, Any]:
             "runtime_confidence": None,
             "runtime_engine": None,
             "runtime_bbox": None,
+            "ground_truth_text": "",
+            "ground_truth_source": "none",
             "manifest_suggestion": str(row.get("ocr_suggestion") or "").strip(),
             "manifest_engine": row.get("ocr_suggestion_engine"),
             "issue": "task_failed",
@@ -208,11 +223,14 @@ def run_eval(args: argparse.Namespace) -> dict[str, Any]:
         }
         try:
             sample_path = _find_source_file(source_file)
+            ground_truth, ground_truth_source = _ground_truth_text(row)
+            sample_result["ground_truth_text"] = ground_truth
+            sample_result["ground_truth_source"] = ground_truth_source
             asset = _upload_asset(
                 opener,
                 api_base,
                 token=token,
-                file_name=sample_path.name,
+                file_name=(f"renamed_{uuid.uuid4().hex[:10]}{sample_path.suffix}" if args.rename_upload else sample_path.name),
                 file_bytes=sample_path.read_bytes(),
                 content_type="image/png" if sample_path.suffix.lower() == ".png" else "image/jpeg",
             )
@@ -255,7 +273,9 @@ def run_eval(args: argparse.Namespace) -> dict[str, Any]:
                         "quick_detect": {
                             "requested_task_type": "car_number_ocr",
                             "resolved_task_type": "car_number_ocr",
+                            "eval_variant": args.variant,
                         },
+                        "disable_curated_match": args.disable_curated_match,
                     },
                     "context": {},
                     "options": {},
@@ -273,14 +293,13 @@ def run_eval(args: argparse.Namespace) -> dict[str, Any]:
             runtime_text = str(result_json.get("car_number") or "").strip()
             confidence_value = result_json.get("confidence")
             confidence = float(confidence_value) if isinstance(confidence_value, (int, float)) else None
-            suggestion = sample_result["manifest_suggestion"]
             sample_result.update(
                 {
                     "runtime_text": runtime_text,
                     "runtime_confidence": confidence,
                     "runtime_engine": result_json.get("engine"),
                     "runtime_bbox": result_json.get("bbox"),
-                    "issue": _classify_issue(runtime_text, confidence, suggestion),
+                    "issue": _classify_issue(runtime_text, confidence, sample_result["ground_truth_text"]),
                 }
             )
         except Exception as exc:
@@ -295,10 +314,13 @@ def run_eval(args: argparse.Namespace) -> dict[str, Any]:
         "generated_at": _utc_now_iso(),
         "api_base": api_base,
         "device_code": args.device_code,
+        "variant": args.variant,
+        "rename_upload": bool(args.rename_upload),
+        "disable_curated_match": bool(args.disable_curated_match),
         "sample_count": len(report_rows),
         "issue_counts": {
             key: sum(1 for row in report_rows if row["issue"] == key)
-            for key in ("ok", "low_confidence", "suggestion_mismatch", "empty", "timeout", "task_failed")
+            for key in ("ok", "ground_truth_mismatch", "low_confidence", "no_ground_truth", "empty", "timeout", "task_failed")
         },
         "rows": report_rows,
     }
@@ -308,8 +330,9 @@ def run_eval(args: argparse.Namespace) -> dict[str, Any]:
 def _write_report(report: dict[str, Any], output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    json_path = output_dir / f"car_number_runtime_eval_{stamp}.json"
-    csv_path = output_dir / f"car_number_runtime_eval_{stamp}.csv"
+    suffix = re.sub(r"[^a-z0-9_-]+", "-", str(report.get("variant") or "default").lower()).strip("-") or "default"
+    json_path = output_dir / f"car_number_runtime_eval_{suffix}_{stamp}.json"
+    csv_path = output_dir / f"car_number_runtime_eval_{suffix}_{stamp}.csv"
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         fieldnames = [
@@ -323,6 +346,8 @@ def _write_report(report: dict[str, Any], output_dir: Path) -> None:
             "runtime_confidence",
             "runtime_engine",
             "runtime_bbox",
+            "ground_truth_text",
+            "ground_truth_source",
             "manifest_suggestion",
             "manifest_engine",
             "issue",
@@ -333,8 +358,10 @@ def _write_report(report: dict[str, Any], output_dir: Path) -> None:
         for row in report["rows"]:
             writer.writerow(row)
     latest_path = output_dir / "latest.json"
+    variant_latest_path = output_dir / f"latest_{suffix}.json"
     latest_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"json": str(json_path), "csv": str(csv_path), "latest": str(latest_path)}, ensure_ascii=False, indent=2))
+    variant_latest_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps({"json": str(json_path), "csv": str(csv_path), "latest": str(latest_path), "variant_latest": str(variant_latest_path)}, ensure_ascii=False, indent=2))
 
 
 def parse_args() -> argparse.Namespace:
@@ -347,6 +374,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--password", default="buyer123")
     parser.add_argument("--limit", type=int, default=12, help="How many manifest rows to evaluate. Use 0 for all.")
     parser.add_argument("--wait-seconds", type=int, default=60)
+    parser.add_argument("--variant", default="default", help="Logical evaluation variant name written into the report.")
+    parser.add_argument("--rename-upload", action="store_true", help="Upload the same image bytes with randomized file names.")
+    parser.add_argument("--disable-curated-match", action="store_true", help="Disable curated/fixture OCR shortcuts in runtime policy to probe true OCR generalization.")
     return parser.parse_args()
 
 

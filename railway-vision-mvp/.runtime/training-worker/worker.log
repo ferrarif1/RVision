@@ -69,3 +69,79 @@ Traceback (most recent call last):
   File "/Users/zhangyuanyi/Library/Python/3.9/lib/python/site-packages/httpx/_transports/default.py", line 118, in map_httpcore_exceptions
     raise mapped_exc(message) from exc
 httpx.RemoteProtocolError: Server disconnected without sending a response.
+Traceback (most recent call last):
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 1166, in <module>
+    main()
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 1160, in main
+    runner.run()
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 1056, in run
+    self.heartbeat()
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 759, in heartbeat
+    self._request_json(
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 755, in _request_json
+    raise WorkerError(f"{method} {path} failed ({resp.status_code}): {resp.text}")
+WorkerError: POST /training/workers/heartbeat failed (502): <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>nginx/1.27.5</center>
+</body>
+</html>
+
+Traceback (most recent call last):
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 1166, in <module>
+    main()
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 1160, in main
+    runner.run()
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 1056, in run
+    self.heartbeat()
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 759, in heartbeat
+    self._request_json(
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 755, in _request_json
+    raise WorkerError(f"{method} {path} failed ({resp.status_code}): {resp.text}")
+WorkerError: POST /training/workers/heartbeat failed (502): <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>nginx/1.27.5</center>
+</body>
+</html>
+
+Traceback (most recent call last):
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 1166, in <module>
+    main()
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 1160, in main
+    runner.run()
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 1056, in run
+    self.heartbeat()
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 759, in heartbeat
+    self._request_json(
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 755, in _request_json
+    raise WorkerError(f"{method} {path} failed ({resp.status_code}): {resp.text}")
+WorkerError: POST /training/workers/heartbeat failed (502): <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>nginx/1.27.5</center>
+</body>
+</html>
+
+Traceback (most recent call last):
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 1166, in <module>
+    main()
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 1160, in main
+    runner.run()
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 1056, in run
+    self.heartbeat()
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 759, in heartbeat
+    self._request_json(
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 755, in _request_json
+    raise WorkerError(f"{method} {path} failed ({resp.status_code}): {resp.text}")
+WorkerError: POST /training/workers/heartbeat failed (502): <html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>nginx/1.27.5</center>
+</body>
+</html>
+

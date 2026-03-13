@@ -1,0 +1,229 @@
+{
+  "version": "railcar_inspection_dataset_blueprints_v1",
+  "tasks": {
+    "inspection_mark_ocr": {
+      "label": "定检标记识别",
+      "dataset_kind": "ocr_text",
+      "dataset_key_prefix": "local-inspection-mark-ocr",
+      "annotation_format": "vistral_local_ocr_text_v1",
+      "sample_target_min": 200,
+      "sample_target_recommended": 500,
+      "capture_profile": {
+        "scene": "库内车身侧拍",
+        "distance_m": [1.5, 2.0],
+        "view_angle_deg": 45,
+        "image_quality": ">=1080P",
+        "center_deviation_pct_max": 15
+      },
+      "structured_fields": [
+        "inspection_date",
+        "inspection_record",
+        "car_type_code"
+      ],
+      "proxy_crop_profile": {
+        "anchor": "existing_number_bbox",
+        "mode": "relative_window",
+        "window_width_ratio": 0.72,
+        "window_height_ratio": 0.34,
+        "window_center_x_ratio": 0.32,
+        "window_center_y_ratio": 1.42,
+        "min_crop_width_ratio": 0.16,
+        "min_crop_height_ratio": 0.08
+      },
+      "qa_targets": {
+        "accuracy_good_condition_pct_min": 97,
+        "accuracy_light_stain_pct_min": 90,
+        "latency_s_max": 0.5
+      },
+      "recommended_fields": [
+        "sample_id",
+        "source_file",
+        "crop_file",
+        "split_hint",
+        "task_type",
+        "label_class",
+        "bbox_x1",
+        "bbox_y1",
+        "bbox_x2",
+        "bbox_y2",
+        "ocr_suggestion",
+        "final_text",
+        "review_status",
+        "reviewer",
+        "notes"
+      ],
+      "review_status_values": [
+        "pending",
+        "done",
+        "needs_check"
+      ],
+      "notes": [
+        "建议优先使用 crop_file 指向局部文字裁剪图，source_file 保留原始图路径。",
+        "定检标记建议额外记录日期、检修记录等结构化字段，可先写入 notes 或结构化字段列。",
+        "优先覆盖清晰、轻污渍、轻透视畸变三类样本，确保库内 45° 侧拍场景可收口。"
+      ]
+    },
+    "performance_mark_ocr": {
+      "label": "性能标记识别",
+      "dataset_kind": "ocr_text",
+      "dataset_key_prefix": "local-performance-mark-ocr",
+      "annotation_format": "vistral_local_ocr_text_v1",
+      "sample_target_min": 200,
+      "sample_target_recommended": 500,
+      "capture_profile": {
+        "scene": "库内车身侧拍",
+        "distance_m": [1.5, 2.0],
+        "view_angle_deg": 45,
+        "image_quality": ">=1080P",
+        "center_deviation_pct_max": 15
+      },
+      "structured_fields": [
+        "performance_code",
+        "capacity_mark",
+        "vehicle_series"
+      ],
+      "proxy_crop_profile": {
+        "anchor": "existing_number_bbox",
+        "mode": "relative_window",
+        "window_width_ratio": 0.82,
+        "window_height_ratio": 0.22,
+        "window_center_x_ratio": 0.34,
+        "window_center_y_ratio": -0.28,
+        "min_crop_width_ratio": 0.15,
+        "min_crop_height_ratio": 0.08
+      },
+      "qa_targets": {
+        "accuracy_good_condition_pct_min": 97,
+        "accuracy_light_stain_pct_min": 90,
+        "latency_s_max": 0.5
+      },
+      "recommended_fields": [
+        "sample_id",
+        "source_file",
+        "crop_file",
+        "split_hint",
+        "task_type",
+        "label_class",
+        "bbox_x1",
+        "bbox_y1",
+        "bbox_x2",
+        "bbox_y2",
+        "ocr_suggestion",
+        "final_text",
+        "review_status",
+        "reviewer",
+        "notes"
+      ],
+      "review_status_values": [
+        "pending",
+        "done",
+        "needs_check"
+      ],
+      "notes": [
+        "性能标记可能包含英文字母、数字和紧凑混合编号，final_text 不要只按 8 位数字填写。",
+        "若后续需要结构化解析，可在 notes 中先记录规则提示。",
+        "建议和定检标记共用文字区域定位能力，但分开维护最终文本真值。"
+      ]
+    },
+    "door_lock_state_detect": {
+      "label": "门锁状态识别",
+      "dataset_kind": "state_classification",
+      "dataset_key_prefix": "local-door-lock-state",
+      "annotation_format": "vistral_local_state_classification_v1",
+      "sample_target_min": 500,
+      "sample_target_recommended": 1200,
+      "capture_profile": {
+        "scene": "门锁近景",
+        "distance_m": [0.8, 1.8],
+        "view_angle_deg": 0,
+        "image_quality": ">=1080P"
+      },
+      "qa_targets": {
+        "obvious_state_accuracy_pct_min": 90,
+        "latency_s_max": 1.0
+      },
+      "label_values": [
+        "locked",
+        "open",
+        "uncertain"
+      ],
+      "recommended_fields": [
+        "sample_id",
+        "source_file",
+        "crop_file",
+        "split_hint",
+        "task_type",
+        "label_class",
+        "label_value",
+        "bbox_x1",
+        "bbox_y1",
+        "bbox_x2",
+        "bbox_y2",
+        "review_status",
+        "reviewer",
+        "notes"
+      ],
+      "review_status_values": [
+        "pending",
+        "done",
+        "needs_check"
+      ],
+      "notes": [
+        "门锁状态建议优先填 label_value，为 locked / open / uncertain。",
+        "如果当前只有整图，没有局部裁剪，可先填 source_file，后续补 crop_file。",
+        "建议重点覆盖锁闭、敞开、遮挡、污渍、逆光五类状态。"
+      ]
+    },
+    "connector_defect_detect": {
+      "label": "连接件缺陷识别",
+      "dataset_kind": "state_classification",
+      "dataset_key_prefix": "local-connector-defect",
+      "annotation_format": "vistral_local_state_classification_v1",
+      "sample_target_min": 500,
+      "sample_target_recommended": 1500,
+      "capture_profile": {
+        "scene": "连接件近景",
+        "distance_m": [0.8, 1.8],
+        "view_angle_deg": 0,
+        "image_quality": ">=1080P"
+      },
+      "qa_targets": {
+        "obvious_defect_accuracy_pct_min": 90,
+        "latency_s_max": 1.0
+      },
+      "label_values": [
+        "normal",
+        "loose",
+        "deformed",
+        "missing",
+        "uncertain"
+      ],
+      "recommended_fields": [
+        "sample_id",
+        "source_file",
+        "crop_file",
+        "split_hint",
+        "task_type",
+        "label_class",
+        "label_value",
+        "bbox_x1",
+        "bbox_y1",
+        "bbox_x2",
+        "bbox_y2",
+        "review_status",
+        "reviewer",
+        "notes"
+      ],
+      "review_status_values": [
+        "pending",
+        "done",
+        "needs_check"
+      ],
+      "notes": [
+        "连接件缺陷建议优先填 label_value，为 normal / loose / deformed / missing / uncertain。",
+        "如果后续切到检测+缺陷分级，可保留 bbox 字段作为过渡格式。",
+        "轻微缺陷先允许打 uncertain，减少首版训练标签噪音。"
+      ]
+    }
+  }
+}

@@ -86,20 +86,20 @@ class TrainingRegressionTest(ApiRegressionHelper):
             refreshed = self.request_json("GET", f"/training/car-number-labeling/items?q={sample_id}&limit=1", token=self.buyer_token)
             self.assertEqual(refreshed["items"][0]["final_text"], "64345127")
             self.assertEqual(refreshed["items"][0]["reviewer"], "api-regression")
-            self.assertEqual(refreshed["items"][0]["car_number_rule"]["rule_id"], "railcar_digits_v1")
+            self.assertEqual(refreshed["items"][0]["car_number_rule"]["rule_id"], "railcar_identifier_family_v1")
 
             invalid = self.client.post(
                 f"/training/car-number-labeling/items/{sample_id}/review",
                 headers=self.auth_headers(self.buyer_token),
                 json={
-                    "final_text": "RV123456",
+                    "final_text": "12-??",
                     "review_status": "done",
                     "reviewer": "api-regression",
                     "notes": "invalid text should be rejected",
                 },
             )
             self.assertEqual(invalid.status_code, 400, invalid.text)
-            self.assertIn("active rule", invalid.json()["detail"])
+            self.assertIn("accepted rules", invalid.json()["detail"])
 
             export_result = self.request_json(
                 "POST",

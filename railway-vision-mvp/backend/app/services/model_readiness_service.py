@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.constants import MODEL_STATUS_APPROVED, MODEL_STATUS_RELEASED
-from app.db.models import ModelRecord, TrainingJob
+from app.db.models import DataAsset, ModelRecord, TrainingJob
 
 CANDIDATE_SOURCE_TYPES = {"finetuned_candidate", "delivery_candidate"}
 
@@ -55,6 +55,32 @@ def _validation_assets(model_meta: dict[str, Any], training_job: TrainingJob | N
     return []
 
 
+def _dataset_provenance_summary(db, *, training_job: TrainingJob | None, validation_asset_ids: list[str]) -> dict[str, Any]:
+    asset_ids: list[str] = []
+    if training_job and isinstance(training_job.asset_ids, list):
+        asset_ids.extend(str(item).strip() for item in training_job.asset_ids if str(item).strip())
+    asset_ids.extend(validation_asset_ids)
+    asset_ids = [item for item in dict.fromkeys(asset_ids) if item]
+    if not asset_ids:
+        return {"asset_count": 0, "proxy_seeded_rows": 0, "reviewer_counts": {}}
+    assets = db.query(DataAsset).filter(DataAsset.id.in_(asset_ids)).all()
+    proxy_seeded_rows = 0
+    reviewer_counts: dict[str, int] = {}
+    for asset in assets:
+        meta = asset.meta if isinstance(asset.meta, dict) else {}
+        proxy_seeded_rows += int(meta.get("proxy_seeded_rows") or 0)
+        raw_counts = meta.get("reviewer_counts")
+        if isinstance(raw_counts, dict):
+            for key, value in raw_counts.items():
+                reviewer = str(key or "").strip() or "unknown"
+                reviewer_counts[reviewer] = reviewer_counts.get(reviewer, 0) + int(value or 0)
+    return {
+        "asset_count": len(assets),
+        "proxy_seeded_rows": proxy_seeded_rows,
+        "reviewer_counts": reviewer_counts,
+    }
+
+
 def build_model_validation_report(
     db,
     model: ModelRecord,
@@ -75,6 +101,7 @@ def build_model_validation_report(
     history_count = int(output_summary.get("history_count") or (len(history) if isinstance(history, list) else 0) or 0)
     best_checkpoint = output_summary.get("best_checkpoint") if isinstance(output_summary.get("best_checkpoint"), dict) else None
     validation_asset_ids = _validation_assets(platform_meta, training_job, override_validation_asset_ids)
+    provenance = _dataset_provenance_summary(db, training_job=training_job, validation_asset_ids=validation_asset_ids)
     training_summary = _clean_text(platform_meta.get("training_summary"))
     dataset_label = _clean_text(platform_meta.get("dataset_label"))
 
@@ -129,6 +156,15 @@ def build_model_validation_report(
     elif is_candidate:
         _append_check(checks, code="data_lineage", label="数据来源摘要", status="warning", reason="建议补充 dataset_label 或 training_summary")
 
+    if provenance.get("proxy_seeded_rows"):
+        _append_check(
+            checks,
+            code="proxy_truth_risk",
+            label="代理真值风险",
+            status="warning",
+            reason=f"训练/验证数据中包含 {provenance.get('proxy_seeded_rows')} 条代理回灌文本，建议继续补真实标记真值后再做审批结论。",
+        )
+
     blocker_count = sum(1 for item in checks if item["status"] == "blocked")
     warning_count = sum(1 for item in checks if item["status"] == "warning")
     ok_count = sum(1 for item in checks if item["status"] == "ok")
@@ -160,6 +196,7 @@ def build_model_validation_report(
             "latency_ms": model.latency_ms,
             "gpu_mem_mb": model.gpu_mem_mb,
         },
+        "data_provenance": provenance,
         "counts": {
             "blocker_count": blocker_count,
             "warning_count": warning_count,

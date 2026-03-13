@@ -79,7 +79,84 @@ class ModelReleaseGateRegressionTest(ApiRegressionHelper):
                 "validation_summary": "should be blocked",
             },
         )
-        self.assertIn("validation gate", blocked["detail"])
+        self.assertEqual(blocked["detail"]["code"], "model_validation_gate_failed")
+
+    def test_model_governance_request_evidence_reject_and_export_pack(self) -> None:
+        model_code = self.unique_name("api-governance-candidate")
+        version = "v1.0.0"
+        package_bytes = self.model_package_bytes(model_code=model_code, version=version, plugin_name="generic_object_detect", task_type="object_detect")
+        created = self.request_json(
+            "POST",
+            "/models/register",
+            token=self.supplier_token,
+            files={"package": (f"{model_code}.zip", io.BytesIO(package_bytes), "application/zip")},
+            data={
+                "model_source_type": "finetuned_candidate",
+                "model_type": "expert",
+                "plugin_name": "generic_object_detect",
+                "training_round": "round-governance",
+                "dataset_label": "governance-demo",
+                "training_summary": "candidate used to verify governance actions",
+            },
+        )
+
+        requested = self.request_json(
+            "POST",
+            "/models/request-evidence",
+            token=self.platform_token,
+            json={
+                "model_id": created["id"],
+                "requested_items": ["补 3 张夜间样本", "补训练说明"],
+                "request_summary": "先补夜间样本和训练说明，再继续审批。",
+            },
+        )
+        self.assertEqual(requested["status"], "SUBMITTED")
+
+        workbench_after_request = self.request_json(
+            "GET",
+            f"/models/{created['id']}/approval-workbench",
+            token=self.platform_token,
+        )
+        self.assertEqual(workbench_after_request["governance"]["state"], "needs_evidence")
+        self.assertIn("requested_items", workbench_after_request["governance"]["request_evidence"]["detail"])
+
+        evidence_pack = self.request_json(
+            "GET",
+            f"/models/{created['id']}/evidence-pack",
+            token=self.platform_token,
+        )
+        self.assertEqual(evidence_pack["model"]["id"], created["id"])
+        self.assertEqual(evidence_pack["governance"]["state"], "needs_evidence")
+        self.assertIn("timeline", evidence_pack)
+        self.assertIn("readiness", evidence_pack)
+
+        rejected = self.request_json(
+            "POST",
+            "/models/reject",
+            token=self.platform_token,
+            json={
+                "model_id": created["id"],
+                "rejection_reason": "当前精度和证据都不足，不能进入审批通过。",
+                "corrective_action": "补夜间样本并重新训练后再提交。",
+            },
+        )
+        self.assertEqual(rejected["status"], "REJECTED")
+
+        workbench_after_reject = self.request_json(
+            "GET",
+            f"/models/{created['id']}/approval-workbench",
+            token=self.platform_token,
+        )
+        self.assertEqual(workbench_after_reject["governance"]["state"], "rejected")
+
+        timeline = self.request_json(
+            "GET",
+            f"/models/{created['id']}/timeline",
+            token=self.platform_token,
+        )
+        stages = [row["stage"] for row in timeline["timeline"]]
+        self.assertIn("request_evidence", stages)
+        self.assertIn("rejected", stages)
 
     def test_training_candidate_can_pass_validation_gate_and_release_readiness(self) -> None:
         train_label = self.unique_name("api-model-gate-train")

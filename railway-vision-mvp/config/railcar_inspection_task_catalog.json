@@ -1,0 +1,117 @@
+{
+  "catalog_version": "2026-03-12",
+  "source_document": "铁路货车轮足式机器人库内智能巡检应用技术方案",
+  "tasks": {
+    "car_number_ocr": {
+      "label": "车号识别",
+      "kind": "ocr",
+      "scene": "库内 45° 侧拍车身",
+      "target": "车身车号 / 编号",
+      "keywords": [
+        "车号",
+        "车厢号",
+        "车皮号",
+        "货车编号",
+        "wagon number",
+        "railcar number",
+        "编号",
+        "号码"
+      ],
+      "training_plan": {
+        "minimum_samples": 200,
+        "recommended_samples": 600,
+        "notes": "优先采集不同光照、污渍、透视畸变下的侧拍样本。"
+      }
+    },
+    "inspection_mark_ocr": {
+      "label": "定检标记识别",
+      "kind": "ocr",
+      "scene": "库内 45° 侧拍车身",
+      "target": "定检标记 / 检修记录",
+      "keywords": [
+        "定检标记",
+        "检修记录",
+        "检修标记",
+        "定检日期",
+        "inspection mark"
+      ],
+      "training_plan": {
+        "minimum_samples": 200,
+        "recommended_samples": 500,
+        "notes": "后续可增加结构化解析，用于提取日期、车型代码等字段。"
+      },
+      "acceptance_targets": {
+        "accuracy_good_condition_pct_min": 97,
+        "accuracy_light_stain_pct_min": 90,
+        "latency_s_max": 0.5
+      }
+    },
+    "performance_mark_ocr": {
+      "label": "性能标记识别",
+      "kind": "ocr",
+      "scene": "库内 45° 侧拍车身",
+      "target": "性能标记 / 性能文字",
+      "keywords": [
+        "性能标记",
+        "性能文字",
+        "性能代码",
+        "performance mark"
+      ],
+      "training_plan": {
+        "minimum_samples": 200,
+        "recommended_samples": 500,
+        "notes": "适合与定检标记识别共享文字区域检测基础能力。"
+      },
+      "acceptance_targets": {
+        "accuracy_good_condition_pct_min": 97,
+        "accuracy_light_stain_pct_min": 90,
+        "latency_s_max": 0.5
+      }
+    },
+    "door_lock_state_detect": {
+      "label": "门锁状态识别",
+      "kind": "detect",
+      "scene": "门锁近景",
+      "target": "门锁锁闭 / 敞开状态",
+      "keywords": [
+        "门锁",
+        "锁闭",
+        "敞开",
+        "door lock",
+        "lock state"
+      ],
+      "training_plan": {
+        "minimum_samples": 500,
+        "recommended_samples": 1200,
+        "notes": "需要覆盖锁闭、敞开、遮挡、污渍等状态。"
+      },
+      "acceptance_targets": {
+        "obvious_state_accuracy_pct_min": 90,
+        "latency_s_max": 1.0
+      }
+    },
+    "connector_defect_detect": {
+      "label": "连接件缺陷识别",
+      "kind": "detect",
+      "scene": "连接件近景",
+      "target": "连接件缺陷 / 松动 / 变形 / 缺失",
+      "keywords": [
+        "连接件",
+        "连接件缺陷",
+        "松动",
+        "变形",
+        "缺失",
+        "connector defect"
+      ],
+      "training_plan": {
+        "minimum_samples": 500,
+        "recommended_samples": 1500,
+        "notes": "适合按照明显缺陷 / 轻微缺陷分层标注与训练。"
+      },
+      "acceptance_targets": {
+        "obvious_defect_accuracy_pct_min": 90,
+        "latency_s_max": 1.0
+      }
+    }
+  }
+}

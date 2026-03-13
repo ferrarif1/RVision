@@ -1,0 +1,22 @@
+{
+  "input_schema": "image|video",
+  "inputs": {
+    "schema": "image|video"
+  },
+  "model_file_name": "candidate_model.bin",
+  "model_format": "bin",
+  "model_hash": "5af015a8c8b2dc341734b76e2ec2c85bc313a18fb10d84f8e9adfdc5cb010cf3",
+  "model_id": "performance_mark_ocr",
+  "model_type": "expert",
+  "output_schema": "json:bbox,text,confidence",
+  "outputs": {
+    "schema": "json:bbox,text,confidence"
+  },
+  "plugin_name": "car_number_ocr",
+  "published_at": "2026-03-13T00:13:34.979836+00:00",
+  "publisher": "vistral-platform",
+  "runtime": "python",
+  "schema_version": "1.0",
+  "task_type": "performance_mark_ocr",
+  "version": "v20260313.001308.a946"
+}

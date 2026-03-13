@@ -39,6 +39,11 @@ CAR_NUMBER_RULE_CONFIG_CANDIDATES = (
     Path("/workspace/config/car_number_rules.json"),
     Path("/app/config/car_number_rules.json"),
 )
+OCR_SCENE_PROFILE_CONFIG_CANDIDATES = (
+    Path(__file__).resolve().parents[2] / "config" / "ocr_scene_profiles.json",
+    Path("/workspace/config/ocr_scene_profiles.json"),
+    Path("/app/config/ocr_scene_profiles.json"),
+)
 
 
 @dataclass(slots=True)
@@ -428,15 +433,73 @@ CAR_NUMBER_DIGIT_SUBSTITUTIONS: dict[str, str] = {
     "T": "7",
     "B": "8",
 }
-DEFAULT_CAR_NUMBER_RULE_ID = "railcar_digits_v1"
+DEFAULT_CAR_NUMBER_RULE_ID = "railcar_identifier_family_v1"
 DEFAULT_CAR_NUMBER_RULE = {
     "rule_id": DEFAULT_CAR_NUMBER_RULE_ID,
-    "label": "铁路车号 · 8位数字",
-    "description": "当前默认要求车号为 8 位数字。",
-    "pattern": r"^\d{8}$",
+    "label": "铁路货车标识 · 多规则族",
+    "description": "当前按库内巡检场景接受标准 8 位数字车号、字母前缀数字编号和紧凑型混合编号。",
+    "pattern": r"^(?:\d{8}|[A-Z]{1,3}\d{5,8}|(?=.*[A-Z])(?=.*\d)[A-Z0-9]{6,12})$",
     "normalization": "uppercase_alnum",
-    "examples": ["64345127", "62745500"],
-    "notes": "后续如果规则变化，只需切换 active_rule 或更新对应 pattern。",
+    "examples": ["64345127", "62745500", "CAR123456", "KM545308"],
+    "notes": "活动规则族。后续如需新增车型代码、定检编号等规则，只需补充 accepted_rules。",
+    "accepted_rules": ["railcar_digits_v1", "railcar_alnum_prefix_v1", "railcar_mixed_compact_v1"],
+    "primary_rule": "railcar_digits_v1",
+}
+DEFAULT_OCR_SCENE_PROFILE_ID = "railcar_yard_side_view_v1"
+DEFAULT_OCR_SCENE_PROFILE = {
+    "profile_id": DEFAULT_OCR_SCENE_PROFILE_ID,
+    "label": "库内侧视车身标记识别",
+    "description": "面向机器狗/轮足机器人在库内沿车侧 45° 斜角拍摄的车号与文字标记识别。",
+    "camera_pose": {
+        "distance_m": [1.5, 2.0],
+        "view_angle_deg": 45,
+        "center_deviation_pct_max": 15,
+    },
+    "text_band_search": {
+        "x_range": [0.02, 0.98],
+        "y_range": [0.16, 0.56],
+    },
+    "car_number_anchors": [
+        [0.10, 0.26, 0.28, 0.40],
+        [0.10, 0.30, 0.45, 0.44],
+        [0.18, 0.27, 0.48, 0.42],
+        [0.22, 0.28, 0.58, 0.39],
+        [0.20, 0.28, 0.58, 0.42],
+        [0.29, 0.30, 0.65, 0.40],
+        [0.28, 0.28, 0.72, 0.42],
+        [0.46, 0.28, 0.84, 0.42],
+        [0.58, 0.29, 0.99, 0.44],
+        [0.46, 0.28, 0.96, 0.43],
+    ],
+    "targets": {
+        "car_number": {
+            "label": "车号",
+            "type": "ocr",
+            "rule": "railcar_identifier_family_v1",
+        },
+        "inspection_mark": {
+            "label": "定检标记",
+            "type": "ocr",
+            "rule": "railcar_mixed_compact_v1",
+            "notes": "预留给后续结构化文本识别。",
+        },
+        "performance_mark": {
+            "label": "性能标记",
+            "type": "ocr",
+            "rule": "railcar_mixed_compact_v1",
+            "notes": "预留给后续结构化文本识别。",
+        },
+        "door_lock_state": {
+            "label": "门锁状态",
+            "type": "detect",
+            "notes": "用于后续锁闭/敞开识别。",
+        },
+        "connector_defect": {
+            "label": "连接件缺陷",
+            "type": "detect",
+            "notes": "用于后续松动/变形/缺失识别。",
+        },
+    },
 }
 
 
@@ -466,20 +529,99 @@ def _active_car_number_rule() -> dict[str, Any]:
     merged = {**DEFAULT_CAR_NUMBER_RULE, **(rule or {})}
     merged["rule_id"] = active_rule
     merged["pattern"] = str(merged.get("pattern") or DEFAULT_CAR_NUMBER_RULE["pattern"])
+    accepted_rules = []
+    for rule_id in merged.get("accepted_rules") or []:
+        if not isinstance(rule_id, str) or not rule_id.strip():
+            continue
+        nested = rules.get(rule_id) if isinstance(rules.get(rule_id), dict) else None
+        if not nested:
+            continue
+        accepted_rules.append(
+            {
+                "rule_id": rule_id,
+                "label": str(nested.get("label") or rule_id),
+                "description": str(nested.get("description") or ""),
+                "pattern": str(nested.get("pattern") or ""),
+                "examples": list(nested.get("examples") or []),
+            }
+        )
+    merged["accepted_rule_details"] = accepted_rules
     return merged
+
+
+@lru_cache(maxsize=1)
+def _load_ocr_scene_profile_payload() -> dict[str, Any]:
+    config_path = next((path for path in OCR_SCENE_PROFILE_CONFIG_CANDIDATES if path.exists()), None)
+    if config_path is None:
+        return {"active_profile": DEFAULT_OCR_SCENE_PROFILE_ID, "profiles": {DEFAULT_OCR_SCENE_PROFILE_ID: DEFAULT_OCR_SCENE_PROFILE}}
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"active_profile": DEFAULT_OCR_SCENE_PROFILE_ID, "profiles": {DEFAULT_OCR_SCENE_PROFILE_ID: DEFAULT_OCR_SCENE_PROFILE}}
+    if not isinstance(payload, dict):
+        return {"active_profile": DEFAULT_OCR_SCENE_PROFILE_ID, "profiles": {DEFAULT_OCR_SCENE_PROFILE_ID: DEFAULT_OCR_SCENE_PROFILE}}
+    return payload
+
+
+def _active_ocr_scene_profile() -> dict[str, Any]:
+    payload = _load_ocr_scene_profile_payload()
+    active_profile = str(payload.get("active_profile") or DEFAULT_OCR_SCENE_PROFILE_ID).strip() or DEFAULT_OCR_SCENE_PROFILE_ID
+    profiles = payload.get("profiles") if isinstance(payload.get("profiles"), dict) else {}
+    profile = profiles.get(active_profile) if isinstance(profiles.get(active_profile), dict) else None
+    merged = {**DEFAULT_OCR_SCENE_PROFILE, **(profile or {})}
+    merged["profile_id"] = active_profile
+    return merged
+
+
+def _normalized_boxes_to_rois(frame: np.ndarray, normalized_boxes: list[list[float]] | tuple[tuple[float, float, float, float], ...]) -> list[list[int]]:
+    h, w = frame.shape[:2]
+    rois: list[list[int]] = []
+    for item in normalized_boxes or []:
+        if not isinstance(item, (list, tuple)) or len(item) != 4:
+            continue
+        x1, y1, x2, y2 = [float(v) for v in item]
+        rois.append(
+            [
+                max(0, int(w * x1)),
+                max(0, int(h * y1)),
+                min(w, int(w * x2)),
+                min(h, int(h * y2)),
+            ]
+        )
+    return rois
 
 
 def _validate_car_number_text(value: str | None) -> dict[str, Any]:
     normalized = _clean_car_number_text(value)
     rule = _active_car_number_rule()
     pattern = str(rule.get("pattern") or DEFAULT_CAR_NUMBER_RULE["pattern"])
+    matched_rule_id = ""
+    matched_rule_label = ""
+    valid = False
+    accepted_rule_details = list(rule.get("accepted_rule_details") or [])
+    for item in accepted_rule_details:
+        item_pattern = str(item.get("pattern") or "").strip()
+        if item_pattern and normalized and re.fullmatch(item_pattern, normalized):
+            valid = True
+            matched_rule_id = str(item.get("rule_id") or "")
+            matched_rule_label = str(item.get("label") or matched_rule_id)
+            break
+    if not valid:
+        valid = bool(normalized and re.fullmatch(pattern, normalized))
+        if valid:
+            matched_rule_id = str(rule.get("rule_id") or "")
+            matched_rule_label = str(rule.get("label") or matched_rule_id)
     return {
-        "valid": bool(normalized and re.fullmatch(pattern, normalized)),
+        "valid": valid,
         "normalized_text": normalized,
         "rule_id": rule["rule_id"],
         "label": rule["label"],
         "description": rule["description"],
         "pattern": pattern,
+        "accepted_rules": [str(item.get("rule_id") or "") for item in accepted_rule_details if str(item.get("rule_id") or "").strip()],
+        "accepted_rule_details": accepted_rule_details,
+        "matched_rule_id": matched_rule_id or None,
+        "matched_rule_label": matched_rule_label or None,
         "examples": list(rule.get("examples") or []),
         "notes": rule.get("notes"),
     }
@@ -584,6 +726,130 @@ def _calibrate_car_number_confidence(text: str | None, raw_confidence: float, qu
     return round(min(calibrated, 0.98 if validation["valid"] else 0.92), 4)
 
 
+def _rotate_image_bound(image: np.ndarray, angle_deg: float) -> np.ndarray:
+    if image is None or not image.size:
+        return image
+    h, w = image.shape[:2]
+    center = (w / 2.0, h / 2.0)
+    matrix = cv2.getRotationMatrix2D(center, angle_deg, 1.0)
+    cos = abs(matrix[0, 0])
+    sin = abs(matrix[0, 1])
+    bound_w = int((h * sin) + (w * cos))
+    bound_h = int((h * cos) + (w * sin))
+    matrix[0, 2] += (bound_w / 2.0) - center[0]
+    matrix[1, 2] += (bound_h / 2.0) - center[1]
+    return cv2.warpAffine(image, matrix, (bound_w, bound_h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+
+
+def _rectify_text_band_variant(frame: np.ndarray) -> np.ndarray | None:
+    if frame is None or not frame.size:
+        return None
+    gray = frame if len(frame.shape) == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
+    blur = cv2.GaussianBlur(gray, (3, 3), 0)
+    _, mask = cv2.threshold(blur, max(145, int(np.percentile(blur, 82))), 255, cv2.THRESH_BINARY)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (11, 3)), iterations=2)
+    ys, xs = np.where(mask > 0)
+    if len(xs) < 40:
+        return None
+    rect = cv2.minAreaRect(np.column_stack((xs, ys)).astype(np.float32))
+    (_, _), (rw, rh), angle = rect
+    if min(rw, rh) < 10:
+        return None
+    rotate_angle = angle
+    if rw < rh:
+        rotate_angle += 90.0
+    if abs(rotate_angle) < 4.0 or abs(rotate_angle) > 55.0:
+        return None
+    rotated = _rotate_image_bound(gray, rotate_angle)
+    return rotated if rotated is not None and rotated.size else None
+
+
+def _expanded_car_number_rois(frame: np.ndarray, bbox: list[int] | tuple[int, int, int, int] | None) -> list[list[int]]:
+    if frame is None or not frame.size or not bbox or len(bbox) != 4:
+        return []
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = [int(v) for v in bbox]
+    bw = max(1, x2 - x1)
+    bh = max(1, y2 - y1)
+    variants = [
+        [
+            max(0, x1 - max(18, int(bw * 0.18))),
+            max(0, y1 - max(6, int(bh * 0.12))),
+            min(w, x2 + max(18, int(bw * 0.18))),
+            min(h, y2 + max(8, int(bh * 0.16))),
+        ],
+        [
+            max(0, x1 - max(30, int(bw * 0.34))),
+            max(0, y1 - max(8, int(bh * 0.16))),
+            min(w, x2 + max(18, int(bw * 0.22))),
+            min(h, y2 + max(10, int(bh * 0.22))),
+        ],
+        [
+            max(0, x1 - max(42, int(bw * 0.48))),
+            max(0, y1 - max(10, int(bh * 0.2))),
+            min(w, x2 + max(22, int(bw * 0.28))),
+            min(h, y2 + max(12, int(bh * 0.26))),
+        ],
+        [
+            max(0, x1 - max(54, int(bw * 0.72))),
+            max(0, y1 - max(12, int(bh * 0.24))),
+            min(w, x2 + max(32, int(bw * 0.42))),
+            min(h, y2 + max(14, int(bh * 0.3))),
+        ],
+        [
+            max(0, x1 - max(36, int(bw * 0.35))),
+            max(0, y1 - max(16, int(bh * 0.32))),
+            min(w, x2 + max(48, int(bw * 0.68))),
+            min(h, y2 + max(16, int(bh * 0.34))),
+        ],
+    ]
+    return _dedupe_rois(variants, limit=3)
+
+
+def _collect_car_number_candidates_from_roi(
+    frame: np.ndarray,
+    bbox: list[int],
+    pooled_candidates: list[dict[str, Any]],
+    *,
+    roi_quality_bias: float = 0.0,
+) -> None:
+    x1, y1, x2, y2 = bbox
+    roi = frame[y1:y2, x1:x2]
+    if roi is None or not roi.size:
+        return
+    roi_quality = _score_car_number_roi(frame, bbox) + float(roi_quality_bias)
+    ocr_candidates: list[tuple[str, float, str]] = []
+    easyocr_result = _try_easyocr(roi)
+    if easyocr_result:
+        ocr_candidates.append((easyocr_result[0], easyocr_result[1], "easyocr"))
+    for variant_name, variant in _car_number_preprocess_variants(roi):
+        tesseract_result = None
+        for psm in (7, 8, 13, 6):
+            tesseract_result = _try_tesseract(variant, psm=psm)
+            if tesseract_result:
+                engine_suffix = variant_name if psm == 7 else f"{variant_name}:psm{psm}"
+                ocr_candidates.append((tesseract_result[0], tesseract_result[1], f"tesseract:{engine_suffix}"))
+                break
+    for raw_text, confidence, engine in ocr_candidates:
+        normalized_raw_text = _clean_car_number_text(raw_text)
+        for candidate_text in _candidate_car_number_texts(raw_text):
+            quality = _score_car_number_text(candidate_text, confidence) + roi_quality
+            if candidate_text != normalized_raw_text:
+                quality -= 0.08
+            pooled_candidates.append(
+                {
+                    "text": candidate_text,
+                    "confidence": _calibrate_car_number_confidence(candidate_text, confidence, quality),
+                    "raw_confidence": confidence,
+                    "quality": quality,
+                    "bbox": bbox,
+                    "engine": engine,
+                    "variant": engine.split(":", 1)[-1] if ":" in engine else engine,
+                }
+            )
+
+
 @lru_cache(maxsize=1)
 def _tesseract_binary() -> str | None:
     return shutil.which("tesseract")
@@ -624,16 +890,35 @@ def _car_number_preprocess_variants(frame: np.ndarray) -> list[tuple[str, np.nda
     scale = min(12.0, max(2.0, target_width / max(gray.shape[1], 1)))
     resized = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
     normalized = cv2.normalize(resized, None, 0, 255, cv2.NORM_MINMAX)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(normalized)
     blurred = cv2.GaussianBlur(normalized, (3, 3), 0)
+    sharpened = cv2.addWeighted(normalized, 1.6, blurred, -0.6, 0)
+    top_hat = cv2.morphologyEx(normalized, cv2.MORPH_TOPHAT, cv2.getStructuringElement(cv2.MORPH_RECT, (17, 5)))
     otsu = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
     inv_otsu = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
     adaptive = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 11)
-    return [
+    variants = [
         ("gray", normalized),
+        ("clahe", clahe),
+        ("sharpen", sharpened),
+        ("top_hat", top_hat),
         ("otsu", otsu),
         ("inv_otsu", inv_otsu),
         ("adaptive", adaptive),
     ]
+    rectified = _rectify_text_band_variant(frame)
+    if rectified is not None and rectified.size:
+        rectified_resized = cv2.resize(rectified, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        rectified_norm = cv2.normalize(rectified_resized, None, 0, 255, cv2.NORM_MINMAX)
+        rectified_blur = cv2.GaussianBlur(rectified_norm, (3, 3), 0)
+        variants.extend(
+            [
+                ("rectified", rectified_norm),
+                ("rectified_otsu", cv2.threshold(rectified_blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]),
+                ("rectified_inv", cv2.threshold(rectified_blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]),
+            ]
+        )
+    return variants
 
 
 def _dedupe_rois(rois: list[list[int]], *, limit: int = 10) -> list[list[int]]:
@@ -659,37 +944,22 @@ def _dedupe_rois(rois: list[list[int]], *, limit: int = 10) -> list[list[int]]:
 
 
 def _anchor_car_number_rois(frame: np.ndarray) -> list[list[int]]:
-    h, w = frame.shape[:2]
-    normalized_boxes = [
-        (0.10, 0.26, 0.28, 0.40),
-        (0.10, 0.30, 0.45, 0.44),
-        (0.18, 0.27, 0.48, 0.42),
-        (0.22, 0.28, 0.58, 0.39),
-        (0.20, 0.28, 0.58, 0.42),
-        (0.29, 0.30, 0.65, 0.40),
-        (0.28, 0.28, 0.72, 0.42),
-        (0.46, 0.28, 0.84, 0.42),
-        (0.58, 0.29, 0.99, 0.44),
-        (0.46, 0.28, 0.96, 0.43),
-    ]
-    return [
-        [
-            max(0, int(w * x1)),
-            max(0, int(h * y1)),
-            min(w, int(w * x2)),
-            min(h, int(h * y2)),
-        ]
-        for x1, y1, x2, y2 in normalized_boxes
-    ]
+    profile = _active_ocr_scene_profile()
+    normalized_boxes = profile.get("car_number_anchors") or DEFAULT_OCR_SCENE_PROFILE["car_number_anchors"]
+    return _normalized_boxes_to_rois(frame, normalized_boxes)
 
 
 def _detect_text_band_rois(frame: np.ndarray) -> list[list[int]]:
     h, w = frame.shape[:2]
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    y1 = int(h * 0.18)
-    y2 = int(h * 0.5)
-    x1 = int(w * 0.02)
-    x2 = int(w * 0.98)
+    profile = _active_ocr_scene_profile()
+    search_cfg = profile.get("text_band_search") if isinstance(profile.get("text_band_search"), dict) else {}
+    x_range = search_cfg.get("x_range") if isinstance(search_cfg.get("x_range"), (list, tuple)) else [0.02, 0.98]
+    y_range = search_cfg.get("y_range") if isinstance(search_cfg.get("y_range"), (list, tuple)) else [0.18, 0.5]
+    y1 = int(h * float(y_range[0]))
+    y2 = int(h * float(y_range[1]))
+    x1 = int(w * float(x_range[0]))
+    x2 = int(w * float(x_range[1]))
     search = gray[y1:y2, x1:x2]
     if not search.size:
         return []
@@ -740,6 +1010,14 @@ def _detect_text_band_rois(frame: np.ndarray) -> list[list[int]]:
                 max(0, abs_y1 - wide_pad_top),
                 min(w, abs_x2 + wide_pad_x),
                 min(h, abs_y2 + wide_pad_bottom),
+            ]
+        )
+        rois.append(
+            [
+                max(0, abs_x1 - max(16, int(bw * 0.36))),
+                max(0, abs_y1 - max(7, int(bh * 0.22))),
+                min(w, abs_x2 + max(22, int(bw * 0.5))),
+                min(h, abs_y2 + max(10, int(bh * 0.24))),
             ]
         )
     return rois
@@ -821,6 +1099,41 @@ def _aggregate_car_number_candidates(candidates: list[dict[str, Any]]) -> dict[s
         reverse=True,
     )
     return ranked[0]
+
+
+def _pick_best_valid_car_number_candidate(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+    valid_candidates = [
+        item
+        for item in candidates
+        if _validate_car_number_text(item.get("text")).get("valid")
+    ]
+    if not valid_candidates:
+        return None
+    return _aggregate_car_number_candidates(valid_candidates)
+
+
+def _is_stable_valid_candidate(candidate: dict[str, Any] | None, frame_width: int) -> bool:
+    if not candidate:
+        return False
+    text = _clean_car_number_text(candidate.get("text"))
+    if not _validate_car_number_text(text).get("valid"):
+        return False
+    aggregate_score = float(candidate.get("aggregate_score") or candidate.get("quality") or 0.0)
+    confidence = float(candidate.get("confidence") or 0.0)
+    count = int(candidate.get("count") or 1)
+    engine_count = int(candidate.get("engine_count") or 1)
+    variant_count = int(candidate.get("variant_count") or 1)
+    bbox = candidate.get("bbox") if isinstance(candidate.get("bbox"), list) else None
+    width_ratio = 0.0
+    if bbox and len(bbox) == 4 and frame_width > 0:
+        width_ratio = max(0.0, (int(bbox[2]) - int(bbox[0])) / float(frame_width))
+    if count >= 2 or engine_count >= 2:
+        return True
+    if aggregate_score >= 2.25 and confidence >= 0.84 and width_ratio >= 0.28:
+        return True
+    if aggregate_score >= 2.5 and confidence >= 0.8 and variant_count >= 2 and width_ratio >= 0.24:
+        return True
+    return False
 
 
 def _score_car_number_roi(frame: np.ndarray, bbox: list[int] | tuple[int, int, int, int] | None) -> float:
@@ -929,72 +1242,144 @@ def _candidate_car_number_rois(frame: np.ndarray, file_name: str = "") -> list[l
     return _dedupe_rois(rois)
 
 
-def _run_car_number_ocr(frame: np.ndarray, file_name: str, *, force_mock_ocr: bool) -> tuple[str | None, float, list[int], str]:
+def _sliding_text_strip_rois(frame: np.ndarray, bbox: list[int] | tuple[int, int, int, int] | None) -> list[list[int]]:
+    if frame is None or not frame.size or not bbox or len(bbox) != 4:
+        return []
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = [int(v) for v in bbox]
+    bw = max(1, x2 - x1)
+    bh = max(1, y2 - y1)
+    cx = (x1 + x2) / 2.0
+    rois: list[list[int]] = []
+    for width_factor in (0.68, 0.82, 1.0, 1.18):
+        win_w = max(24, int(bw * width_factor))
+        for shift in (-0.18, -0.08, 0.0, 0.08, 0.18):
+            center = cx + (bw * shift)
+            sx1 = max(0, int(center - (win_w / 2.0)))
+            sx2 = min(w, int(center + (win_w / 2.0)))
+            sy1 = max(0, y1 - max(6, int(bh * 0.18)))
+            sy2 = min(h, y2 + max(8, int(bh * 0.24)))
+            rois.append([sx1, sy1, sx2, sy2])
+    return _dedupe_rois(rois, limit=10)
+
+
+def _projection_text_rois(frame: np.ndarray, bbox: list[int] | tuple[int, int, int, int] | None) -> list[list[int]]:
+    if frame is None or not frame.size or not bbox or len(bbox) != 4:
+        return []
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = [int(v) for v in bbox]
+    roi = frame[y1:y2, x1:x2]
+    if roi is None or not roi.size:
+        return []
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    norm = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
+    top_hat = cv2.morphologyEx(norm, cv2.MORPH_TOPHAT, cv2.getStructuringElement(cv2.MORPH_RECT, (17, 5)))
+    _, mask = cv2.threshold(top_hat, max(18, int(np.percentile(top_hat, 90))), 255, cv2.THRESH_BINARY)
+    mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_RECT, (11, 3)), iterations=1)
+    projection = mask.sum(axis=0)
+    active = projection > max(255 * 2, projection.max() * 0.16)
+    rois: list[list[int]] = []
+    start = None
+    for idx, flag in enumerate(active.tolist() + [False]):
+        if flag and start is None:
+            start = idx
+        elif not flag and start is not None:
+            end = idx
+            if (end - start) >= max(20, int(mask.shape[1] * 0.14)):
+                px1 = max(0, x1 + start - 10)
+                px2 = min(w, x1 + end + 10)
+                py1 = max(0, y1 - 6)
+                py2 = min(h, y2 + 8)
+                rois.append([px1, py1, px2, py2])
+            start = None
+    return _dedupe_rois(rois, limit=6)
+
+
+def _frame_level_rescue_candidate(frame: np.ndarray, file_name: str, base_rois: list[list[int]]) -> dict[str, Any] | None:
+    rescue_rois: list[list[int]] = []
+    scored = sorted(base_rois, key=lambda roi: _score_car_number_roi(frame, roi), reverse=True)
+    for bbox in scored[:4]:
+        rescue_rois.extend(_expanded_car_number_rois(frame, bbox))
+        rescue_rois.extend(_sliding_text_strip_rois(frame, bbox))
+        rescue_rois.extend(_projection_text_rois(frame, bbox))
+    rescue_rois.extend(_detect_text_band_rois(frame))
+    rescue_rois = _dedupe_rois(rescue_rois, limit=8)
+    pooled: list[dict[str, Any]] = []
+    for bbox in rescue_rois:
+        _collect_car_number_candidates_from_roi(frame, bbox, pooled, roi_quality_bias=0.08)
+    best_valid = _pick_best_valid_car_number_candidate(pooled)
+    if best_valid and float(best_valid.get("aggregate_score") or 0.0) >= 0.66:
+        return best_valid
+    return None
+
+
+def _run_car_number_ocr(
+    frame: np.ndarray,
+    file_name: str,
+    *,
+    force_mock_ocr: bool,
+    disable_curated_match: bool = False,
+) -> tuple[str | None, float, list[int], str]:
     h, w = frame.shape[:2]
     fallback_bbox = [int(w * 0.2), int(h * 0.35), int(w * 0.8), int(h * 0.55)]
-    curated_match = _match_curated_car_number_sample(file_name, frame)
-    if curated_match and curated_match.get("bbox"):
-        fallback_bbox = list(curated_match.get("bbox") or fallback_bbox)
-    if curated_match and curated_match.get("label"):
-        return (
-            str(curated_match["label"]),
-            0.995,
-            list(curated_match.get("bbox") or fallback_bbox),
-            f"curated:{curated_match.get('file_name')}",
-        )
-    fixture_match = _match_known_railcar_sample(frame)
-    if fixture_match:
-        return (
-            str(fixture_match["label"]),
-            0.995,
-            list(fixture_match.get("bbox") or fallback_bbox),
-            f"fixture:{fixture_match.get('file_name')}",
-        )
-    curated_hash_match = _match_curated_car_number_sample(file_name, frame, allow_hash_fallback=True)
-    if curated_hash_match and curated_hash_match.get("bbox"):
-        fallback_bbox = list(curated_hash_match.get("bbox") or fallback_bbox)
-    if curated_hash_match and curated_hash_match.get("label"):
-        return (
-            str(curated_hash_match["label"]),
-            0.995,
-            list(curated_hash_match.get("bbox") or fallback_bbox),
-            f"curated:{curated_hash_match.get('file_name')}",
-        )
+    if not disable_curated_match:
+        curated_match = _match_curated_car_number_sample(file_name, frame)
+        if curated_match and curated_match.get("bbox"):
+            fallback_bbox = list(curated_match.get("bbox") or fallback_bbox)
+        if curated_match and curated_match.get("label"):
+            return (
+                str(curated_match["label"]),
+                0.995,
+                list(curated_match.get("bbox") or fallback_bbox),
+                f"curated:{curated_match.get('file_name')}",
+            )
+        fixture_match = _match_known_railcar_sample(frame)
+        if fixture_match:
+            return (
+                str(fixture_match["label"]),
+                0.995,
+                list(fixture_match.get("bbox") or fallback_bbox),
+                f"fixture:{fixture_match.get('file_name')}",
+            )
+        curated_hash_match = _match_curated_car_number_sample(file_name, frame, allow_hash_fallback=True)
+        if curated_hash_match and curated_hash_match.get("bbox"):
+            fallback_bbox = list(curated_hash_match.get("bbox") or fallback_bbox)
+        if curated_hash_match and curated_hash_match.get("label"):
+            return (
+                str(curated_hash_match["label"]),
+                0.995,
+                list(curated_hash_match.get("bbox") or fallback_bbox),
+                f"curated:{curated_hash_match.get('file_name')}",
+            )
     if force_mock_ocr:
         return _mock_car_number(file_name), 0.5, fallback_bbox, "mock"
+    candidate_rois = _candidate_car_number_rois(frame, file_name)
     pooled_candidates: list[dict[str, Any]] = []
-    for bbox in _candidate_car_number_rois(frame, file_name):
-        x1, y1, x2, y2 = bbox
-        roi = frame[y1:y2, x1:x2]
-        if roi is None or not roi.size:
-            continue
-        roi_quality = _score_car_number_roi(frame, bbox)
-        ocr_candidates: list[tuple[str, float, str]] = []
-        easyocr_result = _try_easyocr(roi)
-        if easyocr_result:
-            ocr_candidates.append((easyocr_result[0], easyocr_result[1], "easyocr"))
-        for variant_name, variant in _car_number_preprocess_variants(roi)[:3]:
-            tesseract_result = _try_tesseract(variant, psm=7) or _try_tesseract(variant, psm=8)
-            if tesseract_result:
-                ocr_candidates.append((tesseract_result[0], tesseract_result[1], f"tesseract:{variant_name}"))
-        for raw_text, confidence, engine in ocr_candidates:
-            normalized_raw_text = _clean_car_number_text(raw_text)
-            for candidate_text in _candidate_car_number_texts(raw_text):
-                quality = _score_car_number_text(candidate_text, confidence) + roi_quality
-                if candidate_text != normalized_raw_text:
-                    quality -= 0.08
-                pooled_candidates.append(
-                    {
-                        "text": candidate_text,
-                        "confidence": _calibrate_car_number_confidence(candidate_text, confidence, quality),
-                        "raw_confidence": confidence,
-                        "quality": quality,
-                        "bbox": bbox,
-                        "engine": engine,
-                        "variant": engine.split(":", 1)[-1] if ":" in engine else engine,
-                    }
-                )
+    for bbox in candidate_rois:
+        _collect_car_number_candidates_from_roi(frame, bbox, pooled_candidates)
     best_candidate = _aggregate_car_number_candidates(pooled_candidates)
+    best_valid_candidate = _pick_best_valid_car_number_candidate(pooled_candidates)
+    if best_valid_candidate and _is_stable_valid_candidate(best_valid_candidate, w):
+        candidate_bbox = list(best_valid_candidate["bbox"])
+        candidate_width_ratio = (candidate_bbox[2] - candidate_bbox[0]) / max(w, 1)
+        if (
+            float(best_valid_candidate.get("aggregate_score") or 0.0) >= 0.76
+            and candidate_width_ratio >= 0.1
+            and len(_clean_car_number_text(best_valid_candidate.get("text"))) == 8
+        ):
+            best_valid = _validate_car_number_text(best_valid_candidate.get("text"))
+            return (
+                str(best_valid["normalized_text"]),
+                float(best_valid_candidate["confidence"]),
+                candidate_bbox,
+                str(best_valid_candidate["engine"]),
+            )
+    if best_valid_candidate and (
+        not best_candidate
+        or not _validate_car_number_text(best_candidate.get("text")).get("valid")
+        or float(best_valid_candidate.get("aggregate_score") or 0.0) >= float(best_candidate.get("aggregate_score") or 0.0) - 0.18
+    ):
+        best_candidate = best_valid_candidate
     if best_candidate and float(best_candidate.get("aggregate_score") or 0.0) >= 0.95:
         candidate_text = _clean_car_number_text(best_candidate.get("text"))
         candidate_bbox = list(best_candidate["bbox"])
@@ -1005,12 +1390,58 @@ def _run_car_number_ocr(frame: np.ndarray, file_name: str, *, force_mock_ocr: bo
         if candidate_width_ratio < 0.12 and len(candidate_text) < 7:
             return None, 0.0, fallback_bbox, "ocr_unavailable"
         if not validation["valid"]:
+            rescue_candidates: list[dict[str, Any]] = []
+            for rescue_bbox in _expanded_car_number_rois(frame, candidate_bbox):
+                _collect_car_number_candidates_from_roi(frame, rescue_bbox, rescue_candidates, roi_quality_bias=0.06)
+                for strip_bbox in _sliding_text_strip_rois(frame, rescue_bbox):
+                    _collect_car_number_candidates_from_roi(frame, strip_bbox, rescue_candidates, roi_quality_bias=0.1)
+                for proj_bbox in _projection_text_rois(frame, rescue_bbox):
+                    _collect_car_number_candidates_from_roi(frame, proj_bbox, rescue_candidates, roi_quality_bias=0.12)
+            rescue_candidate = _pick_best_valid_car_number_candidate(rescue_candidates)
+            if (
+                rescue_candidate
+                and float(rescue_candidate.get("aggregate_score") or 0.0) >= 0.72
+                and _is_stable_valid_candidate(rescue_candidate, w)
+            ):
+                rescue_validation = _validate_car_number_text(rescue_candidate.get("text"))
+                return (
+                    str(rescue_validation["normalized_text"]),
+                    float(rescue_candidate["confidence"]),
+                    list(rescue_candidate["bbox"]),
+                    str(rescue_candidate["engine"]),
+                )
+            if re.fullmatch(r"\d{7}", candidate_text):
+                aggressive_rescue_candidates: list[dict[str, Any]] = []
+                for rescue_bbox in _expanded_car_number_rois(frame, candidate_bbox):
+                    _collect_car_number_candidates_from_roi(frame, rescue_bbox, aggressive_rescue_candidates, roi_quality_bias=0.12)
+                aggressive_candidate = _pick_best_valid_car_number_candidate(aggressive_rescue_candidates)
+                if (
+                    aggressive_candidate
+                    and float(aggressive_candidate.get("aggregate_score") or 0.0) >= 0.58
+                    and _is_stable_valid_candidate(aggressive_candidate, w)
+                ):
+                    aggressive_validation = _validate_car_number_text(aggressive_candidate.get("text"))
+                    return (
+                        str(aggressive_validation["normalized_text"]),
+                        float(aggressive_candidate["confidence"]),
+                        list(aggressive_candidate["bbox"]),
+                        str(aggressive_candidate["engine"]),
+                    )
             return None, 0.0, candidate_bbox or fallback_bbox, "ocr_rule_rejected"
         return (
             str(validation["normalized_text"]),
             float(best_candidate["confidence"]),
             candidate_bbox,
             str(best_candidate["engine"]),
+        )
+    rescue_candidate = _frame_level_rescue_candidate(frame, file_name, candidate_rois)
+    if rescue_candidate and _is_stable_valid_candidate(rescue_candidate, w):
+        rescue_validation = _validate_car_number_text(rescue_candidate.get("text"))
+        return (
+            str(rescue_validation["normalized_text"]),
+            float(rescue_candidate["confidence"]),
+            list(rescue_candidate["bbox"]),
+            str(rescue_candidate["engine"]),
         )
     return None, 0.0, fallback_bbox, "ocr_unavailable"
 
@@ -1309,6 +1740,7 @@ class CarNumberOcrPlugin:
         )
         started = time.time()
         force_mock_ocr = bool((ctx.policy or {}).get("force_mock_ocr", False))
+        disable_curated_match = bool((ctx.policy or {}).get("disable_curated_match", False))
         predictions: list[dict[str, Any]] = []
         artifacts: list[dict[str, Any]] = []
         best_text: str | None = None
@@ -1319,7 +1751,12 @@ class CarNumberOcrPlugin:
 
         for frame_idx, raw_frame in _iter_frames(ctx.local_asset_path):
             frame = _apply_pre_ops(raw_frame, ctx)
-            text, conf, bbox, engine = _run_car_number_ocr(frame, file_name, force_mock_ocr=force_mock_ocr)
+            text, conf, bbox, engine = _run_car_number_ocr(
+                frame,
+                file_name,
+                force_mock_ocr=force_mock_ocr,
+                disable_curated_match=disable_curated_match,
+            )
             if text:
                 validation = _validate_car_number_text(text)
                 predictions.append(
@@ -1366,8 +1803,10 @@ class CarNumberOcrPlugin:
                 "confidence": round(best_score, 4),
                 "bbox": best_bbox,
                 "engine": best_engine,
+                "used_curated_match": not disable_curated_match and str(best_engine).startswith(("curated:", "fixture:")),
                 "car_number_validation": best_validation,
                 "car_number_rule": _active_car_number_rule(),
+                "ocr_scene_profile": _active_ocr_scene_profile(),
             },
         }
 

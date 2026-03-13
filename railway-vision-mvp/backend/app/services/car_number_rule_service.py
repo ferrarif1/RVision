@@ -13,15 +13,17 @@ RULE_CONFIG_CANDIDATES = (
     REPO_ROOT / "config" / "car_number_rules.json",
     Path("/app/config/car_number_rules.json"),
 )
-DEFAULT_RULE_ID = "railcar_digits_v1"
+DEFAULT_RULE_ID = "railcar_identifier_family_v1"
 DEFAULT_RULE = {
     "rule_id": DEFAULT_RULE_ID,
-    "label": "铁路车号 · 8位数字",
-    "description": "当前默认要求车号为 8 位数字。",
-    "pattern": r"^\d{8}$",
+    "label": "铁路货车标识 · 多规则族",
+    "description": "当前按库内巡检场景接受标准 8 位数字车号、字母前缀数字编号和紧凑型混合编号。",
+    "pattern": r"^(?:\d{8}|[A-Z]{1,3}\d{5,8}|(?=.*[A-Z])(?=.*\d)[A-Z0-9]{6,12})$",
     "normalization": "uppercase_alnum",
-    "examples": ["64345127", "62745500"],
-    "notes": "后续如果规则变化，只需切换 active_rule 或更新对应 pattern。",
+    "examples": ["64345127", "62745500", "CAR123456", "KM545308"],
+    "notes": "活动规则族。后续如需新增车型代码、定检编号等规则，只需补充 accepted_rules。",
+    "accepted_rules": ["railcar_digits_v1", "railcar_alnum_prefix_v1", "railcar_mixed_compact_v1"],
+    "primary_rule": "railcar_digits_v1",
 }
 
 
@@ -51,6 +53,23 @@ def get_active_car_number_rule() -> dict[str, Any]:
     merged = {**DEFAULT_RULE, **(rule or {})}
     merged["rule_id"] = active_rule
     merged["pattern"] = str(merged.get("pattern") or DEFAULT_RULE["pattern"])
+    accepted_rules = []
+    for rule_id in merged.get("accepted_rules") or []:
+        if not isinstance(rule_id, str) or not rule_id.strip():
+            continue
+        nested = rules.get(rule_id) if isinstance(rules.get(rule_id), dict) else None
+        if not nested:
+            continue
+        accepted_rules.append(
+            {
+                "rule_id": rule_id,
+                "label": str(nested.get("label") or rule_id),
+                "description": str(nested.get("description") or ""),
+                "pattern": str(nested.get("pattern") or ""),
+                "examples": list(nested.get("examples") or []),
+            }
+        )
+    merged["accepted_rule_details"] = accepted_rules
     return merged
 
 
@@ -58,7 +77,22 @@ def validate_car_number_text(value: Any) -> dict[str, Any]:
     normalized = normalize_car_number_text(value)
     rule = get_active_car_number_rule()
     pattern = str(rule.get("pattern") or DEFAULT_RULE["pattern"])
-    valid = bool(normalized and re.fullmatch(pattern, normalized))
+    matched_rule_id = ""
+    matched_rule_label = ""
+    valid = False
+    accepted_rule_details = list(rule.get("accepted_rule_details") or [])
+    for item in accepted_rule_details:
+        item_pattern = str(item.get("pattern") or "").strip()
+        if item_pattern and normalized and re.fullmatch(item_pattern, normalized):
+            valid = True
+            matched_rule_id = str(item.get("rule_id") or "")
+            matched_rule_label = str(item.get("label") or matched_rule_id)
+            break
+    if not valid:
+        valid = bool(normalized and re.fullmatch(pattern, normalized))
+        if valid:
+            matched_rule_id = str(rule.get("rule_id") or "")
+            matched_rule_label = str(rule.get("label") or matched_rule_id)
     return {
         "valid": valid,
         "normalized_text": normalized,
@@ -66,6 +100,10 @@ def validate_car_number_text(value: Any) -> dict[str, Any]:
         "label": rule["label"],
         "description": rule["description"],
         "pattern": pattern,
+        "accepted_rules": [str(item.get("rule_id") or "") for item in accepted_rule_details if str(item.get("rule_id") or "").strip()],
+        "accepted_rule_details": accepted_rule_details,
+        "matched_rule_id": matched_rule_id or None,
+        "matched_rule_label": matched_rule_label or None,
         "examples": list(rule.get("examples") or []),
         "notes": rule.get("notes"),
     }
@@ -79,5 +117,5 @@ def ensure_valid_car_number_text(value: Any, *, field_name: str = "car_number") 
         return validation
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"{field_name} does not match active rule {validation['rule_id']}: {validation['description']}",
+        detail=f"{field_name} does not match accepted rules of {validation['rule_id']}: {validation['description']}",
     )

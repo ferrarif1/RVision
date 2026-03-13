@@ -226,6 +226,10 @@ docker compose -f docker/docker-compose.yml exec backend sh -lc '
 - 任务详情页：`执行结论 / 下一步动作 / 技术详情`
 - 结果中心：`查询结果 / 下一步动作 / 变成训练数据 / 结果列表`
 - 结果中心（结果列表内部）：`结果概览 / 模型表现 / 单条结果`
+- 查询结果后，系统会自动落到更适合当前任务的结果分区：
+  - 有低置信度 OCR：优先打开 `单条结果`
+  - 多模型非 OCR 结果：优先打开 `模型表现`
+  - 其余默认打开 `结果概览`
 - 模型中心（工作区内部）：`提交与协作 / 创建训练`，以及 `时间线与评估 / 审批工作台 / 发布工作台`
 - 设置页里的 `数据治理` 工作区现在已经前台化，可直接预览并执行：
   - 只保留当前车号演示主链
@@ -236,6 +240,96 @@ docker compose -f docker/docker-compose.yml exec backend sh -lc '
   - 敏感等级填写错误
   - 成功作业尝试改派
   - 非失败作业尝试重试
+- 巡检 OCR 工作区现在不只显示准备度，还能直接进入：
+  - `inspection_mark_ocr` 文字复核
+  - `performance_mark_ocr` 文字复核
+  在这些页面里可以筛样本、看 crop、补 `final_text`，并直接导出文本训练包。
+- 这两类任务现在已经各自产出首版 train/validation bundle：
+  - `inspection_mark_ocr`
+  - `performance_mark_ocr`
+  说明这条线已经从“只有模板和复核页”推进到“真实训练包可产出”。
+- 这两类任务现在也已经继续推进到：
+  - 直接创建训练作业
+  - `local-train-worker` 真实跑成 `SUCCEEDED`
+  - 待验证模型回收入库并可在审批工作台查看
+  - 训练中心工作区卡片可直接回显：
+    - 已确认文本数量
+    - 最近训练作业
+    - 当前待验证模型
+    - 直接跳到训练作业 / 待验证模型
+- 目前最新一轮真实状态：
+  - `inspection_mark_ocr`
+    - 已确认文本：`9`
+    - 第二轮训练作业：`train-71de4b1551`
+    - 最新待验证模型：`inspection_mark_ocr:v20260313.001308.df11`
+  - `performance_mark_ocr`
+    - 已确认文本：`9`
+    - 第二轮训练作业：`train-c176e03416`
+    - 最新待验证模型：`performance_mark_ocr:v20260313.001308.a946`
+- 第三轮治理验证状态：
+  - `inspection_mark_ocr`
+    - 第三轮训练作业：`train-cc7fd43563`
+    - 审批工作台模型：`inspection_mark_ocr:v20260313.010220.6bad`
+  - `performance_mark_ocr`
+    - 第三轮训练作业：`train-498aa6d26e`
+    - 审批工作台模型：`performance_mark_ocr:v20260313.010220.bbd5`
+  - 这两版模型的审批工作台现在已经会直接提示：
+    - `data_provenance.proxy_seeded_rows = 12`
+    - `proxy_truth_risk`
+    - 也就是审批人能明确知道当前模型仍然混入了代理回灌真值，不会误当成“纯真实真值训练”的结果
+  - inspection OCR 复核页也已经进入“优先替换代理真值”模式：
+    - 可直接勾 `仅看代理回灌`
+    - 可点击 `优先替换代理真值`
+    - 当前真实返回：
+      - `inspection_mark_ocr.proxy_seeded_rows = 6`
+      - `inspection_mark_ocr.manual_reviewed_rows = 3`
+      - `inspection_mark_ocr.proxy_replacement_samples = 6`
+  - inspection OCR 导出训练包现在还有一层默认安全门禁：
+    - 如果工作区里还有代理回灌真值，默认会直接阻止导出
+    - 只有显式勾选 `允许带代理真值继续训练（仅冷启动）` 才会放行
+  - inspection OCR 现在还会直接给出训练结论：
+    - `可正常训练`
+    - `仅冷启动可训练`
+    - `仍不可导出`
+    不再需要靠多段说明自己判断当前能否进入训练
+  - inspection OCR 复核页现在还支持：
+    - 同时查看 crop 和原图
+    - 直接导出 `proxy_replacement_queue.csv`
+    - 更适合把代理回灌样本批量替换成真实标记文本
+  - inspection OCR 现在还支持：
+    - 把离线补好的 CSV 批量导回工作区
+    - 也就是完整支持：
+      - 导出队列
+      - 预检查 CSV 会更新哪些样本
+      - 表格补真值
+      - 批量导回
+  - inspection OCR 现在还支持：
+    - 直接导出 `proxy_review_pack.zip`
+    - 包内同时带：
+      - 队列 CSV
+      - README
+      - crops
+      - sources
+- 车号 OCR 现在还额外对齐了“库内 45° 侧拍车身标记识别”这一类机器狗/轮足机器人场景，场景配置已预留：
+  - `车号`
+  - `定检标记`
+  - `性能标记`
+  - `门锁状态`
+  - `连接件缺陷`
+- 车号规则也不再写死成“只能 8 位数字”，而是升级成多规则族：
+  - 标准 8 位数字车号
+  - 字母前缀 + 数字编号
+  - 紧凑型混合编号
+- 训练中心现在也已经为机器人巡检模型族预留了训练预设：
+  - `车号 OCR`
+  - `定检标记 OCR`
+  - `性能标记 OCR`
+  - `门锁状态识别`
+  - `连接件缺陷识别`
+  - `定检标记`
+  - `性能标记`
+  当前正式落地的仍是 `车号`；另外两个目标已完成场景入口预留，后续可接同一套巡检链路。
+- 当前 OCR 泛化仍在持续优化中：`9664...jpg` 这类陌生样本已能在关闭 curated 命中后直接读准，`6775...jpg` 已逼近真值，但 `2477 / 2216 / 3542` 这类难样本仍会停在规则拒绝，需要继续迭代。
 
 建议演示时先从各页“总览”工作区进入，再按需要展开低频配置和技术细节。
 
@@ -254,9 +348,10 @@ docker compose -f docker/docker-compose.yml exec backend sh -lc '
 2. 如需完整演示验证审批链，可先用买家账号上传一份测试验收资产，记录 `asset_id`。
 3. 再用 `platform_admin` 登录，进入“模型中心”点击“审批工作台”，系统会按模型能力自动推荐几张验证样本，并支持直接批量创建验证任务。
 4. 等几条验证任务完成后，在同一工作台查看输出文本、confidence 和训练指标；满足门禁后点击“一键审批通过”，不必手填 `validation_asset_ids`。
-5. 审批通过后，在“发布工作台”里确认设备、买家和交付方式。系统会先给出发布前评估，再点“确认发布”。
-6. 进入“流水线注册表”，用主路由和专家模型注册一条 Pipeline，再点“发布工作台”。系统会自动预填 `edge-01 / buyer-demo-001` 等推荐项，再确认发布。
-7. 刷新模型列表和流水线列表，确认状态从 `SUBMITTED -> APPROVED -> RELEASED`，流水线状态为 `RELEASED`。
+5. 如需演示治理闭环而不是直接放行，可在审批工作台里点“要求补充材料”或“驳回这版模型”，并用“导出证据包”拿到当前模型的审批证据归档。
+6. 审批通过后，在“发布工作台”里确认设备、买家和交付方式。系统会先给出发布前评估，再点“确认发布”。
+7. 进入“流水线注册表”，用主路由和专家模型注册一条 Pipeline，再点“发布工作台”。系统会自动预填 `edge-01 / buyer-demo-001` 等推荐项，再确认发布。
+8. 刷新模型列表和流水线列表，确认状态从 `SUBMITTED -> APPROVED -> RELEASED`，流水线状态为 `RELEASED`。
 
 ## 1.5 上传视频/图片
 
@@ -322,6 +417,98 @@ python3 docker/scripts/prepare_local_car_number_text_dataset.py \
 临时试验时，如需先用建议值凑一版数据包，可附加：
 - `--allow-suggestions`
 
+## 1.5.4 生成巡检任务族标注工作区
+
+```bash
+cd <repo-root>
+python3 docker/scripts/bootstrap_inspection_labeling_workspace.py --task-type inspection_mark_ocr --output-dir demo_data/generated_datasets
+python3 docker/scripts/bootstrap_inspection_labeling_workspace.py --task-type performance_mark_ocr --output-dir demo_data/generated_datasets
+python3 docker/scripts/bootstrap_inspection_labeling_workspace.py --task-type door_lock_state_detect --output-dir demo_data/generated_datasets
+python3 docker/scripts/bootstrap_inspection_labeling_workspace.py --task-type connector_defect_detect --output-dir demo_data/generated_datasets
+```
+
+说明：
+- OCR 类工作区用于 `inspection_mark_ocr / performance_mark_ocr`
+- 状态 / 缺陷类工作区用于 `door_lock_state_detect / connector_defect_detect`
+- 训练中心已经提供这组任务的首版训练预设
+- 训练中心现在还会直接显示这 4 个工作区的准备度：
+  - 工作区名称
+  - 起步样本目标
+  - 建议样本规模
+  - 已裁剪候选区域
+  - 已有文字建议
+  - 当前已准备样本数
+  - 待处理 / 需复核数量
+  - 建议场景、拍摄距离、拍摄角度、图像要求
+  - 首版验收目标
+  - 结构化字段建议
+  - 工作区目录与训练包生成命令
+- 演示时可直接进入“训练中心 -> 巡检任务数据准备”查看当前准备度，不必在文档、终端和页面之间来回切换
+
+如果要把现有真实侧拍图先变成 OCR 代理裁剪队列，可继续执行：
+
+```bash
+cd <repo-root>
+python3 docker/scripts/prepare_inspection_ocr_proxy_crops.py --task-type inspection_mark_ocr
+python3 docker/scripts/prepare_inspection_ocr_proxy_crops.py --task-type performance_mark_ocr
+```
+
+说明：
+- 这会复用 `demo_data/train/_annotations.txt` 的真实框
+- 把侧拍整图变成便于复核的 `crops/` 候选区域
+- 当前真实结果是：`inspection_mark_ocr / performance_mark_ocr` 各有 `80` 条整图样本，其中 `77` 条已成功生成代理裁剪
+- 代理裁剪策略现已进一步调成：
+  - `performance_mark_ocr`：优先截取车号上方性能码带
+  - `inspection_mark_ocr`：优先截取车号下方检修记录 / 小字信息带
+
+如需尝试自动补文字建议，可继续执行：
+
+```bash
+cd <repo-root>
+python3 docker/scripts/generate_inspection_ocr_suggestions.py --task-type inspection_mark_ocr
+python3 docker/scripts/generate_inspection_ocr_suggestions.py --task-type performance_mark_ocr
+```
+
+当前真实状态要说清楚：
+- 这条自动建议链路已经接入系统
+- 训练中心也会显示“已有文字建议”
+- 当前真实建议覆盖已经提升到：
+  - `inspection_mark_ocr.suggestion_rows = 59`
+  - `performance_mark_ocr.suggestion_rows = 57`
+  - `inspection_mark_ocr.high_quality_suggestion_rows = 51`
+  - `performance_mark_ocr.high_quality_suggestion_rows = 45`
+  - inspection OCR 复核页现已补齐高质量建议专用入口：
+    - `仅看高质量建议`
+    - `优先确认高质量建议`
+    - `导出高质量建议队列`
+    - `导出高质量建议包`
+- 这些建议现在可以作为人工起步参考
+- 但正式训练仍应继续以人工确认的 `final_text` 为主，不能把自动建议直接当真值
+
+## 1.5.5 把巡检任务复核清单打成训练包
+
+```bash
+cd <repo-root>
+python3 docker/scripts/build_inspection_task_dataset.py \
+  --task-type inspection_mark_ocr \
+  --manifest demo_data/generated_datasets/inspection_mark_ocr_labeling/manifest.csv \
+  --output-dir demo_data/generated_datasets/inspection_mark_ocr_dataset \
+  --allow-suggestions
+```
+
+```bash
+cd <repo-root>
+python3 docker/scripts/build_inspection_task_dataset.py \
+  --task-type door_lock_state_detect \
+  --manifest demo_data/generated_datasets/door_lock_state_detect_labeling/manifest.csv \
+  --output-dir demo_data/generated_datasets/door_lock_state_detect_dataset
+```
+
+说明：
+- OCR 类优先补 `final_text`
+- 状态 / 缺陷类优先补 `label_value`
+- 这轮已落地的是工作区模板和打包脚手架，还不是这些模型已经训练完成
+
 界面里对应两条入口：
 - “先准备训练数据”：只会把 train / validation 资产预填到训练中心，仍需手动点击“创建训练作业”
 - “现在开始训练”：会直接创建一条 `car_number_ocr` 训练作业
@@ -336,6 +523,7 @@ python3 docker/scripts/prepare_local_car_number_text_dataset.py \
 - 结果中心顶部元信息现在会直接显示“结果条数 / 关联模型 / 识别文本”，默认不再先露出 `task_id / model_id` 这类技术字段
 - 如需把这批验证结果继续用于下一轮训练，结果中心的“把确认结果变成训练数据”区可直接导出训练/验证数据集版本，并自动把 `dataset_version / asset_id / target_model_code` 预填回训练中心
 - 这轮前后端也继续统一了失败提示：登录失败、权限不足、资源不存在、流水线缺模型、数据集预览不可用等常见问题，页面会优先显示“原因 + 下一步”，不再直接弹裸英文接口错误
+- OCR 真实泛化这轮也补了正式探针：评估脚本现在会优先对 `final_text` 真值，并支持关闭 curated/fixture 快捷命中；最新 8 样本探针已从 `2/8 正确` 提升到 `3/8 正确 + 1/8 可读但错位`，说明扩框重扫已开始有效，但陌生低清样本还没完全收口
 
 ## 1.6 创建任务
 
@@ -354,21 +542,25 @@ python3 docker/scripts/prepare_local_car_number_text_dataset.py \
 
 1. 进入“任务中心”里的“快速识别”卡片。
 2. 上传图片 / 视频，或直接填写已有 `asset_id`。
-3. 如果你已经明确知道要识别的是 `车号 / 车厢号 / 编号`，页面会直接展示可用 `car_number_ocr` 模型，不必先走预检。
-4. 这时可直接点选模型，再点“带入下方精确任务”，把模型、任务类型、设备和意图一键同步到下方正式任务表单。
-5. 如果目标表述可能有歧义，再点击“先扫一遍给建议”。
-6. 页面会返回若干候选方向，例如：
+3. 任务页现在不是一屏堆满，而是按二级步骤进入：
+   - `快速识别`：`识别输入 / 识别结果`
+   - `创建任务`：`填写任务 / 创建反馈`
+   完成上一步后会自动切到下一块。
+4. 如果你已经明确知道要识别的是 `车号 / 车厢号 / 编号`，页面会直接展示可用 `car_number_ocr` 模型，不必先走预检。
+5. 这时可直接点选模型，再点“带入下方精确任务”，把模型、任务类型、设备和意图一键同步到下方正式任务表单。
+6. 如果目标表述可能有歧义，再点击“先扫一遍给建议”。
+7. 页面会返回若干候选方向，例如：
    - `车号内容`
    - `目标框选`
    - `螺栓缺失`
-7. 若是车号图片，系统会优先展示 `car_number_ocr` 候选，并直接给出候选车号文本。
-8. 任务列表默认先显示“创建时间 / 执行方式 / 结果入口 / 当前设备”，长 `asset_id / model_id / pipeline_id` 收在“技术详情”里。
-9. 选择一个候选方向后继续正式识别；结果页支持：
+8. 若是车号图片，系统会优先展示 `car_number_ocr` 候选，并直接给出候选车号文本。
+9. 任务列表默认先显示“创建时间 / 执行方式 / 结果入口 / 当前设备”，长 `asset_id / model_id / pipeline_id` 收在“技术详情”里。
+10. 选择一个候选方向后继续正式识别；结果页支持：
    - 修订框坐标
    - 删除误检
    - 手工补框
    - 修订 OCR 文本
-10. 修订保存后，可直接导出为训练 / 验证数据集版本。
+11. 修订保存后，可直接导出为训练 / 验证数据集版本。
 
 补充说明：
 - 模型中心顶部会显示“模型工作台概览”，根据当前候选模型状态给出评估 / 审批 / 发布入口。

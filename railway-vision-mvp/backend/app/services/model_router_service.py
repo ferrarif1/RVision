@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -13,13 +16,22 @@ from app.db.models import DataAsset, ModelRecord, ModelRelease
 from app.security.dependencies import AuthUser
 from app.security.roles import is_buyer_user
 
-TASK_TYPE_LABELS = {
+TASK_CATALOG_CANDIDATES = (
+    Path(__file__).resolve().parents[3] / "config" / "railcar_inspection_task_catalog.json",
+    Path("/app/config/railcar_inspection_task_catalog.json"),
+)
+
+DEFAULT_TASK_TYPE_LABELS = {
     "object_detect": "快速识别",
     "car_number_ocr": "车号识别",
+    "inspection_mark_ocr": "定检标记识别",
+    "performance_mark_ocr": "性能标记识别",
+    "door_lock_state_detect": "门锁状态识别",
+    "connector_defect_detect": "连接件缺陷识别",
     "bolt_missing_detect": "螺栓缺失",
 }
 
-TASK_TYPE_KEYWORDS = {
+DEFAULT_TASK_TYPE_KEYWORDS = {
     "object_detect": (
         "object",
         "objects",
@@ -96,6 +108,44 @@ TASK_TYPE_KEYWORDS = {
         "读取车号",
         "ocr车号",
     ),
+    "inspection_mark_ocr": (
+        "inspection mark",
+        "inspection",
+        "maintenance mark",
+        "检修记录",
+        "定检标记",
+        "检修标记",
+        "定检日期",
+        "厂修标记",
+        "段修标记",
+    ),
+    "performance_mark_ocr": (
+        "performance mark",
+        "performance",
+        "性能标记",
+        "性能文字",
+        "性能代码",
+        "标记文字",
+    ),
+    "door_lock_state_detect": (
+        "door lock",
+        "lock state",
+        "door state",
+        "门锁",
+        "锁闭",
+        "敞开",
+        "门状态",
+    ),
+    "connector_defect_detect": (
+        "connector",
+        "connector defect",
+        "coupler",
+        "连接件",
+        "连接件缺陷",
+        "松动",
+        "变形",
+        "缺失",
+    ),
     "bolt_missing_detect": (
         "bolt",
         "missing",
@@ -110,6 +160,50 @@ TASK_TYPE_KEYWORDS = {
         "脱落",
         "检测螺栓",
     ),
+}
+
+
+@lru_cache(maxsize=1)
+def _load_task_catalog_payload() -> dict[str, Any]:
+    config_path = next((path for path in TASK_CATALOG_CANDIDATES if path.exists()), None)
+    if config_path is None:
+        return {"tasks": {}}
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"tasks": {}}
+    if not isinstance(payload, dict):
+        return {"tasks": {}}
+    return payload
+
+
+def _task_catalog_tasks() -> dict[str, dict[str, Any]]:
+    payload = _load_task_catalog_payload()
+    tasks = payload.get("tasks") if isinstance(payload.get("tasks"), dict) else {}
+    return {str(key): value for key, value in tasks.items() if isinstance(value, dict)}
+
+
+TASK_TYPE_LABELS = {
+    **DEFAULT_TASK_TYPE_LABELS,
+    **{
+        task_type: str(meta.get("label") or DEFAULT_TASK_TYPE_LABELS.get(task_type) or task_type)
+        for task_type, meta in _task_catalog_tasks().items()
+    },
+}
+
+TASK_TYPE_KEYWORDS = {
+    **DEFAULT_TASK_TYPE_KEYWORDS,
+    **{
+        task_type: tuple(
+            dict.fromkeys(
+                [
+                    *(DEFAULT_TASK_TYPE_KEYWORDS.get(task_type, ()) or ()),
+                    *[str(item).strip().lower() for item in meta.get("keywords") or [] if str(item).strip()],
+                ]
+            )
+        )
+        for task_type, meta in _task_catalog_tasks().items()
+    },
 }
 
 

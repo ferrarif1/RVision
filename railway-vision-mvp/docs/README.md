@@ -91,6 +91,10 @@
   动态维护的执行面板：记录当前正在做、下一步、排队中和最近完成项，供持续迭代时实时更新。
 - [product/novice_user_usability_audit_2026-03-11.md](./product/novice_user_usability_audit_2026-03-11.md)
   从“只懂少量概念的新用户”视角记录哪里不好用、哪里不明白，以及后续该优先优化什么。
+- [product/railcar_robot_inspection_model_family_2026-03-12.md](./product/railcar_robot_inspection_model_family_2026-03-12.md)
+  将《铁路货车轮足式机器人库内智能巡检应用技术方案》收敛成可执行的巡检模型族、训练优先级和数据采集建议。
+- [product/railcar_inspection_data_workspace_2026-03-12.md](./product/railcar_inspection_data_workspace_2026-03-12.md)
+  巡检任务族的数据工作区、标注模板与训练/验证包生成脚手架说明。
 - [product/vistral_positioning_and_role_onboarding.md](./product/vistral_positioning_and_role_onboarding.md)
   Vistral 的产品定位、核心价值和角色上手路径。
 - [project_organization.md](./project_organization.md)
@@ -101,6 +105,8 @@
   页面级人工走查清单，覆盖任务、结果、训练、模型、流水线等关键控制台页。
 - [qa/browser_walkthrough_report_2026-03-12.md](./qa/browser_walkthrough_report_2026-03-12.md)
   页面级走查结果与修复结论，记录本轮导航拆分、术语减负、回跳链路和布局稳定性收口情况。
+- [qa/ocr_generalization_iteration_2026-03-12.md](./qa/ocr_generalization_iteration_2026-03-12.md)
+  OCR 真实泛化迭代记录，覆盖库内 45° 侧拍车身标记识别场景、本轮场景配置外置和难样本 probe 结果。
 - [references.md](./references.md)
   文档体系参考的公开方法论来源。
 

@@ -153,20 +153,43 @@ function normalizeCarNumberText(value) {
 
 function validateCarNumberByRule(value, rule) {
   const normalized = normalizeCarNumberText(value);
-  const pattern = String(rule?.pattern || '^\\d{8}$');
+  const fallbackPattern = String(rule?.pattern || '^(?:\\d{8}|[A-Z]{1,3}\\d{5,8}|[A-Z0-9]{6,12})$');
+  const acceptedRuleDetails = Array.isArray(rule?.accepted_rule_details) ? rule.accepted_rule_details : [];
   let valid = false;
-  try {
-    valid = !!(normalized && new RegExp(pattern).test(normalized));
-  } catch {
-    valid = false;
+  let matchedRuleId = '';
+  let matchedRuleLabel = '';
+  for (const item of acceptedRuleDetails) {
+    const itemPattern = String(item?.pattern || '').trim();
+    if (!itemPattern) continue;
+    try {
+      if (normalized && new RegExp(itemPattern).test(normalized)) {
+        valid = true;
+        matchedRuleId = String(item?.rule_id || '');
+        matchedRuleLabel = String(item?.label || matchedRuleId);
+        break;
+      }
+    } catch {}
+  }
+  if (!valid) {
+    try {
+      valid = !!(normalized && new RegExp(fallbackPattern).test(normalized));
+      if (valid) {
+        matchedRuleId = String(rule?.rule_id || 'railcar_identifier_family_v1');
+        matchedRuleLabel = String(rule?.label || '铁路货车标识 · 多规则族');
+      }
+    } catch {
+      valid = false;
+    }
   }
   return {
     valid,
     normalized,
-    ruleId: String(rule?.rule_id || 'railcar_digits_v1'),
-    label: String(rule?.label || '铁路车号 · 8位数字'),
-    description: String(rule?.description || '当前默认要求车号为 8 位数字。'),
-    pattern,
+    ruleId: String(rule?.rule_id || 'railcar_identifier_family_v1'),
+    label: String(rule?.label || '铁路货车标识 · 多规则族'),
+    description: String(rule?.description || '当前按库内巡检场景接受标准 8 位数字车号、字母前缀数字编号和紧凑型混合编号。'),
+    pattern: fallbackPattern,
+    matchedRuleId: matchedRuleId || null,
+    matchedRuleLabel: matchedRuleLabel || null,
   };
 }
 
@@ -1035,6 +1058,7 @@ const ENUM_ZH = {
   },
   model_status: {
     SUBMITTED: '已提交',
+    REJECTED: '已驳回',
     APPROVED: '已审批',
     RELEASED: '已发布',
   },
@@ -1054,6 +1078,10 @@ const ENUM_ZH = {
     pipeline_orchestrated: '编排推理',
     object_detect: '快速识别',
     car_number_ocr: '车号识别',
+    inspection_mark_ocr: '定检标记识别',
+    performance_mark_ocr: '性能标记识别',
+    door_lock_state_detect: '门锁状态识别',
+    connector_defect_detect: '连接件缺陷识别',
     bolt_missing_detect: '螺栓缺失',
     ocr: '文字识别',
     detect: '目标检测',
@@ -1072,7 +1100,7 @@ const ROLE_LABELS = {
   auditor: '平台审计',
 };
 
-const QUICK_DETECT_PROMPTS = ['car', 'person', 'train', 'bus', '车号'];
+const QUICK_DETECT_PROMPTS = ['car', 'person', 'train', 'bus', '车号', '定检标记', '性能标记', '门锁状态', '连接件缺陷'];
 const QUICK_DETECT_INTENT_OPTIONS = [
   {
     prompt: 'car',
@@ -1099,8 +1127,36 @@ const QUICK_DETECT_INTENT_OPTIONS = [
     prompt: '车号',
     taskType: 'car_number_ocr',
     title: '车号内容',
-    description: '走 OCR，输出车号文本，不只是画框',
+    description: '走 OCR，输出车身编号文本，不只限 8 位数字',
     aliases: ['车号', '车厢号', '车皮号', '编号', '号码', '货车号', '货车编号', '车体编号', 'railcar number', 'wagon number', 'car number'],
+  },
+  {
+    prompt: '定检标记',
+    taskType: 'inspection_mark_ocr',
+    title: '定检标记',
+    description: '识别车身定检标记、检修记录与日期类文字',
+    aliases: ['定检标记', '检修标记', '检修记录', '定检日期', 'inspection mark', 'maintenance mark'],
+  },
+  {
+    prompt: '性能标记',
+    taskType: 'performance_mark_ocr',
+    title: '性能标记',
+    description: '识别性能标记、性能代码与相关文字',
+    aliases: ['性能标记', '性能代码', '性能文字', 'performance mark'],
+  },
+  {
+    prompt: '门锁状态',
+    taskType: 'door_lock_state_detect',
+    title: '门锁状态',
+    description: '识别门锁处于锁闭还是敞开',
+    aliases: ['门锁', '锁闭', '敞开', 'door lock', 'lock state'],
+  },
+  {
+    prompt: '连接件缺陷',
+    taskType: 'connector_defect_detect',
+    title: '连接件缺陷',
+    description: '识别连接件松动、变形或缺失',
+    aliases: ['连接件', '连接件缺陷', '松动', '变形', '缺失', 'connector defect'],
   },
   {
     prompt: '螺栓缺失',
@@ -2429,6 +2485,7 @@ function pageModels(route, rawCtx) {
           <select id="modelStatusFilter">
             <option value="">全部状态</option>
             <option value="SUBMITTED">${enumText('model_status', 'SUBMITTED')}</option>
+            <option value="REJECTED">${enumText('model_status', 'REJECTED')}</option>
             <option value="APPROVED">${enumText('model_status', 'APPROVED')}</option>
             <option value="RELEASED">${enumText('model_status', 'RELEASED')}</option>
           </select>
@@ -2679,6 +2736,7 @@ function pageModels(route, rawCtx) {
             summary: '先从下方模型列表选一版待验证模型。系统会把时间线、门禁、审批和发布动作聚合到同一屏。',
             metrics: [
               { label: '待验证模型', value: filteredModels(cachedModels).filter((row) => row.status === 'SUBMITTED').length, note: '待审批' },
+              { label: '已驳回', value: filteredModels(cachedModels).filter((row) => row.status === 'REJECTED').length, note: '待补材料或重提' },
               { label: '已审批', value: filteredModels(cachedModels).filter((row) => row.status === 'APPROVED').length, note: '可进入发布工作台' },
               { label: '已发布', value: filteredModels(cachedModels).filter((row) => row.status === 'RELEASED').length, note: '可直接授权使用' },
             ],
@@ -2695,7 +2753,7 @@ function pageModels(route, rawCtx) {
             { id: 'model-open-readiness', label: '查看评估', primary: true },
             { id: 'model-open-timeline', label: '查看时间线' },
           ];
-          if (canApprove && model.status === 'SUBMITTED') {
+          if (canApprove && ['SUBMITTED', 'REJECTED'].includes(model.status)) {
             actions.push({ id: 'model-open-approval', label: '进入审批工作台' });
           }
           if (canRelease && ['APPROVED', 'RELEASED'].includes(model.status)) {
@@ -2706,6 +2764,8 @@ function pageModels(route, rawCtx) {
             status: enumText('model_status', model.status),
             summary: model.status === 'SUBMITTED'
               ? '这版待验证模型还在审批前验证阶段。建议先检查门禁，再批量创建验证任务。'
+              : model.status === 'REJECTED'
+                ? '这版模型已被驳回。先看驳回原因和补材料要求，再决定是否继续验证或重提。'
               : model.status === 'APPROVED'
                 ? '模型已审批通过，下一步进入发布工作台，确认设备范围、买家范围和交付方式。'
                 : '模型已进入正式交付链路，可回看发布前评估和最近风险摘要。',
@@ -2860,9 +2920,12 @@ function pageModels(route, rawCtx) {
       function renderApprovalWorkbenchPanel(workbench) {
         const capability = workbench?.capability || {};
         const readiness = workbench?.readiness?.validation_report || {};
+        const provenance = readiness?.data_provenance || {};
         const suggestions = Array.isArray(workbench?.suggested_assets) ? workbench.suggested_assets : [];
         const recentTasks = Array.isArray(workbench?.recent_validation_tasks) ? workbench.recent_validation_tasks : [];
         const counts = workbench?.recent_validation_counts || {};
+        const governance = workbench?.governance || {};
+        const proxySeededRows = Number(provenance?.proxy_seeded_rows || 0);
         const successfulAssetIds = Array.from(new Set(
           recentTasks.filter((row) => row.status === 'SUCCEEDED' && row.asset_id).map((row) => row.asset_id),
         ));
@@ -2890,17 +2953,28 @@ function pageModels(route, rawCtx) {
                 <p class="metric">${esc(`${counts.success || 0} / ${counts.total || 0}`)}</p>
                 <span>${esc((counts.running || 0) > 0 ? `仍有 ${counts.running} 条执行中` : '优先看成功验证再审批')}</span>
               </article>
+              <article class="metric-card">
+                <h4>当前治理状态</h4>
+                <p class="metric">${esc(governance.label || '待审批')}</p>
+                <span>${esc(governance.summary || '当前还没有治理动作记录')}</span>
+              </article>
+              <article class="metric-card">
+                <h4>数据来源风险</h4>
+                <p class="metric">${esc(proxySeededRows ? `${proxySeededRows} 条代理真值` : '真实真值为主')}</p>
+                <span>${esc(proxySeededRows ? '当前训练/验证数据包含代理回灌文本，建议继续补真实标记真值。' : '当前没有记录代理真值回灌。')}</span>
+              </article>
             </div>
             <div class="approval-workbench-actions">
               <div class="inline-form compact">
                 <label class="approval-inline-label">任务类型</label>
                 <input id="approvalTaskType" value="${esc(workbench?.recommended_task_type || capability.task_type || '')}" />
-                <label class="approval-inline-label">device_code</label>
+                <label class="approval-inline-label">设备编号</label>
                 <input id="approvalDeviceCode" value="${esc(workbench?.recommended_device_code || 'edge-01')}" />
               </div>
               <div class="row-actions">
                 <button class="ghost" type="button" data-approval-select-all>全选建议样本</button>
                 <button class="ghost" type="button" data-approval-refresh>刷新验证结果</button>
+                <button class="ghost" type="button" data-approval-export-evidence>导出证据包</button>
                 <button class="primary" type="button" data-approval-create-tasks ${(suggestions.length && canCreateTask) ? '' : 'disabled'}>批量创建验证任务</button>
               </div>
             </div>
@@ -2948,9 +3022,28 @@ function pageModels(route, rawCtx) {
             <div class="approval-summary-card">
               <strong>审批建议</strong>
               <span>${esc(canApproveNow ? '门禁已通过，且已有成功验证样本。可以直接审批。' : readiness?.can_approve ? '训练门禁已通过，但还缺成功运行验证。建议先跑几张样本。' : (readiness?.summary || '当前仍有阻断项，暂不能审批。'))}</span>
+              ${proxySeededRows ? `<span class="hint warning">当前训练/验证数据里包含 ${esc(proxySeededRows)} 条代理真值回灌。建议继续补真实标记文本，再决定是否正式审批。</span>` : ''}
               <textarea id="approvalSummaryInput" rows="3" placeholder="审批说明会自动生成，这里可补充少量备注">${esc(buildWorkbenchApprovalSummary(workbench, successfulAssetIds))}</textarea>
               <div class="row-actions">
                 <button class="primary" type="button" data-approval-approve ${canApproveNow ? '' : 'disabled'}>一键审批通过</button>
+              </div>
+            </div>
+            <div class="approval-summary-card">
+              <strong>补材料要求</strong>
+              <span>${esc(governance?.request_evidence?.detail?.request_summary || '当前没有补材料要求。你可以把需要的说明、截图或验证范围直接写在这里。')}</span>
+              <input id="approvalEvidenceItemsInput" placeholder="例如：补 3 张夜间样本, 补训练说明, 补运行日志" value="${esc(((governance?.request_evidence?.detail?.requested_items) || []).join(', '))}" />
+              <textarea id="approvalEvidenceSummaryInput" rows="3" placeholder="说明为什么需要补材料，以及补完后准备怎么复核">${esc(governance?.request_evidence?.detail?.request_summary || '')}</textarea>
+              <div class="row-actions">
+                <button class="ghost" type="button" data-approval-request-evidence>要求补充材料</button>
+              </div>
+            </div>
+            <div class="approval-summary-card">
+              <strong>驳回处理</strong>
+              <span>${esc(governance?.reject?.detail?.rejection_reason || '当模型方向明显不满足要求时，可直接驳回，并留下修正建议。')}</span>
+              <textarea id="approvalRejectReasonInput" rows="3" placeholder="写清楚为什么这版模型不能进入审批通过">${esc(governance?.reject?.detail?.rejection_reason || '')}</textarea>
+              <textarea id="approvalCorrectiveActionInput" rows="3" placeholder="给供应商或训练侧的修正建议（可选）">${esc(governance?.reject?.detail?.corrective_action || '')}</textarea>
+              <div class="row-actions">
+                <button class="ghost" type="button" data-approval-reject>驳回这版模型</button>
               </div>
             </div>
           </div>
@@ -3118,6 +3211,10 @@ function pageModels(route, rawCtx) {
           const workbenchMsg = approvalWorkbenchWrap.querySelector('#approvalWorkbenchMsg');
           const taskTypeInput = approvalWorkbenchWrap.querySelector('#approvalTaskType');
           const deviceCodeInput = approvalWorkbenchWrap.querySelector('#approvalDeviceCode');
+          const evidenceItemsInput = approvalWorkbenchWrap.querySelector('#approvalEvidenceItemsInput');
+          const evidenceSummaryInput = approvalWorkbenchWrap.querySelector('#approvalEvidenceSummaryInput');
+          const rejectReasonInput = approvalWorkbenchWrap.querySelector('#approvalRejectReasonInput');
+          const correctiveActionInput = approvalWorkbenchWrap.querySelector('#approvalCorrectiveActionInput');
           const collectSelectedAssetIds = () => Array.from(
             approvalWorkbenchWrap.querySelectorAll('[data-approval-asset]:checked'),
           ).map((node) => node.value).filter(Boolean);
@@ -3129,6 +3226,30 @@ function pageModels(route, rawCtx) {
           });
           approvalWorkbenchWrap.querySelector('[data-approval-refresh]')?.addEventListener('click', async () => {
             await openModelApprovalWorkbench(modelId);
+          });
+          approvalWorkbenchWrap.querySelector('[data-approval-export-evidence]')?.addEventListener('click', async () => {
+            const button = approvalWorkbenchWrap.querySelector('[data-approval-export-evidence]');
+            button.disabled = true;
+            if (workbenchMsg) workbenchMsg.textContent = '正在整理证据包...';
+            try {
+              const payload = await ctx.get(`/models/${modelId}/evidence-pack`);
+              const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+              const url = URL.createObjectURL(blob);
+              const link = document.createElement('a');
+              link.href = url;
+              link.download = `${payload?.model?.model_code || 'model'}_${payload?.model?.version || 'evidence'}_evidence_pack.json`;
+              document.body.appendChild(link);
+              link.click();
+              link.remove();
+              URL.revokeObjectURL(url);
+              if (workbenchMsg) workbenchMsg.textContent = '证据包已导出，可用于审批归档。';
+              ctx.toast('证据包已导出');
+            } catch (error) {
+              if (workbenchMsg) workbenchMsg.textContent = error.message || '导出证据包失败';
+              ctx.toast(error.message || '导出证据包失败', 'error');
+            } finally {
+              button.disabled = false;
+            }
           });
           approvalWorkbenchWrap.querySelectorAll('[data-open-validation-result]').forEach((button) => {
             button.addEventListener('click', () => {
@@ -3207,6 +3328,56 @@ function pageModels(route, rawCtx) {
               ctx.toast(error.message || '审批失败', 'error');
             } finally {
               approveButton.disabled = false;
+            }
+          });
+          approvalWorkbenchWrap.querySelector('[data-approval-request-evidence]')?.addEventListener('click', async () => {
+            const requestedItems = splitCsv(evidenceItemsInput?.value || '');
+            const requestSummary = String(evidenceSummaryInput?.value || '').trim();
+            const button = approvalWorkbenchWrap.querySelector('[data-approval-request-evidence]');
+            button.disabled = true;
+            if (workbenchMsg) workbenchMsg.textContent = '正在登记补材料要求...';
+            try {
+              await ctx.post('/models/request-evidence', {
+                model_id: modelId,
+                requested_items: requestedItems,
+                request_summary: requestSummary || null,
+              });
+              ctx.toast('已登记补材料要求');
+              await loadModels();
+              await openModelTimeline(modelId);
+              await openModelApprovalWorkbench(modelId);
+            } catch (error) {
+              if (workbenchMsg) workbenchMsg.textContent = error.message || '登记补材料要求失败';
+              ctx.toast(error.message || '登记补材料要求失败', 'error');
+            } finally {
+              button.disabled = false;
+            }
+          });
+          approvalWorkbenchWrap.querySelector('[data-approval-reject]')?.addEventListener('click', async () => {
+            const rejectionReason = String(rejectReasonInput?.value || '').trim();
+            const correctiveAction = String(correctiveActionInput?.value || '').trim();
+            if (!rejectionReason) {
+              ctx.toast('先填写驳回原因', 'error');
+              return;
+            }
+            const button = approvalWorkbenchWrap.querySelector('[data-approval-reject]');
+            button.disabled = true;
+            if (workbenchMsg) workbenchMsg.textContent = '正在驳回模型...';
+            try {
+              await ctx.post('/models/reject', {
+                model_id: modelId,
+                rejection_reason: rejectionReason,
+                corrective_action: correctiveAction || null,
+              });
+              ctx.toast('模型已驳回');
+              await loadModels();
+              await openModelTimeline(modelId);
+              await openModelApprovalWorkbench(modelId);
+            } catch (error) {
+              if (workbenchMsg) workbenchMsg.textContent = error.message || '驳回模型失败';
+              ctx.toast(error.message || '驳回模型失败', 'error');
+            } finally {
+              button.disabled = false;
             }
           });
           return workbench;
@@ -3373,12 +3544,12 @@ function pageModels(route, rawCtx) {
                   <div class="row-actions">
                     <button class="ghost" data-model-timeline="${esc(row.id)}">时间线</button>
                     <button class="primary" data-model-readiness="${esc(row.id)}">${isActive ? '当前查看评估' : '查看评估'}</button>
-                    ${(canApprove && row.status === 'SUBMITTED') || (canRelease && ['APPROVED', 'RELEASED'].includes(row.status))
+                    ${(canApprove && ['SUBMITTED', 'REJECTED'].includes(row.status)) || (canRelease && ['APPROVED', 'RELEASED'].includes(row.status))
                       ? `
                           <details class="inline-details">
                             <summary>更多操作</summary>
                             <div class="details-panel action-panel">
-                              ${canApprove && row.status === 'SUBMITTED' ? `<button class="ghost" data-model-approve="${esc(row.id)}">审批工作台</button>` : ''}
+                              ${canApprove && ['SUBMITTED', 'REJECTED'].includes(row.status) ? `<button class="ghost" data-model-approve="${esc(row.id)}">审批工作台</button>` : ''}
                               ${canRelease && ['APPROVED', 'RELEASED'].includes(row.status) ? `<button class="ghost" data-model-release="${esc(row.id)}">发布工作台</button>` : ''}
                             </div>
                           </details>
@@ -3660,6 +3831,11 @@ function pageTraining(route, rawCtx) {
         <div id="trainingWorkbenchOverviewWrap">${renderEmpty('选择一条训练作业后，这里会汇总当前状态、训练机器健康和推荐下一步动作。')}</div>
       </section>
       <section class="card">
+        <h3>巡检任务数据准备</h3>
+        <p class="hint">把新任务族的数据准备进度放在这里统一看清楚。先准备样本，再打成训练/验证包，再进入创建训练。</p>
+        <div id="inspectionWorkspaceSummaryWrap">${renderLoading('加载巡检任务数据工作区...')}</div>
+      </section>
+      <section class="card">
         <div class="workspace-switcher">
           <button class="ghost" type="button" data-training-panel-tab="overview">训练总览</button>
           <button class="ghost" type="button" data-training-panel-tab="create">创建训练</button>
@@ -3827,9 +4003,13 @@ function pageTraining(route, rawCtx) {
                       <option value="car_number_balanced">车号 OCR · 标准微调</option>
                       <option value="car_number_fast">车号 OCR · 快速验证</option>
                       <option value="car_number_eval">车号 OCR · 验证评估</option>
+                      <option value="inspection_mark_balanced">定检标记 OCR · 标准微调</option>
+                      <option value="performance_mark_balanced">性能标记 OCR · 标准微调</option>
+                      <option value="door_lock_state_balanced">门锁状态 · 标准训练</option>
+                      <option value="connector_defect_balanced">连接件缺陷 · 标准训练</option>
                       <option value="custom">自定义</option>
                     </select>
-                    <div class="hint">默认按预设自动生成训练参数。只有确实需要覆盖时，再展开下面的高级 JSON。</div>
+                    <div class="hint">默认按预设自动生成训练参数，并自动建议对应的目标模型编码。只有确实需要覆盖时，再展开下面的高级 JSON。</div>
                   </div>
                   <div class="form-grid">
                     <label>基础算法（可选）</label>
@@ -3891,6 +4071,7 @@ function pageTraining(route, rawCtx) {
       const trainingCreatePanelMeta = root.querySelector('#trainingCreatePanelMeta');
       const trainingCreateTabs = [...root.querySelectorAll('[data-training-create-tab]')];
       const trainingCreatePanels = [...root.querySelectorAll('[data-training-create-panel]')];
+      const inspectionWorkspaceSummaryWrap = root.querySelector('#inspectionWorkspaceSummaryWrap');
       const trainingRuntimeAlertWrap = root.querySelector('#trainingRuntimeAlertWrap');
       const trainingWorkbenchOverviewWrap = root.querySelector('#trainingWorkbenchOverviewWrap');
       const trainingRunSummaryWrap = root.querySelector('#trainingRunSummaryWrap');
@@ -3948,6 +4129,7 @@ function pageTraining(route, rawCtx) {
       let activeTrainingCreatePanel = 'prep';
       let activeTrainingPrepPanel = 'model';
       let activeTrainingWorkersPanel = 'overview';
+      let inspectionWorkspaceItems = [];
       let lastAutoSpecSerialized = '{}';
       const trainingLibraryFilters = {
         modelQuery: '',
@@ -3982,6 +4164,73 @@ function pageTraining(route, rawCtx) {
           learning_rate: 0.0001,
           batch_size: 8,
           preprocessing: { resize: [320, 96] },
+        },
+        inspection_mark_balanced: {
+          trainer: 'inspection_mark_ocr_local',
+          epochs: 4,
+          learning_rate: 0.0004,
+          batch_size: 12,
+          preprocessing: { resize: [384, 128] },
+          augmentations: { grayscale_jitter: 0.06, contrast_jitter: 0.14, perspective_jitter: 0.08 },
+        },
+        performance_mark_balanced: {
+          trainer: 'performance_mark_ocr_local',
+          epochs: 4,
+          learning_rate: 0.0004,
+          batch_size: 12,
+          preprocessing: { resize: [384, 128] },
+          augmentations: { grayscale_jitter: 0.06, contrast_jitter: 0.14, perspective_jitter: 0.08 },
+        },
+        door_lock_state_balanced: {
+          trainer: 'door_lock_state_local',
+          epochs: 8,
+          learning_rate: 0.0003,
+          batch_size: 16,
+          preprocessing: { resize: [512, 512] },
+          augmentations: { flip: true, exposure_jitter: 0.12, blur: 0.04 },
+        },
+        connector_defect_balanced: {
+          trainer: 'connector_defect_local',
+          epochs: 10,
+          learning_rate: 0.00025,
+          batch_size: 16,
+          preprocessing: { resize: [640, 640] },
+          augmentations: { flip: true, exposure_jitter: 0.12, blur: 0.06 },
+        },
+      };
+
+      const TRAINING_PRESET_META = {
+        car_number_balanced: {
+          targetModelCode: 'car_number_ocr',
+          hint: '适合继续收口车号 / 编号识别，默认强调文字对比增强和窄幅 OCR 预处理。',
+        },
+        car_number_fast: {
+          targetModelCode: 'car_number_ocr',
+          hint: '适合快速验证新数据是否有正向收益，训练轮次更少。',
+        },
+        car_number_eval: {
+          targetModelCode: 'car_number_ocr',
+          hint: '适合只做验证评估，不主打完整微调。',
+        },
+        inspection_mark_balanced: {
+          targetModelCode: 'inspection_mark_ocr',
+          hint: '适合定检标记、检修日期、检修记录等文字识别场景；建议先准备 inspection_mark_ocr_labeling 工作区，起步不少于 200 张。',
+        },
+        performance_mark_balanced: {
+          targetModelCode: 'performance_mark_ocr',
+          hint: '适合性能标记、性能代码等车身文字识别场景；建议先准备 performance_mark_ocr_labeling 工作区，起步不少于 200 张。',
+        },
+        door_lock_state_balanced: {
+          targetModelCode: 'door_lock_state_detect',
+          hint: '适合锁闭 / 敞开状态识别，默认按状态分类训练；建议先准备 door_lock_state_detect_labeling 工作区，起步不少于 500 张。',
+        },
+        connector_defect_balanced: {
+          targetModelCode: 'connector_defect_detect',
+          hint: '适合连接件松动、变形、缺失等缺陷识别；建议先准备 connector_defect_detect_labeling 工作区，起步不少于 500 张。',
+        },
+        custom: {
+          targetModelCode: '',
+          hint: '自定义模式下请自行确认目标模型编码和训练参数。',
         },
       };
 
@@ -4976,6 +5225,10 @@ function pageTraining(route, rawCtx) {
         return TRAINING_SPEC_PRESETS[selectedPresetName()] || {};
       }
 
+      function selectedPresetMeta() {
+        return TRAINING_PRESET_META[selectedPresetName()] || TRAINING_PRESET_META.custom;
+      }
+
       function applyTrainingPreset({ force = false } = {}) {
         if (!specInput) return;
         const current = String(specInput.value || '').trim() || '{}';
@@ -4984,6 +5237,19 @@ function pageTraining(route, rawCtx) {
         const serialized = safeJson(next);
         lastAutoSpecSerialized = serialized;
         specInput.value = serialized;
+      }
+
+      function syncTargetModelCodeFromPreset({ force = false } = {}) {
+        if (!targetModelCodeInput) return;
+        const meta = selectedPresetMeta();
+        const suggested = String(meta?.targetModelCode || '').trim();
+        const current = String(targetModelCodeInput.value || '').trim();
+        if (!suggested) return;
+        const shouldReplace = !current
+          || current === 'railway-defect-ft'
+          || current.endsWith('-ft')
+          || force;
+        if (shouldReplace) targetModelCodeInput.value = suggested;
       }
 
       function ensureDefaultWorkerSelection() {
@@ -4998,6 +5264,7 @@ function pageTraining(route, rawCtx) {
         if (!selectionSummary) return;
         const model = selectedModel();
         const worker = selectedWorker() || preferredActiveWorker();
+        const presetMeta = selectedPresetMeta();
         const trainAssetIds = splitCsv(assetIdsInput?.value || '');
         const validationAssetIds = splitCsv(validationAssetIdsInput?.value || '');
         const selectedTrainVersions = assistDatasetVersions.filter((row) => trainAssetIds.includes(row.asset_id));
@@ -5006,10 +5273,254 @@ function pageTraining(route, rawCtx) {
           <strong>当前选择</strong>
           <span>供应商算法：${esc(model ? `${model.model_code}:${model.version} · ${model.owner_tenant_name || model.owner_tenant_code || '供应商'}` : '未选择')}</span>
           <span>训练预设：${esc(trainingPresetInput?.selectedOptions?.[0]?.textContent?.trim() || '未选择')}</span>
+          <span>预设说明：${esc(presetMeta?.hint || '未选择')}</span>
           <span>训练机：${esc(worker ? `${worker.worker_code}${worker.host ? ` · ${worker.host}` : ''}` : '未选择')}</span>
           <span>训练集版本：${esc(selectedTrainVersions.length ? selectedTrainVersions.map((row) => `${row.dataset_label}:${row.version}`).join(' / ') : `${trainAssetIds.length} 个资产`)}</span>
           <span>验证集版本：${esc(selectedValidationVersions.length ? selectedValidationVersions.map((row) => `${row.dataset_label}:${row.version}`).join(' / ') : `${validationAssetIds.length} 个资产`)}</span>
         `;
+      }
+
+      function inspectionWorkspaceReadiness(item) {
+        const readyRows = Number(item?.ready_rows || 0);
+        const target = Number(item?.sample_target_min || 0);
+        if (!target) return '按当前工作区继续补样本';
+        if (readyRows >= target) return '样本量已达首版目标';
+        return `距离首版目标还差 ${Math.max(target - readyRows, 0)} 条`;
+      }
+
+      function inspectionTrainingReadinessText(readiness) {
+        const status = String(readiness?.status || '').trim();
+        if (status === 'ready') return '可正常训练';
+        if (status === 'cold_start_only') return '仅冷启动可训练';
+        return '仍不可导出';
+      }
+
+      function renderInspectionWorkspaceSummary(payload) {
+        if (!inspectionWorkspaceSummaryWrap) return;
+        const items = payload?.items || [];
+        inspectionWorkspaceItems = items;
+        if (!items.length) {
+          inspectionWorkspaceSummaryWrap.innerHTML = renderEmpty('当前还没有巡检任务数据工作区，请先生成工作区模板。');
+          return;
+        }
+        inspectionWorkspaceSummaryWrap.innerHTML = `
+          <div class="workbench-overview">
+            <article class="metric-card compact">
+              <span>工作区数量</span>
+              <strong class="metric">${esc(payload?.workspace_count ?? items.length)}</strong>
+            </article>
+            <article class="metric-card compact">
+              <span>已达起步目标</span>
+              <strong class="metric">${esc(items.filter((item) => Number(item.ready_rows || 0) >= Number(item.sample_target_min || 0)).length)}</strong>
+            </article>
+            <article class="metric-card compact">
+              <span>待补样本任务</span>
+              <strong class="metric">${esc(items.filter((item) => Number(item.ready_rows || 0) < Number(item.sample_target_min || 0)).length)}</strong>
+            </article>
+            <article class="metric-card compact">
+              <span>总已准备样本</span>
+              <strong class="metric">${esc(items.reduce((sum, item) => sum + Number(item.ready_rows || 0), 0))}</strong>
+            </article>
+            <article class="metric-card compact">
+              <span>已裁剪候选区域</span>
+              <strong class="metric">${esc(items.reduce((sum, item) => sum + Number(item.crop_ready_rows || 0), 0))}</strong>
+            </article>
+            <article class="metric-card compact">
+              <span>已有文字建议</span>
+              <strong class="metric">${esc(items.reduce((sum, item) => sum + Number(item.suggestion_rows || 0), 0))}</strong>
+            </article>
+            <article class="metric-card compact">
+              <span>待替换代理真值</span>
+              <strong class="metric">${esc(items.reduce((sum, item) => sum + Number(item.proxy_seeded_rows || 0), 0))}</strong>
+            </article>
+            <article class="metric-card compact">
+              <span>人工确认真值</span>
+              <strong class="metric">${esc(items.reduce((sum, item) => sum + Number(item.manual_reviewed_rows || 0), 0))}</strong>
+            </article>
+            <article class="metric-card compact">
+              <span>可正常训练</span>
+              <strong class="metric">${esc(items.filter((item) => item.training_readiness?.status === 'ready').length)}</strong>
+            </article>
+            <article class="metric-card compact">
+              <span>仅冷启动</span>
+              <strong class="metric">${esc(items.filter((item) => item.training_readiness?.status === 'cold_start_only').length)}</strong>
+            </article>
+          </div>
+          <div class="selection-grid">
+            ${items.map((item) => {
+              const target = Number(item.sample_target_min || 0);
+              const recommended = Number(item.sample_target_recommended || 0);
+              const readyRows = Number(item.ready_rows || 0);
+              const proxySeededRows = Number(item.proxy_seeded_rows || 0);
+              const latestSummary = item.latest_dataset_summary || {};
+              const latestJob = item.latest_training_job || null;
+              const latestCandidate = item.latest_candidate_model || null;
+              const readiness = item.training_readiness || {};
+              const captureProfile = item.capture_profile || {};
+              const qaTargets = item.qa_targets || {};
+              const starterSamples = item.starter_samples || [];
+              const proxyReplacementSamples = item.proxy_replacement_samples || [];
+              const splitHints = Object.entries(item.split_counts || {})
+                .map(([key, value]) => `${key}:${value}`)
+                .join(' / ');
+              return `
+                <article class="selection-card ${readyRows >= target && target ? 'selected' : ''}">
+                  <div class="selection-card-head selection-card-head--stack">
+                    <div class="selection-card-title">
+                      <strong>${esc(item.task_label || item.task_type)}</strong>
+                      <span class="selection-card-subtitle">${esc(item.dataset_kind === 'ocr_text' ? '文本识别工作区' : '状态识别工作区')}</span>
+                    </div>
+                    <span class="badge">${esc(readyRows >= target && target ? '样本量达标' : '仍需补样本')}</span>
+                  </div>
+                  <div class="selection-card-meta selection-card-meta--compact">
+                    <span>任务编码</span><strong class="mono">${esc(item.task_type || '-')}</strong>
+                    <span>起步目标</span><strong>${esc(target || 0)} 条</strong>
+                    <span>建议规模</span><strong>${esc(recommended || target || 0)} 条</strong>
+                    <span>已裁剪候选区域</span><strong>${esc(item.crop_ready_rows || 0)} 条</strong>
+                    <span>已有文字建议</span><strong>${esc(item.suggestion_rows || 0)} 条</strong>
+                    <span>已准备</span><strong>${esc(readyRows)} 条</strong>
+                    <span>人工确认</span><strong>${esc(item.manual_reviewed_rows || 0)} 条</strong>
+                    <span>待处理</span><strong>${esc(item.pending_rows || 0)} 条</strong>
+                    <span>需复核</span><strong>${esc(item.needs_check_rows || 0)} 条</strong>
+                    <span>已完成</span><strong>${esc(item.completed_rows || 0)} 条</strong>
+                    <span>代理回灌</span><strong>${esc(proxySeededRows)} 条</strong>
+                    <span>训练就绪</span><strong>${esc(inspectionTrainingReadinessText(readiness))}</strong>
+                  </div>
+                  <p class="muted">${esc(inspectionWorkspaceReadiness(item))}</p>
+                  ${item.dataset_kind === 'ocr_text' ? `<p class="hint ${readiness.status === 'ready' ? '' : readiness.status === 'cold_start_only' ? 'warning' : 'error'}">${esc(readiness.next_step || '请继续补真值后再导出训练包。')}</p>` : ''}
+                  ${proxySeededRows ? `<p class="hint warning">当前有 ${esc(proxySeededRows)} 条文本来自同图车号真值代理回灌，适合先跑训练闭环，但还需要继续补真实标记真值。</p>` : ''}
+                  ${item.notes?.length ? `<p class="hint">${esc(item.notes[0])}</p>` : ''}
+                  <div class="selection-card-meta selection-card-meta--compact">
+                    <span>建议场景</span><strong>${esc(captureProfile.scene || '-')}</strong>
+                    <span>拍摄距离</span><strong>${esc(Array.isArray(captureProfile.distance_m) ? `${captureProfile.distance_m[0]}-${captureProfile.distance_m[1]}m` : '-')}</strong>
+                    <span>拍摄角度</span><strong>${esc(captureProfile.view_angle_deg == null ? '-' : `${captureProfile.view_angle_deg}°`)}</strong>
+                    <span>图像要求</span><strong>${esc(captureProfile.image_quality || '-')}</strong>
+                  </div>
+                  <div class="selection-card-meta selection-card-meta--compact">
+                    <span>验收目标</span><strong>${esc(Object.entries(qaTargets).map(([key, value]) => `${key}:${value}`).join(' / ') || '-')}</strong>
+                    <span>结构化字段</span><strong>${esc((item.structured_fields || []).join(' / ') || '当前无需额外结构化字段')}</strong>
+                  </div>
+                  <div class="selection-card-meta selection-card-meta--compact">
+                    <span>工作区目录</span><strong class="mono">${esc(item.workspace_dir || '-')}</strong>
+                    <span>清单文件</span><strong class="mono">${esc(item.manifest_csv || '-')}</strong>
+                    <span>采集计划</span><strong class="mono">${esc(item.capture_plan_csv || '-')}</strong>
+                    <span>切分提示</span><strong>${esc(splitHints || 'unassigned:0')}</strong>
+                    <span>打包输出</span><strong class="mono">${esc(item.dataset_output_dir || '-')}</strong>
+                  </div>
+                  <div class="row-actions">
+                    ${item.dataset_kind === 'ocr_text' ? `<button class="ghost" type="button" data-open-inspection-ocr-review="${esc(item.task_type)}">打开文字复核</button>` : ''}
+                    ${item.dataset_kind === 'ocr_text' && proxySeededRows ? `<button class="ghost" type="button" data-open-inspection-ocr-proxy-review="${esc(item.task_type)}">优先替换代理真值</button>` : ''}
+                    <button class="ghost" type="button" data-copy-inspection-command="${esc(item.build_command || '')}">复制打包命令</button>
+                  </div>
+                  ${starterSamples.length ? `
+                    <div class="selection-summary">
+                      <strong>优先起步样本</strong>
+                      <span>${starterSamples.map((sample) => `${sample.sample_id}${sample.split_hint ? ` · ${sample.split_hint}` : ''}`).join(' / ')}</span>
+                    </div>
+                  ` : ''}
+                  ${proxyReplacementSamples.length ? `
+                    <div class="selection-summary">
+                      <strong>优先替换代理真值</strong>
+                      <span>${proxyReplacementSamples.map((sample) => `${sample.sample_id}${sample.split_hint ? ` · ${sample.split_hint}` : ''}`).join(' / ')}</span>
+                    </div>
+                  ` : ''}
+                  ${latestJob ? `
+                    <div class="selection-summary">
+                      <strong>最近训练作业</strong>
+                      <span>${esc(latestJob.job_code || '-')} · ${esc(enumText('training_status', latestJob.status || '') || latestJob.status || '-')}</span>
+                      <span>${esc(latestJob.assigned_worker_code ? `训练机器：${latestJob.assigned_worker_code}` : '当前未分配训练机器')}</span>
+                    </div>
+                  ` : ''}
+                  ${latestCandidate ? `
+                    <div class="selection-summary">
+                      <strong>当前待验证模型</strong>
+                      <span>${esc(`${latestCandidate.model_code || '-'}:${latestCandidate.version || '-'}`)}</span>
+                      <span>${esc(enumText('model_status', latestCandidate.status || '') || latestCandidate.status || '-')}</span>
+                    </div>
+                  ` : ''}
+                  ${latestSummary && Object.keys(latestSummary).length ? `
+                    <div class="selection-card-meta selection-card-meta--compact">
+                      <span>最近训练包</span><strong>${esc(formatDateTime(latestSummary.generated_at) || latestSummary.generated_at || '-')}</strong>
+                      <span>训练包</span><strong>${esc(latestSummary.train_rows ?? latestSummary.train_count ?? '-')}</strong>
+                      <span>验证包</span><strong>${esc(latestSummary.validation_rows ?? latestSummary.validation_count ?? '-')}</strong>
+                      <span>文本来源</span><strong>${esc(safeJson(latestSummary.text_sources || {}))}</strong>
+                    </div>
+                  ` : ''}
+                  ${(latestJob || latestCandidate) ? `
+                    <div class="row-actions">
+                      ${latestJob?.id ? `<button class="ghost" type="button" data-open-training-job="${esc(latestJob.id)}">查看训练作业</button>` : ''}
+                      ${latestCandidate?.id ? `<button class="ghost" type="button" data-open-candidate-model="${esc(latestCandidate.id)}">查看待验证模型</button>` : ''}
+                    </div>
+                  ` : ''}
+                  <details class="inline-details">
+                    <summary>查看执行命令</summary>
+                    <div class="selection-card-meta selection-card-meta--compact">
+                      <span>生成工作区</span><strong class="mono">${esc(item.bootstrap_command || '-')}</strong>
+                      ${item.prepare_proxy_command ? `<span>生成代理裁剪</span><strong class="mono">${esc(item.prepare_proxy_command)}</strong>` : ''}
+                      ${item.generate_suggestions_command ? `<span>生成文字建议</span><strong class="mono">${esc(item.generate_suggestions_command)}</strong>` : ''}
+                      <span>生成训练包</span><strong class="mono">${esc(item.build_command || '-')}</strong>
+                    </div>
+                  </details>
+                </article>
+              `;
+            }).join('')}
+          </div>
+        `;
+        inspectionWorkspaceSummaryWrap.querySelectorAll('[data-open-inspection-ocr-review]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const nextTaskType = button.getAttribute('data-open-inspection-ocr-review') || '';
+            if (!nextTaskType) return;
+            localStorage.removeItem(STORAGE_KEYS.inspectionOcrProxyOnly);
+            ctx.navigate(`training/inspection-ocr/${nextTaskType}`);
+          });
+        });
+        inspectionWorkspaceSummaryWrap.querySelectorAll('[data-open-inspection-ocr-proxy-review]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const nextTaskType = button.getAttribute('data-open-inspection-ocr-proxy-review') || '';
+            if (!nextTaskType) return;
+            localStorage.setItem(STORAGE_KEYS.inspectionOcrProxyOnly, '1');
+            ctx.navigate(`training/inspection-ocr/${nextTaskType}`);
+          });
+        });
+        inspectionWorkspaceSummaryWrap.querySelectorAll('[data-open-training-job]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const jobId = button.getAttribute('data-open-training-job') || '';
+            if (!jobId) return;
+            localStorage.setItem(STORAGE_KEYS.focusTrainingJobId, jobId);
+            ctx.navigate('training');
+          });
+        });
+        inspectionWorkspaceSummaryWrap.querySelectorAll('[data-open-candidate-model]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const modelId = button.getAttribute('data-open-candidate-model') || '';
+            if (!modelId) return;
+            localStorage.setItem(STORAGE_KEYS.focusModelId, modelId);
+            ctx.navigate('models');
+          });
+        });
+        inspectionWorkspaceSummaryWrap.querySelectorAll('[data-copy-inspection-command]').forEach((button) => {
+          button.addEventListener('click', async () => {
+            const command = button.getAttribute('data-copy-inspection-command') || '';
+            if (!command) return;
+            try {
+              await navigator.clipboard.writeText(command);
+              ctx.toast('命令已复制');
+            } catch {
+              ctx.toast('复制命令失败，请手动复制', 'error');
+            }
+          });
+        });
+      }
+
+      async function loadInspectionWorkspaces() {
+        if (!inspectionWorkspaceSummaryWrap) return;
+        inspectionWorkspaceSummaryWrap.innerHTML = renderLoading('加载巡检任务数据工作区...');
+        try {
+          const payload = await ctx.get('/training/inspection-workspaces/summary');
+          renderInspectionWorkspaceSummary(payload);
+        } catch (error) {
+          inspectionWorkspaceSummaryWrap.innerHTML = renderError(error.message || '巡检任务数据工作区加载失败');
+        }
       }
 
       function renderTrainingCreateResult(job = null) {
@@ -5019,9 +5530,16 @@ function pageTraining(route, rawCtx) {
           return;
         }
         const workerHint = job.assigned_worker_code || selectedWorker()?.worker_code || preferredActiveWorker()?.worker_code || '待调度';
-        const nextHint = job.target_model_code === 'car_number_ocr'
-          ? '建议下一步继续关注这条作业，等候候选模型回收后直接在训练摘要里发起验证。'
-          : '建议先关注训练摘要和候选模型回收，再决定是否进入审批/发布。';
+        const nextHint = (
+          {
+            car_number_ocr: '建议继续关注这条作业，待新模型回收后直接做车号或编号验证。',
+            inspection_mark_ocr: '建议等新模型回收后，优先验证定检标记、检修日期和检修记录识别效果。',
+            performance_mark_ocr: '建议等新模型回收后，优先验证性能标记和性能代码识别效果。',
+            door_lock_state_detect: '建议等新模型回收后，优先验证门锁锁闭 / 敞开状态判断。',
+            connector_defect_detect: '建议等新模型回收后，优先验证连接件松动、变形、缺失等缺陷判断。',
+          }[job.target_model_code]
+          || '建议先关注训练摘要和候选模型回收，再决定是否进入审批/发布。'
+        );
         createResultWrap.innerHTML = `
           <div class="selection-summary training-create-next">
             <strong>训练作业已创建</strong>
@@ -5069,7 +5587,15 @@ function pageTraining(route, rawCtx) {
         baseModelInput.value = model.id;
         setTrainingPrepPanel('worker');
         if (targetModelCodeInput && !String(targetModelCodeInput.value || '').trim()) {
-          targetModelCodeInput.value = model.model_code === 'car_number_ocr' ? 'car_number_ocr' : `${model.model_code}-ft`;
+          targetModelCodeInput.value = [
+            'car_number_ocr',
+            'inspection_mark_ocr',
+            'performance_mark_ocr',
+            'door_lock_state_detect',
+            'connector_defect_detect',
+          ].includes(String(model.model_code || '').trim())
+            ? String(model.model_code || '').trim()
+            : `${model.model_code}-ft`;
         }
         if (targetVersionInput && !String(targetVersionInput.value || '').trim()) {
           const stamp = new Date().toISOString().slice(0, 10).replaceAll('-', '');
@@ -5854,6 +6380,7 @@ function pageTraining(route, rawCtx) {
       });
       trainingPresetInput?.addEventListener('change', () => {
         applyTrainingPreset();
+        syncTargetModelCodeFromPreset();
         refreshSelectionSummary();
       });
       assetIdsInput?.addEventListener('change', () => {
@@ -5925,8 +6452,9 @@ function pageTraining(route, rawCtx) {
         });
       });
 
-      await Promise.all([loadJobTable(), loadWorkers(), loadFormAssistData()]);
+      await Promise.all([loadJobTable(), loadWorkers(), loadFormAssistData(), loadInspectionWorkspaces()]);
       ensureDefaultWorkerSelection();
+      if (targetModelCodeInput && !String(targetModelCodeInput.value || '').trim()) syncTargetModelCodeFromPreset({ force: true });
       applyTrainingPreset({ force: String(specInput?.value || '').trim() === '{}' });
       refreshSelectionSummary();
       setTrainingPanel(activeTrainingPanel);
@@ -6115,7 +6643,7 @@ function pageCarNumberLabeling(route, rawCtx) {
               ? `<div class="hint">最近导出：${esc(formatDateTime(latestExport.generated_at) || '-')} · ${esc(latestSourceLabel || '无来源拆分统计')} · 输出 ${esc(latestExport.output_dir || '-')}</div>`
               : ''
           }
-          ${summary?.car_number_rule?.description ? `<div class="hint">当前车号规则：${esc(summary.car_number_rule.label || '')} · ${esc(summary.car_number_rule.description || '')}</div>` : ''}
+          ${summary?.car_number_rule?.description ? `<div class="hint">当前编号规则：${esc(summary.car_number_rule.label || '')} · ${esc(summary.car_number_rule.description || '')}</div>` : ''}
         `;
       }
 
@@ -6172,7 +6700,7 @@ function pageCarNumberLabeling(route, rawCtx) {
               <div class="hint">confidence=${esc(item.ocr_suggestion_confidence || '-')} · quality=${esc(item.ocr_suggestion_quality || '-')}</div>
               <label>最终文本（人工确认）</label>
               <input id="carNumberFinalText" name="final_text" value="${esc(item.final_text || '')}" placeholder="输入最终车号文本" />
-              <div class="hint">${esc(item.car_number_rule?.description || currentCarNumberRule?.description || '当前默认要求车号符合激活规则')}</div>
+              <div class="hint">${esc(item.car_number_rule?.description || currentCarNumberRule?.description || '当前默认要求编号文本符合激活规则')}</div>
               ${item.final_text_validation ? `<div class="hint">当前最终文本校验：${esc(item.final_text_validation.valid ? '合法' : '不合法')}</div>` : ''}
               <label>复核状态</label>
               <select name="review_status">
@@ -6505,6 +7033,778 @@ function pageCarNumberLabeling(route, rawCtx) {
 
       await Promise.all([loadSummary(), loadItems({ preserveSelection: false })]);
       setLabelingPanel(activeLabelingPanel);
+      root.focus();
+    },
+  };
+}
+
+function pageInspectionOcrLabeling(route, rawCtx) {
+  const ctx = makeContext(route, rawCtx);
+  const taskType = String(route.params?.task_type || '').trim();
+  return {
+    html: `
+      <section class="card">
+        <h2 id="inspectionOcrTitle">巡检文字复核</h2>
+        <p id="inspectionOcrDesc">按任务工作区逐条确认 OCR 文字真值，保存 <code>final_text</code> 后再导出训练包。</p>
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-inspection-ocr-panel-tab="overview">复核总览</button>
+          <button class="ghost" type="button" data-inspection-ocr-panel-tab="queue">待处理样本</button>
+          <button class="ghost" type="button" data-inspection-ocr-panel-tab="review">当前样本复核</button>
+          <button class="ghost" type="button" data-inspection-ocr-panel-tab="export">导出训练包</button>
+        </div>
+        <div id="inspectionOcrPanelMeta" class="hint">默认先看复核总览；选择样本后会自动切到当前样本复核，导出时会自动切到导出训练包。</div>
+      </section>
+      <section class="card" data-inspection-ocr-panel="overview">
+        <div id="inspectionOcrSummaryWrap">${renderLoading('加载巡检文字复核摘要...')}</div>
+      </section>
+      <section class="card" data-inspection-ocr-panel="review" hidden>
+        <div id="inspectionOcrDetailWrap">${renderEmpty('先到“待处理样本”里选择一个样本开始复核')}</div>
+      </section>
+      <section class="card" data-inspection-ocr-panel="export" hidden>
+        <div class="row-actions review-toolbar">
+          <label class="checkbox-row"><input id="inspectionOcrAllowSuggestionsExport" type="checkbox" /> 导出时允许建议值补空</label>
+          <label class="checkbox-row"><input id="inspectionOcrAllowProxySeededExport" type="checkbox" /> 允许带代理真值继续训练（仅冷启动）</label>
+          <button id="exportInspectionOcrDataset" class="primary" type="button">导出文本训练包</button>
+          <button id="exportInspectionOcrAssets" class="ghost" type="button">整理好并带去训练中心</button>
+          <button id="exportInspectionOcrTrainingJob" class="ghost" type="button">直接创建训练作业</button>
+          <button id="openTrainingFromInspectionOcr" class="ghost" type="button">回训练中心</button>
+        </div>
+        <div class="hint">默认建议先替换掉“代理回灌”样本，再导出 train / validation bundle。只有做冷启动验证时，才勾“允许带代理真值继续训练”。</div>
+        <div class="row-actions review-toolbar">
+          <input id="inspectionOcrBulkImportFile" type="file" accept=".csv,text/csv" />
+          <button id="previewInspectionOcrReviews" class="ghost" type="button">预检查离线复核 CSV</button>
+          <button id="importInspectionOcrReviews" class="ghost" type="button">导入离线复核 CSV</button>
+        </div>
+        <div class="hint">先导出“代理替换队列”，在表格里填写 final_text。建议先点“预检查离线复核 CSV”确认会更新哪些样本，再正式导入。</div>
+        <div id="inspectionOcrExportMsg" class="hint"></div>
+      </section>
+      <section class="grid-two" data-inspection-ocr-panel="queue" hidden>
+        <section class="card">
+          <form id="inspectionOcrFilterForm" class="section-toolbar compact">
+            <input id="inspectionOcrSearch" name="q" placeholder="搜索 sample_id / 源文件 / 建议文本" />
+            <select id="inspectionOcrStatus" name="review_status">
+              <option value="">全部状态</option>
+              <option value="pending">待处理</option>
+              <option value="done">已完成</option>
+              <option value="needs_check">待复核</option>
+            </select>
+            <select id="inspectionOcrSplit" name="split_hint">
+              <option value="">全部切分</option>
+              <option value="train">train</option>
+              <option value="validation">validation</option>
+            </select>
+            <label class="checkbox-row"><input id="inspectionOcrOnlyMissingFinal" type="checkbox" /> 仅看未补最终文本</label>
+            <label class="checkbox-row"><input id="inspectionOcrOnlyWithSuggestion" type="checkbox" /> 仅看有建议</label>
+            <label class="checkbox-row"><input id="inspectionOcrOnlyHighQualitySuggestion" type="checkbox" /> 仅看高质量建议</label>
+            <label class="checkbox-row"><input id="inspectionOcrOnlyProxySeeded" type="checkbox" /> 仅看代理回灌</label>
+            <button class="ghost" type="submit">刷新列表</button>
+          </form>
+        <div class="row-actions review-toolbar">
+          <button id="presetInspectionOcrTodo" class="ghost" type="button">只看待处理</button>
+          <button id="presetInspectionOcrNeedsCheck" class="ghost" type="button">只看待复核</button>
+          <button id="presetInspectionOcrHighQuality" class="ghost" type="button">优先确认高质量建议</button>
+          <button id="presetInspectionOcrProxySeeded" class="ghost" type="button">优先替换代理真值</button>
+          <button id="exportInspectionOcrProxyQueue" class="ghost" type="button">导出代理替换队列</button>
+          <button id="exportInspectionOcrHighQualityQueue" class="ghost" type="button">导出高质量建议队列</button>
+          <button id="exportInspectionOcrReviewPack" class="ghost" type="button">导出人工替换包</button>
+          <button id="exportInspectionOcrHighQualityPack" class="ghost" type="button">导出高质量建议包</button>
+          <button id="presetInspectionOcrReset" class="ghost" type="button">重置筛选</button>
+        </div>
+          <div id="inspectionOcrListMeta" class="hint"></div>
+          <div id="inspectionOcrListWrap">${renderLoading('加载待复核样本...')}</div>
+        </section>
+        <section class="card">
+          <h3>复核提醒</h3>
+          <div class="hint">先处理左侧 <code>needs_check</code>、缺少最终文本的样本，以及“代理回灌”样本；当 train 和 validation 都有真值后，再导出训练包。</div>
+          <div class="selection-summary">
+            <strong>建议顺序</strong>
+            <span>优先替换代理回灌样本，再补清晰样本，最后处理污渍、轻畸变和难读样本。</span>
+          </div>
+        </section>
+      </section>
+    `,
+    async mount(root) {
+      const titleEl = root.querySelector('#inspectionOcrTitle');
+      const descEl = root.querySelector('#inspectionOcrDesc');
+      const summaryWrap = root.querySelector('#inspectionOcrSummaryWrap');
+      const detailWrap = root.querySelector('#inspectionOcrDetailWrap');
+      const listMeta = root.querySelector('#inspectionOcrListMeta');
+      const listWrap = root.querySelector('#inspectionOcrListWrap');
+      const filterForm = root.querySelector('#inspectionOcrFilterForm');
+      const searchInput = root.querySelector('#inspectionOcrSearch');
+      const statusInput = root.querySelector('#inspectionOcrStatus');
+      const splitInput = root.querySelector('#inspectionOcrSplit');
+      const onlyMissingFinalInput = root.querySelector('#inspectionOcrOnlyMissingFinal');
+      const onlyWithSuggestionInput = root.querySelector('#inspectionOcrOnlyWithSuggestion');
+      const onlyHighQualitySuggestionInput = root.querySelector('#inspectionOcrOnlyHighQualitySuggestion');
+      const onlyProxySeededInput = root.querySelector('#inspectionOcrOnlyProxySeeded');
+      const presetTodoBtn = root.querySelector('#presetInspectionOcrTodo');
+      const presetNeedsCheckBtn = root.querySelector('#presetInspectionOcrNeedsCheck');
+      const presetHighQualityBtn = root.querySelector('#presetInspectionOcrHighQuality');
+      const presetProxySeededBtn = root.querySelector('#presetInspectionOcrProxySeeded');
+      const exportProxyQueueBtn = root.querySelector('#exportInspectionOcrProxyQueue');
+      const exportHighQualityQueueBtn = root.querySelector('#exportInspectionOcrHighQualityQueue');
+      const exportReviewPackBtn = root.querySelector('#exportInspectionOcrReviewPack');
+      const exportHighQualityPackBtn = root.querySelector('#exportInspectionOcrHighQualityPack');
+      const presetResetBtn = root.querySelector('#presetInspectionOcrReset');
+      const exportAllowSuggestionsInput = root.querySelector('#inspectionOcrAllowSuggestionsExport');
+      const exportAllowProxySeededInput = root.querySelector('#inspectionOcrAllowProxySeededExport');
+      const bulkImportFileInput = root.querySelector('#inspectionOcrBulkImportFile');
+      const previewReviewsBtn = root.querySelector('#previewInspectionOcrReviews');
+      const exportBtn = root.querySelector('#exportInspectionOcrDataset');
+      const exportAssetsBtn = root.querySelector('#exportInspectionOcrAssets');
+      const exportTrainingJobBtn = root.querySelector('#exportInspectionOcrTrainingJob');
+      const importReviewsBtn = root.querySelector('#importInspectionOcrReviews');
+      const openTrainingBtn = root.querySelector('#openTrainingFromInspectionOcr');
+      const exportMsg = root.querySelector('#inspectionOcrExportMsg');
+      const panelMeta = root.querySelector('#inspectionOcrPanelMeta');
+      const panelTabs = Array.from(root.querySelectorAll('[data-inspection-ocr-panel-tab]'));
+      const panels = Array.from(root.querySelectorAll('[data-inspection-ocr-panel]'));
+      let activePanel = 'overview';
+      let selectedSampleId = '';
+      let currentItems = [];
+      let currentSummary = null;
+      let currentPreviewUrl = '';
+      let currentSourcePreviewUrl = '';
+
+      function revokePreviewUrl() {
+        if (currentPreviewUrl) URL.revokeObjectURL(currentPreviewUrl);
+        currentPreviewUrl = '';
+        if (currentSourcePreviewUrl) URL.revokeObjectURL(currentSourcePreviewUrl);
+        currentSourcePreviewUrl = '';
+      }
+
+      function currentFilters() {
+        return {
+          q: String(searchInput?.value || '').trim(),
+          review_status: String(statusInput?.value || '').trim(),
+          split_hint: String(splitInput?.value || '').trim(),
+          has_final_text: onlyMissingFinalInput?.checked ? 'false' : '',
+          has_suggestion: onlyWithSuggestionInput?.checked ? 'true' : '',
+          high_quality_suggestion: onlyHighQualitySuggestionInput?.checked ? 'true' : '',
+          proxy_seeded: onlyProxySeededInput?.checked ? 'true' : '',
+          limit: 120,
+        };
+      }
+
+      function setPanel(panel) {
+        activePanel = panel;
+        panelTabs.forEach((btn) => {
+          const active = btn.getAttribute('data-inspection-ocr-panel-tab') === panel;
+          btn.classList.toggle('primary', active);
+          btn.classList.toggle('ghost', !active);
+        });
+        panels.forEach((section) => {
+          section.hidden = section.getAttribute('data-inspection-ocr-panel') !== panel;
+        });
+        if (panelMeta) {
+          panelMeta.textContent = ({
+            overview: '先看当前任务的准备度、建议覆盖率和最近训练包。',
+            queue: '在这里筛选待处理样本；可优先切到“高质量建议”或“代理回灌”队列，选择样本后会自动切到当前样本复核。',
+            review: '聚焦当前 crop，接受建议或手动修正最终文本。',
+            export: '当 train 和 validation 都有足够真值后，在这里导出文本训练包。',
+          })[panel] || '按当前工作区继续操作。';
+        }
+      }
+
+      function renderSummary(summary) {
+        const reviewCounts = summary?.review_status_counts || {};
+        const latestExport = summary?.latest_export || null;
+        const readiness = summary?.training_readiness || {};
+        const latestTrainCount = latestExport?.bundles?.train?.sample_count ?? 0;
+        const latestValidationCount = latestExport?.bundles?.validation?.sample_count ?? 0;
+        const latestSourceLabel = Object.entries(latestExport?.label_sources || {})
+          .map(([key, value]) => `${key} ${value}`)
+          .join(' / ');
+        const starterSamples = summary?.starter_samples || [];
+        const proxyReplacementSamples = summary?.proxy_replacement_samples || [];
+        const highQualitySuggestionSamples = summary?.high_quality_suggestion_samples || [];
+        const proxySeededRows = Number(summary?.proxy_seeded_rows || 0);
+        const manualReviewedRows = Number(summary?.manual_reviewed_rows || 0);
+        const highQualitySuggestionRows = Number(summary?.high_quality_suggestion_rows || 0);
+        const highQualityReviewCandidateRows = Number(summary?.high_quality_review_candidate_rows || 0);
+        return `
+          <div class="result-overview-grid">
+            <article class="metric-card">
+              <h4>总样本</h4>
+              <p class="metric">${esc(summary?.annotated_rows ?? '-')}</p>
+              <span>当前工作区中的候选 crop 数量</span>
+            </article>
+            <article class="metric-card">
+              <h4>已裁剪候选区域</h4>
+              <p class="metric">${esc(summary?.crop_ready_rows ?? '-')}</p>
+              <span>可直接打开 crop 进行文本复核</span>
+            </article>
+            <article class="metric-card">
+              <h4>已有建议</h4>
+              <p class="metric">${esc(summary?.suggestion_rows ?? '-')}</p>
+              <span>${esc(summary?.suggestion_ratio != null ? `${Math.round(Number(summary.suggestion_ratio) * 100)}%` : '-')}</span>
+            </article>
+            <article class="metric-card">
+              <h4>高质量待确认</h4>
+              <p class="metric">${esc(highQualityReviewCandidateRows)}</p>
+              <span>${esc(`累计高质量建议 ${highQualitySuggestionRows}`)}</span>
+            </article>
+            <article class="metric-card">
+              <h4>已补真值</h4>
+              <p class="metric">${esc(summary?.final_text_rows ?? '-')}</p>
+              <span>${esc(summary?.final_text_ratio != null ? `${Math.round(Number(summary.final_text_ratio) * 100)}%` : '-')}</span>
+            </article>
+            <article class="metric-card">
+              <h4>待替换代理真值</h4>
+              <p class="metric">${esc(proxySeededRows)}</p>
+              <span>先把代理回灌的文本替换成真实标记真值</span>
+            </article>
+            <article class="metric-card">
+              <h4>人工确认真值</h4>
+              <p class="metric">${esc(manualReviewedRows)}</p>
+              <span>由人工直接确认的真实文本</span>
+            </article>
+            <article class="metric-card">
+              <h4>复核状态</h4>
+              <p class="metric">${esc(reviewCounts.done ?? 0)}</p>
+              <span>${esc(`待处理 ${reviewCounts.pending ?? 0} / 待复核 ${reviewCounts.needs_check ?? 0}`)}</span>
+            </article>
+            <article class="metric-card">
+              <h4>最近训练包</h4>
+              <p class="metric">${esc(latestExport?.accepted_rows ?? 0)}</p>
+              <span>${esc(latestExport ? `train ${latestTrainCount} / validation ${latestValidationCount}` : '还没有导出记录')}</span>
+            </article>
+            <article class="metric-card">
+              <h4>训练就绪</h4>
+              <p class="metric">${esc(inspectionTrainingReadinessText(readiness))}</p>
+              <span>${esc(readiness?.normal_export_ready ? '可直接进入正式训练' : readiness?.cold_start_export_ready ? '仅建议冷启动验证' : '仍需继续补真值')}</span>
+            </article>
+          </div>
+          <div class="selection-summary">
+            <strong>${esc(summary?.task_label || taskType)}</strong>
+            <span>${esc(summary?.notes?.[0] || '先补 final_text，再导出训练包。')}</span>
+            <span>${esc(`结构化字段：${(summary?.structured_fields || []).join(' / ') || '当前无需额外字段'}`)}</span>
+            <span>${esc(`验收目标：${Object.entries(summary?.qa_targets || {}).map(([key, value]) => `${key}:${value}`).join(' / ') || '-'}`)}</span>
+          </div>
+          ${starterSamples.length ? `
+            <div class="selection-summary">
+              <strong>优先起步样本</strong>
+              <span>${starterSamples.map((sample) => `${sample.sample_id}${sample.split_hint ? ` · ${sample.split_hint}` : ''} · 质量分 ${sample.quality_score}`).join(' / ')}</span>
+            </div>
+          ` : ''}
+          ${highQualitySuggestionSamples.length ? `
+            <div class="selection-summary">
+              <strong>优先确认高质量建议</strong>
+              <span>${highQualitySuggestionSamples.map((sample) => `${sample.sample_id}${sample.split_hint ? ` · ${sample.split_hint}` : ''} · ${sample.ocr_suggestion || '-'} · 质量 ${sample.ocr_suggestion_quality ?? '-'}`).join(' / ')}</span>
+            </div>
+          ` : ''}
+          ${highQualityReviewCandidateRows ? `<div class="hint">当前还有 ${esc(highQualityReviewCandidateRows)} 条高质量建议待人工确认，可优先从“待处理样本”里处理。</div>` : highQualitySuggestionRows ? `<div class="hint">当前累计已有 ${esc(highQualitySuggestionRows)} 条高质量建议，但待确认样本已处理完，可继续优先替换代理真值。</div>` : ''}
+          ${proxyReplacementSamples.length ? `
+            <div class="selection-summary">
+              <strong>优先替换代理真值</strong>
+              <span>${proxyReplacementSamples.map((sample) => `${sample.sample_id}${sample.split_hint ? ` · ${sample.split_hint}` : ''} · 质量分 ${sample.quality_score}`).join(' / ')}</span>
+            </div>
+          ` : ''}
+          ${proxySeededRows ? `<div class="hint warning">当前仍有 ${esc(proxySeededRows)} 条文本来自同图车号真值代理回灌。建议先点“优先替换代理真值”，逐条改成真实标记文本后再导出训练包。</div>` : ''}
+          ${readiness?.next_step ? `<div class="hint ${readiness?.status === 'ready' ? '' : readiness?.status === 'cold_start_only' ? 'warning' : 'error'}">${esc(`训练建议：${readiness.next_step}`)}</div>` : ''}
+          ${
+            latestExport
+              ? `<div class="hint">最近导出：${esc(formatDateTime(latestExport.generated_at) || '-')} · ${esc(latestSourceLabel || '无来源拆分统计')} · 输出 ${esc(latestExport.output_dir || '-')}</div>`
+              : ''
+          }
+        `;
+      }
+
+      function renderList(payload) {
+        const items = payload?.items || [];
+        if (!items.length) return renderEmpty('当前筛选条件下没有样本');
+        return `
+          <div class="text-review-list">
+            ${items.map((item) => `
+              <button class="text-review-item ${selectedSampleId === item.sample_id ? 'active' : ''}" type="button" data-inspection-ocr-sample="${esc(item.sample_id)}">
+                <div class="text-review-item-head">
+                  <strong>${esc(item.sample_id)}</strong>
+                  <span class="badge">${esc(item.review_status)}</span>
+                </div>
+                <div class="text-review-item-meta">${esc(item.source_file || '-')}</div>
+                <div class="text-review-item-badges">
+                  ${item.proxy_seeded ? '<span class="badge warning">代理回灌</span>' : ''}
+                  ${item.ocr_suggestion_quality != null ? `<span class="badge ${Number(item.ocr_suggestion_quality) >= 1 ? 'success' : Number(item.ocr_suggestion_quality) >= 0.8 ? '' : 'warning'}">${esc(Number(item.ocr_suggestion_quality) >= 1 ? '高质量建议' : Number(item.ocr_suggestion_quality) >= 0.8 ? '中质量建议' : '低质量建议')}</span>` : ''}
+                  ${item.ocr_suggestion ? `<span class="badge">${esc(`建议 ${item.ocr_suggestion}`)}</span>` : '<span class="badge">无建议</span>'}
+                  ${item.final_text ? `<span class="badge">${esc(`真值 ${item.final_text}`)}</span>` : ''}
+                  ${item.split_hint ? `<span class="badge">${esc(item.split_hint)}</span>` : ''}
+                </div>
+              </button>
+            `).join('')}
+          </div>
+        `;
+      }
+
+      function renderDetail(item) {
+        if (!item) {
+          detailWrap.innerHTML = renderEmpty('从左侧选择一个样本开始复核');
+          return;
+        }
+        detailWrap.innerHTML = `
+          <div class="text-review-detail">
+            <div class="grid-two">
+              <div class="text-review-preview">
+                ${
+                  currentPreviewUrl
+                    ? `<img src="${esc(currentPreviewUrl)}" alt="巡检文字 crop 预览" />`
+                    : `<div class="text-review-preview-empty">${renderLoading('加载 crop 预览...')}</div>`
+                }
+              </div>
+              <div class="text-review-preview">
+                ${
+                  currentSourcePreviewUrl
+                    ? `<img src="${esc(currentSourcePreviewUrl)}" alt="巡检文字原图预览" />`
+                    : `<div class="text-review-preview-empty">${renderLoading('加载原图预览...')}</div>`
+                }
+              </div>
+            </div>
+            <form id="inspectionOcrReviewForm" class="form-grid">
+              <div class="selection-summary">
+                <strong>${esc(item.sample_id)}</strong>
+                <span>${esc(item.task_label || taskType)}</span>
+                <span>${esc(item.source_file || '-')}</span>
+              </div>
+              ${item.proxy_seeded ? `<div class="hint warning">这条样本当前的最终文本来自代理回灌，建议优先替换成真实标记文本。</div>` : ''}
+              <label>OCR 建议</label>
+              <input name="ocr_suggestion" value="${esc(item.ocr_suggestion || '')}" disabled />
+              <div class="hint">建议质量：${esc(item.ocr_suggestion_quality != null ? (Number(item.ocr_suggestion_quality) >= 1 ? '高' : Number(item.ocr_suggestion_quality) >= 0.8 ? '中' : '低') : '-')} · 置信度=${esc(item.ocr_suggestion_confidence ?? '-')} · 引擎=${esc(item.ocr_suggestion_engine || '-')}</div>
+              <label>最终文本</label>
+              <input name="final_text" value="${esc(item.final_text || item.ocr_suggestion || '')}" placeholder="请输入人工确认后的最终文本" />
+              <label>复核状态</label>
+              <select name="review_status">
+                <option value="pending" ${item.review_status === 'pending' ? 'selected' : ''}>待处理</option>
+                <option value="needs_check" ${item.review_status === 'needs_check' ? 'selected' : ''}>待复核</option>
+                <option value="done" ${item.review_status === 'done' ? 'selected' : ''}>已完成</option>
+              </select>
+              <label>复核人</label>
+              <input name="reviewer" value="${esc(item.reviewer || ctx.state.user?.username || '')}" placeholder="复核人" />
+              <label>备注</label>
+              <textarea name="notes" rows="3" placeholder="记录难点、字段拆分或后续结构化建议">${esc(item.notes || '')}</textarea>
+              <div class="selection-card-meta selection-card-meta--compact">
+                <span>定位框</span><strong class="mono">${esc((item.bbox || []).join(', ') || '-')}</strong>
+                <span>切分</span><strong>${esc(item.split_hint || '-')}</strong>
+                <span>标签</span><strong>${esc(item.label_class || '-')}</strong>
+                <span>文本来源</span><strong>${esc(item.review_origin_label || '-')}</strong>
+              </div>
+              <div class="row-actions review-toolbar">
+                <button type="button" class="ghost" data-open-inspection-source>打开原图</button>
+                <button type="button" class="ghost" data-use-inspection-suggestion>采用建议</button>
+                <button type="submit" class="primary">保存复核</button>
+                <button type="button" class="ghost" data-save-next>保存并下一条</button>
+              </div>
+              <div id="inspectionOcrReviewMsg" class="hint"></div>
+            </form>
+          </div>
+        `;
+        detailWrap.querySelector('[data-use-inspection-suggestion]')?.addEventListener('click', () => {
+          const input = detailWrap.querySelector('input[name="final_text"]');
+          if (input) input.value = item.ocr_suggestion || '';
+        });
+        detailWrap.querySelector('[data-open-inspection-source]')?.addEventListener('click', async () => {
+          try {
+            const sourceUrl = await fetchAuthorizedBlobUrl(`/training/inspection-ocr/${encodeURIComponent(taskType)}/items/${encodeURIComponent(item.sample_id)}/source`, ctx.token);
+            window.open(sourceUrl, '_blank', 'noopener,noreferrer');
+          } catch (error) {
+            ctx.toast(error.message || '打开原图失败', 'error');
+          }
+        });
+        detailWrap.querySelector('#inspectionOcrReviewForm')?.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          await submitReview(event.currentTarget, { moveNext: false });
+        });
+        detailWrap.querySelector('[data-save-next]')?.addEventListener('click', async () => {
+          const form = detailWrap.querySelector('#inspectionOcrReviewForm');
+          if (form) await submitReview(form, { moveNext: true });
+        });
+      }
+
+      async function loadPreview(sampleId) {
+        revokePreviewUrl();
+        currentPreviewUrl = await fetchAuthorizedBlobUrl(`/training/inspection-ocr/${encodeURIComponent(taskType)}/items/${encodeURIComponent(sampleId)}/crop`, ctx.token);
+        try {
+          currentSourcePreviewUrl = await fetchAuthorizedBlobUrl(`/training/inspection-ocr/${encodeURIComponent(taskType)}/items/${encodeURIComponent(sampleId)}/source`, ctx.token);
+        } catch {
+          currentSourcePreviewUrl = '';
+        }
+      }
+
+      async function selectItem(sampleId) {
+        selectedSampleId = sampleId;
+        const item = currentItems.find((row) => row.sample_id === sampleId);
+        if (!item) {
+          renderDetail(null);
+          return;
+        }
+        setPanel('review');
+        renderDetail(item);
+        try {
+          await loadPreview(sampleId);
+        } catch (error) {
+          ctx.toast(error.message || '加载 crop 预览失败', 'error');
+        }
+        renderDetail(item);
+        listWrap.innerHTML = renderList({ items: currentItems });
+        bindListButtons();
+      }
+
+      function bindListButtons() {
+        listWrap.querySelectorAll('[data-inspection-ocr-sample]').forEach((button) => {
+          button.addEventListener('click', async () => {
+            await selectItem(button.getAttribute('data-inspection-ocr-sample') || '');
+          });
+        });
+      }
+
+      async function loadSummary() {
+        summaryWrap.innerHTML = renderLoading('加载巡检文字复核摘要...');
+        try {
+          const summary = await ctx.get(`/training/inspection-ocr/${encodeURIComponent(taskType)}/summary`);
+          currentSummary = summary;
+          if (titleEl) titleEl.textContent = `${summary?.task_label || taskType} · 巡检文字复核`;
+          if (descEl) descEl.innerHTML = `浏览 <code>${esc(summary?.task_type || taskType)}</code> 工作区里的文字 crop，补齐 <code>final_text</code> 后导出训练包。`;
+          summaryWrap.innerHTML = renderSummary(summary);
+        } catch (error) {
+          summaryWrap.innerHTML = renderError(error.message || '巡检文字复核摘要加载失败');
+        }
+      }
+
+      async function loadItems({ preserveSelection = true } = {}) {
+        listWrap.innerHTML = renderLoading('加载待复核样本...');
+        try {
+          const payload = await ctx.get(`/training/inspection-ocr/${encodeURIComponent(taskType)}/items${toQuery(currentFilters())}`);
+          currentItems = payload?.items || [];
+          listMeta.textContent = `当前列表 ${currentItems.length} / ${payload?.total ?? currentItems.length}`;
+          listWrap.innerHTML = renderList(payload);
+          bindListButtons();
+          if (!preserveSelection || !currentItems.some((item) => item.sample_id === selectedSampleId)) {
+            const nextItem = currentItems.find((item) => item.review_status !== 'done') || currentItems[0];
+            selectedSampleId = nextItem?.sample_id || '';
+          }
+          if (selectedSampleId) {
+            const item = currentItems.find((row) => row.sample_id === selectedSampleId);
+            if (item && activePanel === 'review') {
+              try {
+                await loadPreview(selectedSampleId);
+              } catch {
+                revokePreviewUrl();
+              }
+              renderDetail(item);
+            }
+          } else {
+            revokePreviewUrl();
+            renderDetail(null);
+          }
+        } catch (error) {
+          listWrap.innerHTML = renderError(error.message || '样本列表加载失败');
+        }
+      }
+
+      async function selectRelativeItem(step) {
+        if (!currentItems.length) return;
+        const currentIndex = Math.max(0, currentItems.findIndex((row) => row.sample_id === selectedSampleId));
+        const nextIndex = Math.min(currentItems.length - 1, Math.max(0, currentIndex + step));
+        const nextItem = currentItems[nextIndex];
+        if (!nextItem) return;
+        await selectItem(nextItem.sample_id);
+      }
+
+      async function submitReview(form, { moveNext = false } = {}) {
+        const msg = detailWrap.querySelector('#inspectionOcrReviewMsg');
+        const formData = new FormData(form);
+        const payload = {
+          final_text: String(formData.get('final_text') || '').trim(),
+          review_status: String(formData.get('review_status') || 'pending').trim(),
+          reviewer: String(formData.get('reviewer') || '').trim(),
+          notes: String(formData.get('notes') || '').trim(),
+        };
+        try {
+          const result = await ctx.post(`/training/inspection-ocr/${encodeURIComponent(taskType)}/items/${encodeURIComponent(selectedSampleId)}/review`, payload);
+          if (msg) msg.textContent = `已保存 ${result?.item?.sample_id || selectedSampleId}`;
+          ctx.toast('巡检文字复核已保存');
+          await Promise.all([loadSummary(), loadItems()]);
+          if (moveNext) await selectRelativeItem(1);
+        } catch (error) {
+          if (msg) msg.textContent = error.message || '保存复核失败';
+          ctx.toast(error.message || '保存复核失败', 'error');
+        }
+      }
+
+      async function exportDataset() {
+        if (!exportBtn || !exportMsg) return;
+        setPanel('export');
+        exportBtn.disabled = true;
+        if (exportAssetsBtn) exportAssetsBtn.disabled = true;
+        if (exportTrainingJobBtn) exportTrainingJobBtn.disabled = true;
+        exportMsg.textContent = '正在导出文本训练包...';
+        try {
+          const payload = await ctx.post(`/training/inspection-ocr/${encodeURIComponent(taskType)}/export-dataset`, {
+            allow_suggestions: !!exportAllowSuggestionsInput?.checked,
+            allow_proxy_seeded: !!exportAllowProxySeededInput?.checked,
+          });
+          const trainBundle = payload?.bundles?.train?.zip_path || '-';
+          const validationBundle = payload?.bundles?.validation?.zip_path || '-';
+          exportMsg.textContent = `已导出训练包。train：${trainBundle} · validation：${validationBundle}`;
+          ctx.toast('巡检文字训练包已导出');
+          await loadSummary();
+        } catch (error) {
+          exportMsg.textContent = error.message || '导出训练包失败';
+          ctx.toast(error.message || '导出训练包失败', 'error');
+        } finally {
+          exportBtn.disabled = false;
+          if (exportAssetsBtn) exportAssetsBtn.disabled = false;
+          if (exportTrainingJobBtn) exportTrainingJobBtn.disabled = false;
+        }
+      }
+
+      async function exportAssetsToTraining() {
+        if (!exportAssetsBtn || !exportMsg) return;
+        setPanel('export');
+        exportBtn.disabled = true;
+        exportAssetsBtn.disabled = true;
+        if (exportTrainingJobBtn) exportTrainingJobBtn.disabled = true;
+        exportMsg.textContent = '正在导出并注册训练/验证资产，随后打开训练页...';
+        try {
+          const payload = await ctx.post(`/training/inspection-ocr/${encodeURIComponent(taskType)}/export-assets`, {
+            allow_suggestions: !!exportAllowSuggestionsInput?.checked,
+            allow_proxy_seeded: !!exportAllowProxySeededInput?.checked,
+          });
+          const prefill = payload?.prefill || {};
+          localStorage.setItem(STORAGE_KEYS.prefillTrainingAssetIds, (prefill.train_asset_ids || []).join(', '));
+          localStorage.setItem(STORAGE_KEYS.prefillTrainingValidationAssetIds, (prefill.validation_asset_ids || []).join(', '));
+          if (prefill.dataset_label) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetLabel, prefill.dataset_label);
+          if (prefill.training_dataset_version_id) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetVersionId, prefill.training_dataset_version_id);
+          if (prefill.intended_model_code) localStorage.setItem(STORAGE_KEYS.prefillTrainingTargetModelCode, prefill.intended_model_code);
+          exportMsg.textContent = `已注册训练资产 ${payload?.training_asset?.asset_id || '-'} / 验证资产 ${payload?.validation_asset?.asset_id || '-'}。训练页已预填这些资产编号，但还需要你手动点“创建训练作业”。`;
+          ctx.toast('训练资产已导出，训练页已预填');
+          ctx.navigate('training');
+        } catch (error) {
+          exportMsg.textContent = error.message || '注册训练资产失败';
+          ctx.toast(error.message || '注册训练资产失败', 'error');
+        } finally {
+          exportBtn.disabled = false;
+          exportAssetsBtn.disabled = false;
+          if (exportTrainingJobBtn) exportTrainingJobBtn.disabled = false;
+        }
+      }
+
+      async function exportTrainingJob() {
+        if (!exportTrainingJobBtn || !exportMsg) return;
+        setPanel('export');
+        exportBtn.disabled = true;
+        if (exportAssetsBtn) exportAssetsBtn.disabled = true;
+        exportTrainingJobBtn.disabled = true;
+        exportMsg.textContent = `正在导出资产并直接创建 ${taskType} 训练作业...`;
+        try {
+          const payload = await ctx.post(`/training/inspection-ocr/${encodeURIComponent(taskType)}/export-training-job`, {
+            allow_suggestions: !!exportAllowSuggestionsInput?.checked,
+            allow_proxy_seeded: !!exportAllowProxySeededInput?.checked,
+          });
+          const job = payload?.job || {};
+          if (job.id) localStorage.setItem(STORAGE_KEYS.focusTrainingJobId, job.id);
+          exportMsg.textContent = `已创建训练作业 ${job.job_code || '-'} · ${job.target_model_code || taskType}:${job.target_version || '-'}，即将跳转训练中心。`;
+          ctx.toast('巡检文字训练作业已创建');
+          ctx.navigate('training');
+        } catch (error) {
+          exportMsg.textContent = error.message || '创建训练作业失败';
+          ctx.toast(error.message || '创建训练作业失败', 'error');
+        } finally {
+          exportBtn.disabled = false;
+          if (exportAssetsBtn) exportAssetsBtn.disabled = false;
+          exportTrainingJobBtn.disabled = false;
+        }
+      }
+
+      async function importOfflineReviews() {
+        if (!bulkImportFileInput?.files?.length) {
+          ctx.toast('请先选择一个 CSV 文件', 'error');
+          return;
+        }
+        const formData = new FormData();
+        formData.set('file', bulkImportFileInput.files[0]);
+        setPanel('export');
+        if (exportMsg) exportMsg.textContent = '正在导入离线复核 CSV...';
+        if (importReviewsBtn) importReviewsBtn.disabled = true;
+        try {
+          const payload = await ctx.postForm(`/training/inspection-ocr/${encodeURIComponent(taskType)}/import-reviews`, formData);
+          if (exportMsg) {
+            exportMsg.textContent = `已导入 CSV：更新 ${payload?.updated_rows ?? 0} 条，跳过 ${payload?.skipped_rows ?? 0} 条${(payload?.missing_sample_ids || []).length ? `，未命中 ${payload.missing_sample_ids.join(', ')}` : ''}`;
+          }
+          ctx.toast('离线复核结果已导入');
+          if (bulkImportFileInput) bulkImportFileInput.value = '';
+          await Promise.all([loadSummary(), loadItems({ preserveSelection: false })]);
+          setPanel('queue');
+        } catch (error) {
+          if (exportMsg) exportMsg.textContent = error.message || '导入离线复核 CSV 失败';
+          ctx.toast(error.message || '导入离线复核 CSV 失败', 'error');
+        } finally {
+          if (importReviewsBtn) importReviewsBtn.disabled = false;
+        }
+      }
+
+      async function previewOfflineReviews() {
+        if (!bulkImportFileInput?.files?.length) {
+          ctx.toast('请先选择一个 CSV 文件', 'error');
+          return;
+        }
+        const formData = new FormData();
+        formData.set('file', bulkImportFileInput.files[0]);
+        setPanel('export');
+        if (exportMsg) exportMsg.textContent = '正在预检查离线复核 CSV...';
+        if (previewReviewsBtn) previewReviewsBtn.disabled = true;
+        try {
+          const payload = await ctx.postForm(`/training/inspection-ocr/${encodeURIComponent(taskType)}/preview-import-reviews`, formData);
+          const missing = (payload?.missing_sample_ids || []).length ? `；未命中 ${payload.missing_sample_ids.join(', ')}` : '';
+          const unchanged = (payload?.unchanged_sample_ids || []).length ? `；未变化 ${payload.unchanged_sample_ids.join(', ')}` : '';
+          if (exportMsg) {
+            exportMsg.textContent = `预检查完成：CSV ${payload?.total_rows ?? 0} 行，命中 ${payload?.matched_rows ?? 0} 条，将更新 ${payload?.would_update_rows ?? 0} 条，跳过 ${payload?.skipped_rows ?? 0} 条${missing}${unchanged}`;
+          }
+          ctx.toast('离线复核 CSV 预检查完成');
+        } catch (error) {
+          if (exportMsg) exportMsg.textContent = error.message || '预检查离线复核 CSV 失败';
+          ctx.toast(error.message || '预检查离线复核 CSV 失败', 'error');
+        } finally {
+          if (previewReviewsBtn) previewReviewsBtn.disabled = false;
+        }
+      }
+
+      filterForm?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        await loadItems({ preserveSelection: false });
+      });
+      presetTodoBtn?.addEventListener('click', async () => {
+        statusInput.value = '';
+        onlyMissingFinalInput.checked = true;
+        onlyWithSuggestionInput.checked = false;
+        searchInput.value = '';
+        await loadItems({ preserveSelection: false });
+      });
+      presetNeedsCheckBtn?.addEventListener('click', async () => {
+        statusInput.value = 'needs_check';
+        onlyMissingFinalInput.checked = false;
+        onlyWithSuggestionInput.checked = false;
+        onlyHighQualitySuggestionInput.checked = false;
+        onlyProxySeededInput.checked = false;
+        searchInput.value = '';
+        await loadItems({ preserveSelection: false });
+      });
+      presetHighQualityBtn?.addEventListener('click', async () => {
+        statusInput.value = '';
+        onlyMissingFinalInput.checked = false;
+        onlyWithSuggestionInput.checked = false;
+        onlyHighQualitySuggestionInput.checked = true;
+        onlyProxySeededInput.checked = false;
+        searchInput.value = '';
+        setPanel('queue');
+        await loadItems({ preserveSelection: false });
+      });
+      presetProxySeededBtn?.addEventListener('click', async () => {
+        statusInput.value = '';
+        onlyMissingFinalInput.checked = false;
+        onlyWithSuggestionInput.checked = false;
+        onlyHighQualitySuggestionInput.checked = false;
+        onlyProxySeededInput.checked = true;
+        searchInput.value = '';
+        setPanel('queue');
+        await loadItems({ preserveSelection: false });
+      });
+      exportProxyQueueBtn?.addEventListener('click', async () => {
+        try {
+          const url = await fetchAuthorizedBlobUrl(`/training/inspection-ocr/${encodeURIComponent(taskType)}/export-proxy-queue`, ctx.token);
+          const anchor = document.createElement('a');
+          anchor.href = url;
+          anchor.download = `${taskType}_proxy_replacement_queue.csv`;
+          anchor.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          ctx.toast('代理替换队列已导出');
+        } catch (error) {
+          ctx.toast(error.message || '导出代理替换队列失败', 'error');
+        }
+      });
+      exportReviewPackBtn?.addEventListener('click', async () => {
+        try {
+          const url = await fetchAuthorizedBlobUrl(`/training/inspection-ocr/${encodeURIComponent(taskType)}/export-review-pack`, ctx.token);
+          const anchor = document.createElement('a');
+          anchor.href = url;
+          anchor.download = `${taskType}_proxy_review_pack.zip`;
+          anchor.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          ctx.toast('人工替换包已导出');
+        } catch (error) {
+          ctx.toast(error.message || '导出人工替换包失败', 'error');
+        }
+      });
+      exportHighQualityQueueBtn?.addEventListener('click', async () => {
+        try {
+          const url = await fetchAuthorizedBlobUrl(`/training/inspection-ocr/${encodeURIComponent(taskType)}/export-high-quality-queue`, ctx.token);
+          const anchor = document.createElement('a');
+          anchor.href = url;
+          anchor.download = `${taskType}_high_quality_suggestion_queue.csv`;
+          anchor.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          ctx.toast('高质量建议队列已导出');
+        } catch (error) {
+          ctx.toast(error.message || '导出高质量建议队列失败', 'error');
+        }
+      });
+      exportHighQualityPackBtn?.addEventListener('click', async () => {
+        try {
+          const url = await fetchAuthorizedBlobUrl(`/training/inspection-ocr/${encodeURIComponent(taskType)}/export-high-quality-pack`, ctx.token);
+          const anchor = document.createElement('a');
+          anchor.href = url;
+          anchor.download = `${taskType}_high_quality_suggestion_pack.zip`;
+          anchor.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          ctx.toast('高质量建议包已导出');
+        } catch (error) {
+          ctx.toast(error.message || '导出高质量建议包失败', 'error');
+        }
+      });
+      presetResetBtn?.addEventListener('click', async () => {
+        statusInput.value = '';
+        splitInput.value = '';
+        onlyMissingFinalInput.checked = false;
+        onlyWithSuggestionInput.checked = false;
+        onlyHighQualitySuggestionInput.checked = false;
+        onlyProxySeededInput.checked = false;
+        searchInput.value = '';
+        await loadItems({ preserveSelection: false });
+      });
+      exportBtn?.addEventListener('click', exportDataset);
+      exportAssetsBtn?.addEventListener('click', exportAssetsToTraining);
+      exportTrainingJobBtn?.addEventListener('click', exportTrainingJob);
+      previewReviewsBtn?.addEventListener('click', previewOfflineReviews);
+      importReviewsBtn?.addEventListener('click', importOfflineReviews);
+      openTrainingBtn?.addEventListener('click', () => ctx.navigate('training'));
+      panelTabs.forEach((btn) => {
+        btn.addEventListener('click', () => {
+          setPanel(btn.getAttribute('data-inspection-ocr-panel-tab') || 'overview');
+        });
+      });
+
+      root.setAttribute('tabindex', '-1');
+      root.addEventListener('keydown', async (event) => {
+        const target = event.target;
+        const isTextEditing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
+        if (!event.altKey || (isTextEditing && !event.ctrlKey && !event.metaKey)) return;
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          await selectRelativeItem(-1);
+        }
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          await selectRelativeItem(1);
+        }
+      });
+
+      const proxyOnlyPreset = localStorage.getItem(STORAGE_KEYS.inspectionOcrProxyOnly) === '1';
+      if (proxyOnlyPreset && onlyProxySeededInput) {
+        onlyProxySeededInput.checked = true;
+        localStorage.removeItem(STORAGE_KEYS.inspectionOcrProxyOnly);
+        activePanel = 'queue';
+      }
+      await Promise.all([loadSummary(), loadItems({ preserveSelection: false })]);
+      setPanel(activePanel);
       root.focus();
     },
   };
@@ -7008,8 +8308,13 @@ function pageTasks(route, rawCtx) {
         </div>
         <div id="taskPanelMeta" class="hint">默认先看快速识别；需要精确控制时再切到创建任务或可选模型。</div>
       </section>
-      <section class="grid-two" data-task-panel="quick">
-        <form id="quickDetectForm" class="card form-grid">
+      <section class="card" data-task-panel="quick">
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-quick-flow-tab="input">识别输入</button>
+          <button class="ghost" type="button" data-quick-flow-tab="results">识别结果</button>
+        </div>
+        <div id="quickFlowMeta" class="hint">默认先准备识别输入；开始预检或正式识别后，会自动切到识别结果。</div>
+        <form id="quickDetectForm" class="form-grid" data-quick-flow-panel="input">
           <h3>快速识别</h3>
           <label>file(上传图片 / 视频，可选)</label>
           <input id="quickDetectFile" type="file" accept=".jpg,.jpeg,.png,.bmp,.mp4,.avi,.mov" multiple />
@@ -7022,7 +8327,7 @@ function pageTasks(route, rawCtx) {
             ${QUICK_DETECT_PROMPTS.map((item) => `<button type="button" class="ghost chip-btn" data-quick-prompt="${esc(item)}">${esc(item)}</button>`).join('')}
           </div>
           <div id="quickDetectIntentOptions" class="quick-intent-grid"></div>
-          <div class="hint">系统会先按你的描述归一化意图并选模。输入“车号 / 车厢号 / 车皮号 / 编号”都会优先走车号 OCR，并直接输出文本。</div>
+          <div class="hint">系统会先按你的描述归一化意图并选模。输入“车号 / 定检标记 / 性能标记 / 门锁状态 / 连接件缺陷”这类目标时，会优先匹配对应的小模型或 OCR 任务。</div>
           <div id="quickDetectModelOptions">${renderEmpty('明确输入“车号”等目标后，这里会直接显示可用模型，不再要求先走一遍目标预检。')}</div>
           <label>设备编号</label>
           <input name="device_code" id="quickDetectDeviceCode" value="edge-01" />
@@ -7033,13 +8338,18 @@ function pageTasks(route, rawCtx) {
           <div id="quickDetectMsg" class="hint"></div>
           <div id="quickDetectPreview" class="quick-detect-preview state empty">选择图片后会在这里显示预览；如果选择视频或已有资产，会显示摘要信息。</div>
         </form>
-        <section class="card">
+        <section class="card" data-quick-flow-panel="results" hidden>
           <h3>快速识别结果</h3>
           <div id="quickDetectResult">${renderEmpty(`上传一张或多张图片 / 视频，输入要识别的对象后，${BRAND_NAME} 会自动选模、创建任务、回传标注图，并支持把本次结果直接打包为训练 / 验证数据集。`)}</div>
         </section>
       </section>
-      <section class="grid-two" data-task-panel="create" hidden>
-        <form id="taskCreateForm" class="card form-grid">
+      <section class="card" data-task-panel="create" hidden>
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-create-flow-tab="form">填写任务</button>
+          <button class="ghost" type="button" data-create-flow-tab="result">创建反馈</button>
+        </div>
+        <div id="createFlowMeta" class="hint">默认先填写任务；创建成功后会自动切到创建反馈。</div>
+        <form id="taskCreateForm" class="form-grid" data-create-flow-panel="form">
           <h3>创建任务</h3>
           <label>资产编号</label>
           <input name="asset_id" id="taskAssetInput" list="taskAssetsDatalist" placeholder="资产编号" required />
@@ -7049,12 +8359,16 @@ function pageTasks(route, rawCtx) {
             <option value="pipeline_orchestrated">${enumText('task_type', 'pipeline_orchestrated')}</option>
             <option value="object_detect">${enumText('task_type', 'object_detect')}</option>
             <option value="car_number_ocr">${enumText('task_type', 'car_number_ocr')}</option>
+            <option value="inspection_mark_ocr">${enumText('task_type', 'inspection_mark_ocr')}</option>
+            <option value="performance_mark_ocr">${enumText('task_type', 'performance_mark_ocr')}</option>
+            <option value="door_lock_state_detect">${enumText('task_type', 'door_lock_state_detect')}</option>
+            <option value="connector_defect_detect">${enumText('task_type', 'connector_defect_detect')}</option>
             <option value="bolt_missing_detect">${enumText('task_type', 'bolt_missing_detect')}</option>
           </select>
           <label>设备编号</label>
           <input name="device_code" value="edge-01" />
           <label>补充说明</label>
-          <input name="intent_text" placeholder="例如：优先识别车号" />
+          <input name="intent_text" placeholder="例如：优先识别定检标记或门锁状态" />
           <details class="inline-details task-create-advanced">
             <summary>高级控制（模型 / 流水线 / 调度）</summary>
             <div class="details-panel">
@@ -7073,7 +8387,7 @@ function pageTasks(route, rawCtx) {
           <button class="primary" type="submit">创建任务</button>
           <div id="taskCreateMsg" class="hint"></div>
         </form>
-        <section class="card">
+        <section class="card" data-create-flow-panel="result" hidden>
           <h3>创建结果</h3>
           <div id="taskCreateResult">${renderEmpty('创建成功后会显示任务编号，并提供结果页直达入口')}</div>
         </section>
@@ -7096,6 +8410,12 @@ function pageTasks(route, rawCtx) {
       const taskPanelMeta = root.querySelector('#taskPanelMeta');
       const taskPanelTabs = [...root.querySelectorAll('[data-task-panel-tab]')];
       const taskPanels = [...root.querySelectorAll('[data-task-panel]')];
+      const quickFlowMeta = root.querySelector('#quickFlowMeta');
+      const quickFlowTabs = [...root.querySelectorAll('[data-quick-flow-tab]')];
+      const quickFlowPanels = [...root.querySelectorAll('[data-quick-flow-panel]')];
+      const createFlowMeta = root.querySelector('#createFlowMeta');
+      const createFlowTabs = [...root.querySelectorAll('[data-create-flow-tab]')];
+      const createFlowPanels = [...root.querySelectorAll('[data-create-flow-panel]')];
       const quickDetectForm = root.querySelector('#quickDetectForm');
       const quickDetectFile = root.querySelector('#quickDetectFile');
       const quickDetectAssetInput = root.querySelector('#quickDetectAssetInput');
@@ -7130,6 +8450,8 @@ function pageTasks(route, rawCtx) {
       let assistModels = [];
       let taskModelQuery = '';
       let activeTaskPanel = 'quick';
+      let activeQuickFlow = 'input';
+      let activeCreateFlow = 'form';
 
       function setTaskPanel(panel) {
         activeTaskPanel = ['quick', 'create', 'models', 'list'].includes(panel) ? panel : 'quick';
@@ -7149,6 +8471,44 @@ function pageTasks(route, rawCtx) {
             models: '先挑模型，再带入创建任务；避免手输模型编号。',
             list: '统一查看已创建任务、等待完成并进入结果页。',
           }[activeTaskPanel];
+        }
+      }
+
+      function setQuickFlow(panel) {
+        activeQuickFlow = ['input', 'results'].includes(panel) ? panel : 'input';
+        quickFlowPanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-quick-flow-panel') !== activeQuickFlow;
+        });
+        quickFlowTabs.forEach((button) => {
+          const active = button.getAttribute('data-quick-flow-tab') === activeQuickFlow;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (quickFlowMeta) {
+          quickFlowMeta.textContent = {
+            input: '先准备输入、目标和模型；开始预检或正式识别后，再去看识别结果。',
+            results: '这里集中查看预检建议、批量识别结果和后续导出动作。',
+          }[activeQuickFlow];
+        }
+      }
+
+      function setCreateFlow(panel) {
+        activeCreateFlow = ['form', 'result'].includes(panel) ? panel : 'form';
+        createFlowPanels.forEach((section) => {
+          section.hidden = section.getAttribute('data-create-flow-panel') !== activeCreateFlow;
+        });
+        createFlowTabs.forEach((button) => {
+          const active = button.getAttribute('data-create-flow-tab') === activeCreateFlow;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (createFlowMeta) {
+          createFlowMeta.textContent = {
+            form: '先把资产、任务类型和执行方式填清楚，再创建任务。',
+            result: '创建成功后在这里看任务编号、等待完成并进入结果页。',
+          }[activeCreateFlow];
         }
       }
 
@@ -7392,6 +8752,8 @@ function pageTasks(route, rawCtx) {
 
       function renderQuickPreflightOutcomes(outcomes) {
         quickPreflightOutcomes = outcomes;
+        setTaskPanel('quick');
+        setQuickFlow('results');
         quickDetectResult.innerHTML = `
           <div class="quick-detect-result">
             <div class="quick-detect-recommend">预检已经先扫过图片/视频，并生成了候选任务类型与目标标签。先选一个建议，再继续正式识别。</div>
@@ -7714,6 +9076,7 @@ function pageTasks(route, rawCtx) {
             : '已把上方快速识别的任务类型、设备和意图带入下方精确任务。';
         }
         setTaskPanel('create');
+        setCreateFlow('form');
         createForm?.scrollIntoView({ block: 'center', behavior: 'smooth' });
       }
 
@@ -8243,6 +9606,8 @@ function pageTasks(route, rawCtx) {
       }
 
       function renderQuickDetectBatchOutcome(outcomes) {
+        setTaskPanel('quick');
+        setQuickFlow('results');
         outcomes.forEach((item, outcomeIndex) => {
           item._index = outcomeIndex;
           item.recognizedTexts = collectRecognizedTexts(item.predictions, item.summary || item.focus?.result_json?.summary || {});
@@ -8973,7 +10338,8 @@ function pageTasks(route, rawCtx) {
               <button class="ghost" id="waitTaskResults">等待执行并打开结果页</button>
             </div>
           `;
-          setTaskPanel('list');
+          setTaskPanel('create');
+          setCreateFlow('result');
           root.querySelector('#openTaskDetail')?.addEventListener('click', () => ctx.navigate(`tasks/${created.id}`));
           root.querySelector('#openTaskResults')?.addEventListener('click', () => ctx.navigate(`results/task/${created.id}`));
           root.querySelector('#waitTaskResults')?.addEventListener('click', async (event) => {
@@ -9010,6 +10376,18 @@ function pageTasks(route, rawCtx) {
           setTaskPanel(button.getAttribute('data-task-panel-tab') || 'quick');
         });
       });
+      quickFlowTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setTaskPanel('quick');
+          setQuickFlow(button.getAttribute('data-quick-flow-tab') || 'input');
+        });
+      });
+      createFlowTabs.forEach((button) => {
+        button.addEventListener('click', () => {
+          setTaskPanel('create');
+          setCreateFlow(button.getAttribute('data-create-flow-tab') || 'form');
+        });
+      });
       createForm?.querySelector('select[name="task_type"]')?.addEventListener('change', renderTaskModelLibrary);
       createForm?.querySelector('input[name="use_master_scheduler"]')?.addEventListener('change', renderTaskModelLibrary);
       createForm?.querySelectorAll('input, select').forEach((input) => {
@@ -9019,6 +10397,8 @@ function pageTasks(route, rawCtx) {
 
       renderTaskCreateAssist();
       setTaskPanel('quick');
+      setQuickFlow('input');
+      setCreateFlow('form');
 
       await Promise.all([loadTasks(), loadAssistData()]);
     },
@@ -9531,7 +10911,16 @@ function pageResults(route, rawCtx) {
         });
       }
 
-      function bindResultListPanels() {
+      function preferredResultListPanel(summaries, modelInsights = {}) {
+        const ocrRows = (Array.isArray(summaries) ? summaries : []).filter((item) => item.taskType === 'car_number_ocr');
+        const lowConfidenceCount = ocrRows.filter((item) => !Number.isFinite(item.ocrConfidence) || item.ocrConfidence < 0.8 || item.ocrRisk !== 'stable').length;
+        if (lowConfidenceCount > 0) return 'items';
+        const modelInsightCount = Object.keys(modelInsights || {}).length;
+        if (!ocrRows.length && modelInsightCount > 1) return 'models';
+        return 'overview';
+      }
+
+      function bindResultListPanels(initialPanel = 'overview') {
         const resultListPanelMeta = listWrap.querySelector('#resultListPanelMeta');
         const resultListPanelTabs = Array.from(listWrap.querySelectorAll('[data-result-list-panel-tab]'));
         const resultListPanels = Array.from(listWrap.querySelectorAll('[data-result-list-panel]'));
@@ -9558,7 +10947,7 @@ function pageResults(route, rawCtx) {
             setResultListPanel(btn.getAttribute('data-result-list-panel-tab') || 'overview');
           });
         });
-        setResultListPanel('overview');
+        setResultListPanel(initialPanel);
       }
 
       function bindResultActionWorkbench(taskId) {
@@ -9709,7 +11098,8 @@ function pageResults(route, rawCtx) {
           currentSummaries = currentRows.map(summarizeResultRow);
           currentDatasetExport = null;
           listWrap.innerHTML = buildResultListHtml(enrichedRows || [], modelInsights);
-          bindResultListPanels();
+          const initialResultListPanel = preferredResultListPanel(currentSummaries, modelInsights);
+          bindResultListPanels(initialResultListPanel);
           if (actionWorkbench) {
             actionWorkbench.innerHTML = renderResultActionWorkbench(clean, currentSummaries, currentDatasetExport);
             bindResultActionWorkbench(clean);
@@ -9723,6 +11113,11 @@ function pageResults(route, rawCtx) {
           resultMeta.textContent = recognizedTexts.length
             ? `当前查询到 ${enrichedRows.length} 条结果 · 关联模型 ${modelCount} 个 · 识别文本 ${recognizedTexts.slice(0, 3).join(' / ')}`
             : `当前查询到 ${enrichedRows.length} 条结果 · 关联模型 ${modelCount} 个`;
+          if (initialResultListPanel === 'items') {
+            resultMeta.textContent += ' · 已自动切到单条结果，优先复核低置信度内容';
+          } else if (initialResultListPanel === 'models') {
+            resultMeta.textContent += ' · 已自动切到模型表现，优先核对多模型结果';
+          }
           localStorage.setItem(STORAGE_KEYS.lastTaskId, clean);
           setResultPanel('list');
           await bindScreenshotButtons();
@@ -10511,6 +11906,7 @@ const factories = {
   models: pageModels,
   training: pageTraining,
   carNumberLabeling: pageCarNumberLabeling,
+  inspectionOcrLabeling: pageInspectionOcrLabeling,
   pipelines: pagePipelines,
   tasks: pageTasks,
   taskDetail: pageTaskDetail,
