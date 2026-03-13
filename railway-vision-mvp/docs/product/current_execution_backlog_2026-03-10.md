@@ -1,180 +1,142 @@
-# 当前执行清单（2026-03-10）
+# 当前执行清单（2026-03-13）
 
 - Owner: Engineering
 - Status: In Execution
-- Last Updated: 2026-03-12
-- Scope: 基于当前代码与最近连续迭代，对“已完成 / 半完成 / 中断 / 下一步”做一次真实盘点
-- Supersedes: `platform_user_centric_execution_backlog_v1.md` 仅保留历史分阶段目标；当前执行判断以本文件为准
-- Dynamic Todo: 日常持续推进与插入新需求时，优先维护 [dynamic_execution_todo_2026-03-11.md](./dynamic_execution_todo_2026-03-11.md)
+- Last Updated: 2026-03-13 15:40 CST
+- Scope: 基于当前代码和真实运行结果，对“已完成 / 当前主线 / 下一步”做一次收口盘点
+- Supersedes: `platform_user_centric_execution_backlog_v1.md`
+- Dynamic Todo: 日常持续推进优先维护 [dynamic_execution_todo_2026-03-11.md](./dynamic_execution_todo_2026-03-11.md)
 
-## 1. 当前已打通的主链路
+## 1. 当前已打通的主链
 
-- 训练控制面 MVP：训练作业创建、取消、重试、改派、worker 心跳、候选模型回收、readiness 展示已可运行。
-- 训练后验证主链：训练页可直达候选模型验证，候选模型可做任务级授权验证，不必先正式发布。
-- 模型审批/发布：审批工作台、发布工作台、流水线发布工作台均已落地，减少了 `prompt` 式输入。
-- 结果复核与回灌：结果页支持复核、导出训练样本、回灌训练中心。
-- 结果页验收化：结果卡、结果概览、结果回灌与下一步动作已开始按“验收结论页”收口，不再默认暴露大量技术字段。
-- 车号文本复核链：`demo_data/train` 已整理为 OCR 标注清单，支持复核、导出训练包、创建训练作业。
-- 快速识别交互：当用户已明确输入 `车号` 等意图时，页面可直接展示可用模型，不再强制先走预检建议。
-- 任务页联动：快速识别上方选中的模型与意图，已可一键带入下方精确任务，减少重复输入。
-- 训练 / 模型 / 流水线页工作台概览：三页已补统一的“当前状态 + 下一步动作”概览区，低频配置开始收进高级折叠。
-- 训练 / 模型 / 流水线页列表收口：三页主列表已开始从重表格改成卡片工作台摘要，减少默认技术字段暴露。
-- 车号规则校验：当前合法规则已升级成多规则族，支持标准 `8 位数字`、字母前缀数字编号和紧凑型混合编号。
-- 数据噪音治理：synthetic 记录、冗余 OCR 导出历史、运行垃圾已做一轮物理清理与界面默认隐藏。
+- 训练控制面 MVP：
+  - 训练作业创建、取消、重试、改派
+  - 训练机器心跳
+  - 待验证模型回收
+  - readiness 展示
+- 训练后验证主链：
+  - 训练页可直达候选模型验证
+  - 待验证模型可做任务级授权验证，不必先正式发布
+- 模型审批 / 发布：
+  - 审批工作台
+  - 发布工作台
+  - 流水线发布工作台
+- 结果复核与回灌：
+  - 结果页支持复核
+  - 导出训练样本
+  - 回灌训练中心
+- 数据治理：
+  - 设置页已有统一入口
+  - 可预览、执行并记录审计
+- 审批治理：
+  - 已支持补材料、驳回、证据包导出
 
-## 2. 仍未完成或只完成一半的工作
+## 2. 当前唯一持续中的核心主线
 
-### 2.1 真实 OCR 泛化能力仍未收口
+### T5. OCR 真实泛化继续推进
 
-- 当前状态：
-  - 已知 fixture、复核样本、内容哈希命中的图片能得到较稳结果。
-  - 未见过的低清/偏移/夜间车号图仍可能 `ocr_unavailable` 或置信度偏低。
-  - 一部分历史坏样本已修到“bbox 对、文本先不乱报”，但不是“全部真值已读准”。
-  - 2026-03-12 已把 runtime eval 改成优先比对 `final_text` 真值，并支持关闭 curated/fixture 快捷命中做真实泛化探针。
-  - 同日已新增“规则拒绝后的二阶段扩框重扫”，8 样本真实泛化探针从 `2/8 ok` 提升到 `3/8 ok + 1/8 可读但错位`。
-  - 同日还已按“库内 45° 侧拍车身标记识别”补了场景配置、旋转矫正文字带和更宽的扩框救援，但 `2477 / 2216 / 3542` 这类难样本仍未收口。
-  - 同日已把《铁路货车轮足式机器人库内智能巡检应用技术方案》里的识别目标收敛成正式任务族：`车号 / 定检标记 / 性能标记 / 门锁状态 / 连接件缺陷`，但除车号外，其余任务还未进入真实训练闭环。
-  - 同日已把这组任务继续推进到“仓库内数据工作区 + 训练/验证包脚手架 + 训练中心准备度可视化 + OCR 代理裁剪队列”阶段，但还没有形成首版真实训练闭环。
-  - 同日稍晚已为 `inspection_mark_ocr / performance_mark_ocr` 各补入首批 `1 train + 1 validation` 的真实 `final_text`，并继续走到了“训练作业 SUCCEEDED + 待验证模型回收入库 + 审批工作台可见”的阶段。
-  - 2026-03-13 又通过同图车号真值桥接把这两类任务推进到 `9` 条已确认文本、`7 train + 2 validation` 的第二轮代理真值规模，并各自产出一版新的 `SUBMITTED` 待验证模型。
-  - 同日第三轮又把 provenance 风险真正打到审批工作台：新模型已显示 `data_provenance.proxy_seeded_rows = 12` 和 `proxy_truth_risk`，治理层现在能明确识别“代理真值风险仍然存在”。
-  - 同日稍晚 inspection OCR 已进入“优先替换代理真值”阶段：复核页能直接筛 `proxy_seeded` 样本，训练中心工作区卡片已显示 `manual_reviewed_rows / proxy_replacement_samples`。
-  - 同日还补上了默认质量门禁：当 inspection OCR 工作区仍含代理回灌真值时，默认阻止导出训练包、导出资产和直接创建训练作业；只有显式允许“带代理真值继续训练（仅冷启动）”才放行。
-- 当前证据：
-  - `edge/inference/pipelines.py`
-  - `config/car_number_rules.json`
-  - `config/ocr_scene_profiles.json`
-  - `config/railcar_inspection_task_catalog.json`
-  - `config/railcar_inspection_dataset_blueprints.json`
-  - `docker/scripts/evaluate_car_number_ocr_samples.py`
-  - `docker/scripts/bootstrap_inspection_labeling_workspace.py`
-  - `docker/scripts/build_inspection_task_dataset.py`
-  - `demo_data/generated_datasets/car_number_ocr_labeling/`
-  - `demo_data/generated_datasets/inspection_mark_ocr_labeling/`
-  - `demo_data/generated_datasets/door_lock_state_detect_labeling/`
-  - `demo_data/generated_datasets/car_number_ocr_runtime_eval/car_number_runtime_eval_generalization_probe_after_fix_20260312T032001Z.json`
-  - `demo_data/generated_datasets/car_number_ocr_runtime_eval/car_number_runtime_eval_generalization_probe_after_fix_v2_20260312T032914Z.json`
-  - `docs/qa/ocr_generalization_iteration_2026-03-12.md`
-  - `docs/product/railcar_robot_inspection_model_family_2026-03-12.md`
-  - `docs/product/railcar_inspection_data_workspace_2026-03-12.md`
-- 结论：这是当前最核心、最影响业务感知的未完成项。
+当前这条主线已经不是“缺页面 / 缺接口 / 缺训练入口”，而是“缺更高占比的真实真值”。
 
-### 2.2 错误提示模板主链已统一，剩余只是边角清理
+#### 2.1 已到位的能力
 
-- 当前状态：
-  - 任务、训练、模型、流水线、结果、资产、边缘执行等主链已经接入“后端结构化错误 + 前端统一解释”。
-  - 失败时大多能显示“原因 + 下一步”，不再直接暴露原始英文错误。
-- 剩余问题：
-  - 少数低频边角接口、框架级 `422`、以及极少量历史错误文案还没有逐条产品化。
-- 结论：
-  - 这一项已经不再是主线阻塞项，后续按边角问题持续清理即可。
+- 车号规则已升级成规则族，不再只限固定 8 位数字。
+- 巡检任务族已正式落地：
+  - `car_number_ocr`
+  - `inspection_mark_ocr`
+  - `performance_mark_ocr`
+  - `door_lock_state_detect`
+  - `connector_defect_detect`
+- 训练中心已接入巡检任务数据工作区。
+- inspection/performance OCR 已具备：
+  - 工作区模板
+  - 代理裁剪
+  - 自动建议
+  - 高质量建议优先复核
+  - 通用复核页
+  - 训练包导出
+  - 导出训练资产
+  - 直接创建训练作业
+  - 待验证模型回收
+  - 审批工作台可见
+- 风险治理已到位：
+  - 审批工作台暴露 `proxy_truth_risk`
+  - 默认阻止带代理真值继续正式训练
+  - inspection OCR 已具备原图联看、CSV 预检查、CSV 导回、人工 review pack
 
-### 2.3 数据保留策略已前台化，但还没有定时自动化
+#### 2.2 当前真实状态
 
-- 当前状态：
-  - 已有运行垃圾清理脚本、synthetic 记录清理脚本、旧 OCR 导出裁剪脚本。
-  - 设置页已经新增“数据治理”工作区，支持统一预览、执行与审计。
-  - 但仍是人工触发，还没有定时调度或策略编排。
-- 需要补的内容：
-  - “保留多久、删除哪些、谁可执行、删前如何预览”的策略配置化。
-  - 定时执行或至少批量治理编排。
+- `inspection_mark_ocr`
+  - `row_count = 80`
+  - `crop_ready_rows = 77`
+  - `suggestion_rows = 59`
+  - `high_quality_suggestion_rows = 51`
+  - `reviewed_rows = 9`
+  - `manual_reviewed_rows = 3`
+  - `proxy_seeded_rows = 6`
+  - `training_readiness.status = cold_start_only`
+- `performance_mark_ocr`
+  - `row_count = 80`
+  - `crop_ready_rows = 77`
+  - `suggestion_rows = 57`
+  - `high_quality_suggestion_rows = 45`
+  - `reviewed_rows = 9`
+  - `manual_reviewed_rows = 3`
+  - `proxy_seeded_rows = 6`
+  - `training_readiness.status = cold_start_only`
 
-### 2.4 审批编排已补齐“拒绝 / 补充材料 / 证据包导出”
+#### 2.3 当前真正阻断点
 
-- 当前状态：
-  - 审批工作台、发布工作台已具备“建议样本 -> 批量验证 -> 审批 / 发布”的主路径。
-  - 审批工作台现已支持“要求补充材料”“驳回这版模型”“导出可审计证据包”。
-- 影响：
-  - 模型治理已从 demo 闭环提升到更完整的交付治理闭环，平台可记录审批补件、驳回和证据归档过程。
+- inspection/performance OCR 不再缺工具链。
+- 当前真正阻断点只剩：
+  - 把 `proxy_seeded` 样本替换成真实 `final_text`
+  - 让训练状态从 `cold_start_only` 推进到 `ready`
+  - 再跑出更高真实真值占比的新训练作业与待验证模型
 
-### 2.5 浏览器级人工走查没有形成正式证据
+#### 2.4 结论
 
-- 当前状态：
-  - 多轮代码级和接口级验证已做。
-  - 任务页、结果页虽然已做多轮真实链路 smoke test，但还没有形成完整页面级证据。
-  - 当前已补第一版走查清单：`docs/qa/browser_walkthrough_checklist_2026-03-11.md`。
-- 影响：
-  - 布局抖动、长文本撑坏、上传后尺寸变化这类问题仍可能零星存在。
+这是当前最核心、最影响业务价值的未完成项。
 
-### 2.6 训练页 / 模型页 / 流水线页的“工作台化”程度仍有尾差
+## 3. 其他未完成项的真实状态
 
-- 当前状态：
-  - 任务页和结果页已经开始从“字段堆叠”转成“结论 + 下一步动作”的交互。
-  - 训练页、模型页、流水线页已补统一的工作台概览和部分高级折叠，但列表、摘要、工作台之间的视觉节奏还没完全拉齐。
-- 影响：
-  - 全站看起来还没有完全达到统一成熟产品的完成度。
-- 需要补的内容：
-  - 继续收卡片层级、动作分区、技术信息折叠。
-  - 让“主动作 / 当前状态 / 技术详情”结构在各控制台页保持一致。
-  - 把训练作业列表、模型列表、流水线列表进一步从“表格视角”向“工作台视角”收口。
+### 3.1 错误提示模板
 
-### 2.7 文档口径有滞后
+- 主链已收口。
+- 剩余只是边角清理，不再是主线阻塞项。
 
-- 当前状态：
-  - `README.md`、`docs/demo.md` 已跟进过多轮。
-  - 但 `platform_user_centric_execution_backlog_v1.md` 仍保留大量过期待办，不能代表当前真实执行状态。
-- 处理方式：
-  - 本文件作为当前执行口径。
-  - 后续需要逐步把旧文档压成“历史阶段文件”。
+### 3.2 数据保留策略
 
-## 3. 今天确认已补完的中断项
+- 已前台化。
+- 仍缺定时自动化和更细策略编排，但不阻塞主链。
 
-### 3.1 schema 快照自动同步
+### 3.3 训练 / 模型 / 流水线工作台
 
-- 之前状态：
-  - `db_migrate.py --apply` 之后仍要手动执行 `schema_snapshot_guard.py --write`。
-- 本次变更：
-  - `docker/scripts/db_migrate.py --apply` 成功后会自动同步 `backend/app/db/schema.sql`。
-  - 如需跳过，可显式传 `--no-sync-schema`。
-- 结论：
-  - 该项从“半人工”变成“默认闭环”，可从旧 backlog 的未完成项中移除。
+- 主体工作已完成。
+- 剩余是细节统一和页面级收边，不是结构性缺口。
+
+### 3.4 浏览器级人工走查
+
+- 已有清单和首轮报告。
+- 后续按页面边角问题持续补证据即可。
 
 ## 4. 接下来按顺序执行
 
 ### Step 1
 
-- 继续把训练页 / 模型页 / 流水线页收成统一工作台视觉：
-  - 主动作更前置
-  - 默认技术字段更少
-  - 下一步动作更明确
-  - 继续减少表格噪音和长字段默认暴露
+- 继续推进 inspection/performance OCR 的真实真值替换。
 
 ### Step 2
 
-- 统一错误提示模板，优先覆盖：
-  - 任务创建 / 快速识别
-  - 训练作业创建 / 候选验证
-  - 模型审批 / 发布
-  - 结果复核 / 导出
+- 替换后重新训练，并进入新一轮审批验证。
 
 ### Step 3
 
-- 继续压车号 OCR 真实泛化：
-  - 扩大真实复核样本
-  - 补历史坏样本真值
-  - 扩 runtime eval，按错误类型分桶修复
-
-### Step 4
-
-- 把数据保留策略收成统一入口：
-  - 预览清理计划
-  - 按类别执行
-  - 记录审计
-
-### Step 5
-
-- 补审批拒绝 / 补材料 / 证据包导出，收完整交付治理链路。
-
-### Step 6
-
-- 做一轮正式浏览器人工走查，并把结果沉淀到 QA 文档。
+- 把 `door_lock_state_detect / connector_defect_detect` 拉进真实样本闭环。
 
 ## 5. 当前执行原则
 
-- 优先修“真实用户链路上的缺口”，不优先增加更多占位数据或新概念页。
-- 优先把已有能力收成闭环，再扩新能力。
-- 对 OCR、训练、审批三条主链，优先保证：
-  - 少输入
-  - 少跳页
-  - 少裸错误
-  - 有明确下一步
+- 优先修真实业务阻断，不优先继续加新展示层。
+- 优先把 inspection/performance OCR 从“可冷启动训练”推进到“可正常训练”。
+- 每完成一段就主动收口：
+  - 更新动态待办
+  - 更新相关业务/QA文档
+  - 只保留当前真实状态

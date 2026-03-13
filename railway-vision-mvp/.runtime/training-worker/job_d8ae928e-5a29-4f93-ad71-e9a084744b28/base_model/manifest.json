@@ -1,0 +1,22 @@
+{
+  "input_schema": "image|video",
+  "inputs": {
+    "schema": "image|video"
+  },
+  "model_file_name": "candidate_model.bin",
+  "model_format": "bin",
+  "model_hash": "08a76da6d245a7dbf1b605f9825086ddc57c11e63c8a4b858e03755e525ffffd",
+  "model_id": "connector_defect_detect",
+  "model_type": "expert",
+  "output_schema": "json:bbox,text,confidence",
+  "outputs": {
+    "schema": "json:bbox,text,confidence"
+  },
+  "plugin_name": "car_number_ocr",
+  "published_at": "2026-03-13T08:55:44.541905+00:00",
+  "publisher": "vistral-platform",
+  "runtime": "python",
+  "schema_version": "1.0",
+  "task_type": "connector_defect_detect",
+  "version": "v20260313.085516.241e"
+}

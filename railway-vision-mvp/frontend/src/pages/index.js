@@ -5410,12 +5410,13 @@ function pageTraining(route, rawCtx) {
                   <div class="row-actions">
                     ${item.dataset_kind === 'ocr_text' ? `<button class="ghost" type="button" data-open-inspection-ocr-review="${esc(item.task_type)}">打开文字复核</button>` : ''}
                     ${item.dataset_kind === 'ocr_text' && proxySeededRows ? `<button class="ghost" type="button" data-open-inspection-ocr-proxy-review="${esc(item.task_type)}">优先替换代理真值</button>` : ''}
+                    ${item.dataset_kind === 'state_classification' ? `<button class="ghost" type="button" data-open-inspection-state-review="${esc(item.task_type)}">打开状态复核</button>` : ''}
                     <button class="ghost" type="button" data-copy-inspection-command="${esc(item.build_command || '')}">复制打包命令</button>
                   </div>
                   ${starterSamples.length ? `
                     <div class="selection-summary">
-                      <strong>优先起步样本</strong>
-                      <span>${starterSamples.map((sample) => `${sample.sample_id}${sample.split_hint ? ` · ${sample.split_hint}` : ''}`).join(' / ')}</span>
+                      <strong>${esc(item.dataset_kind === 'state_classification' ? '优先复核样本' : '优先起步样本')}</strong>
+                      <span>${starterSamples.map((sample) => `${sample.sample_id}${sample.split_hint ? ` · ${sample.split_hint}` : ''}${sample.asset_id ? ` · 资产 ${sample.asset_id}` : ''}`).join(' / ')}</span>
                     </div>
                   ` : ''}
                   ${proxyReplacementSamples.length ? `
@@ -5480,6 +5481,13 @@ function pageTraining(route, rawCtx) {
             if (!nextTaskType) return;
             localStorage.setItem(STORAGE_KEYS.inspectionOcrProxyOnly, '1');
             ctx.navigate(`training/inspection-ocr/${nextTaskType}`);
+          });
+        });
+        inspectionWorkspaceSummaryWrap.querySelectorAll('[data-open-inspection-state-review]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const nextTaskType = button.getAttribute('data-open-inspection-state-review') || '';
+            if (!nextTaskType) return;
+            ctx.navigate(`training/inspection-state/${nextTaskType}`);
           });
         });
         inspectionWorkspaceSummaryWrap.querySelectorAll('[data-open-training-job]').forEach((button) => {
@@ -7110,6 +7118,11 @@ function pageInspectionOcrLabeling(route, rawCtx) {
           <button id="exportInspectionOcrHighQualityPack" class="ghost" type="button">导出高质量建议包</button>
           <button id="presetInspectionOcrReset" class="ghost" type="button">重置筛选</button>
         </div>
+        <div class="row-actions review-toolbar">
+          <label class="inline-field">批量确认上限 <input id="inspectionOcrBulkHighQualityLimit" type="number" min="1" max="200" step="1" value="12" /></label>
+          <button id="previewInspectionOcrHighQualityAccept" class="ghost" type="button">预检查批量确认</button>
+          <button id="acceptInspectionOcrHighQuality" class="ghost" type="button">批量确认高质量建议</button>
+        </div>
           <div id="inspectionOcrListMeta" class="hint"></div>
           <div id="inspectionOcrListWrap">${renderLoading('加载待复核样本...')}</div>
         </section>
@@ -7146,6 +7159,9 @@ function pageInspectionOcrLabeling(route, rawCtx) {
       const exportHighQualityQueueBtn = root.querySelector('#exportInspectionOcrHighQualityQueue');
       const exportReviewPackBtn = root.querySelector('#exportInspectionOcrReviewPack');
       const exportHighQualityPackBtn = root.querySelector('#exportInspectionOcrHighQualityPack');
+      const bulkHighQualityLimitInput = root.querySelector('#inspectionOcrBulkHighQualityLimit');
+      const previewHighQualityAcceptBtn = root.querySelector('#previewInspectionOcrHighQualityAccept');
+      const acceptHighQualityBtn = root.querySelector('#acceptInspectionOcrHighQuality');
       const presetResetBtn = root.querySelector('#presetInspectionOcrReset');
       const exportAllowSuggestionsInput = root.querySelector('#inspectionOcrAllowSuggestionsExport');
       const exportAllowProxySeededInput = root.querySelector('#inspectionOcrAllowProxySeededExport');
@@ -7668,6 +7684,80 @@ function pageInspectionOcrLabeling(route, rawCtx) {
         }
       }
 
+      function currentHighQualityCandidateIds(limit) {
+        return currentItems
+          .filter((item) => !item.has_final_text && Number(item.ocr_suggestion_quality || 0) >= 1.0 && item.has_suggestion)
+          .slice(0, limit)
+          .map((item) => item.sample_id);
+      }
+
+      function resolveBulkHighQualityLimit() {
+        const raw = Number(bulkHighQualityLimitInput?.value || 12);
+        return Math.min(200, Math.max(1, Number.isFinite(raw) ? raw : 12));
+      }
+
+      async function previewBulkAcceptHighQuality() {
+        const limit = resolveBulkHighQualityLimit();
+        const sampleIds = currentHighQualityCandidateIds(limit);
+        if (!sampleIds.length) {
+          ctx.toast('当前筛选结果里没有可批量确认的高质量建议', 'error');
+          return;
+        }
+        setPanel('queue');
+        if (listMeta) listMeta.textContent = '正在预检查高质量建议批量确认...';
+        if (previewHighQualityAcceptBtn) previewHighQualityAcceptBtn.disabled = true;
+        try {
+          const payload = await ctx.post(`/training/inspection-ocr/${encodeURIComponent(taskType)}/preview-accept-high-quality`, {
+            sample_ids: sampleIds,
+            limit,
+            notes: '已通过批量确认接受高质量 OCR 建议',
+          });
+          const changed = payload?.would_update_rows ?? 0;
+          const skipped = payload?.skipped_rows ?? 0;
+          const unchanged = (payload?.unchanged_sample_ids || []).length;
+          const unmatched = (payload?.unmatched_sample_ids || []).length;
+          if (listMeta) {
+            listMeta.textContent = `预检查完成：当前高质量候选 ${payload?.total_candidates ?? 0} 条，本次命中 ${payload?.selected_rows ?? 0} 条，将更新 ${changed} 条，跳过 ${skipped} 条${unchanged ? `，未变化 ${unchanged} 条` : ''}${unmatched ? `，不匹配 ${unmatched} 条` : ''}。`;
+          }
+          ctx.toast('批量确认预检查完成');
+        } catch (error) {
+          if (listMeta) listMeta.textContent = error.message || '预检查批量确认失败';
+          ctx.toast(error.message || '预检查批量确认失败', 'error');
+        } finally {
+          if (previewHighQualityAcceptBtn) previewHighQualityAcceptBtn.disabled = false;
+        }
+      }
+
+      async function acceptBulkHighQuality() {
+        const limit = resolveBulkHighQualityLimit();
+        const sampleIds = currentHighQualityCandidateIds(limit);
+        if (!sampleIds.length) {
+          ctx.toast('当前筛选结果里没有可批量确认的高质量建议', 'error');
+          return;
+        }
+        setPanel('queue');
+        if (listMeta) listMeta.textContent = '正在批量确认高质量建议...';
+        if (acceptHighQualityBtn) acceptHighQualityBtn.disabled = true;
+        try {
+          const payload = await ctx.post(`/training/inspection-ocr/${encodeURIComponent(taskType)}/accept-high-quality`, {
+            sample_ids: sampleIds,
+            limit,
+            notes: '已通过批量确认接受高质量 OCR 建议',
+          });
+          if (listMeta) {
+            listMeta.textContent = `已批量确认 ${payload?.updated_rows ?? 0} 条高质量建议，跳过 ${payload?.skipped_rows ?? 0} 条。`;
+          }
+          ctx.toast('高质量建议已批量确认');
+          await Promise.all([loadSummary(), loadItems({ preserveSelection: false })]);
+          setPanel('queue');
+        } catch (error) {
+          if (listMeta) listMeta.textContent = error.message || '批量确认高质量建议失败';
+          ctx.toast(error.message || '批量确认高质量建议失败', 'error');
+        } finally {
+          if (acceptHighQualityBtn) acceptHighQualityBtn.disabled = false;
+        }
+      }
+
       filterForm?.addEventListener('submit', async (event) => {
         event.preventDefault();
         await loadItems({ preserveSelection: false });
@@ -7760,6 +7850,8 @@ function pageInspectionOcrLabeling(route, rawCtx) {
           ctx.toast(error.message || '导出高质量建议包失败', 'error');
         }
       });
+      previewHighQualityAcceptBtn?.addEventListener('click', previewBulkAcceptHighQuality);
+      acceptHighQualityBtn?.addEventListener('click', acceptBulkHighQuality);
       presetResetBtn?.addEventListener('click', async () => {
         statusInput.value = '';
         splitInput.value = '';
@@ -7804,6 +7896,681 @@ function pageInspectionOcrLabeling(route, rawCtx) {
         activePanel = 'queue';
       }
       await Promise.all([loadSummary(), loadItems({ preserveSelection: false })]);
+      setPanel(activePanel);
+      root.focus();
+    },
+  };
+}
+
+function pageInspectionStateLabeling(route, rawCtx) {
+  const ctx = makeContext(route, rawCtx);
+  const taskType = String(route.params?.task_type || '').trim();
+  return {
+    html: `
+      <section class="card">
+        <h2 id="inspectionStateTitle">巡检状态复核</h2>
+        <p id="inspectionStateDesc">逐条确认状态/缺陷标签，保存 <code>label_value</code> 后再导出训练包。</p>
+        <div class="workspace-switcher">
+          <button class="ghost" type="button" data-inspection-state-panel-tab="overview">复核总览</button>
+          <button class="ghost" type="button" data-inspection-state-panel-tab="queue">待处理样本</button>
+          <button class="ghost" type="button" data-inspection-state-panel-tab="review">当前样本复核</button>
+          <button class="ghost" type="button" data-inspection-state-panel-tab="export">导出训练包</button>
+        </div>
+        <div id="inspectionStatePanelMeta" class="hint">默认先看复核总览；选择样本后会自动切到当前样本复核，导出时会自动切到导出训练包。</div>
+      </section>
+      <section class="card" data-inspection-state-panel="overview">
+        <div id="inspectionStateSummaryWrap">${renderLoading('加载巡检状态复核摘要...')}</div>
+        <div class="section-toolbar compact" style="margin-top:16px;">
+          <form id="inspectionStateImportAssetsForm" class="section-toolbar compact" style="padding:0;">
+            <input id="inspectionStateImportAssetIds" name="asset_ids" list="inspectionStateAssetsDatalist" placeholder="资产编号-1, 资产编号-2" />
+            <input id="inspectionStateImportNote" name="note" placeholder="可选：这批样本来自哪次采集" />
+            <button class="ghost" type="submit">导入现有资产</button>
+          </form>
+          <datalist id="inspectionStateAssetsDatalist"></datalist>
+        </div>
+        <div id="inspectionStateImportMsg" class="hint">可直接把平台里的真实图片资产导入当前状态工作区，形成待复核样本。</div>
+      </section>
+      <section class="card" data-inspection-state-panel="review" hidden>
+        <div id="inspectionStateDetailWrap">${renderEmpty('先到“待处理样本”里选择一个样本开始复核')}</div>
+      </section>
+      <section class="card" data-inspection-state-panel="export" hidden>
+        <div class="row-actions review-toolbar">
+          <button id="exportInspectionStateDataset" class="primary" type="button">导出状态训练包</button>
+          <button id="exportInspectionStateAssets" class="ghost" type="button">整理好并带去训练中心</button>
+          <button id="exportInspectionStateTrainingJob" class="ghost" type="button">直接创建训练作业</button>
+          <button id="openTrainingFromInspectionState" class="ghost" type="button">回训练中心</button>
+        </div>
+        <div class="row-actions review-toolbar">
+          <button id="exportInspectionStateReviewQueue" class="ghost" type="button">导出状态复核队列</button>
+          <button id="exportInspectionStateReviewPack" class="ghost" type="button">导出人工复核包</button>
+          <button id="previewInspectionStateImport" class="ghost" type="button">预检查离线复核 CSV</button>
+          <button id="importInspectionStateReviews" class="ghost" type="button">导入离线复核 CSV</button>
+          <input id="inspectionStateImportReviewsFile" type="file" accept=".csv,text/csv" hidden />
+        </div>
+        <div class="hint">至少需要 2 条已确认标签，并且 train / validation 都至少各有 1 条，才可导出训练数据。</div>
+        <div id="inspectionStateExportMsg" class="hint"></div>
+      </section>
+      <section class="grid-two" data-inspection-state-panel="queue" hidden>
+        <section class="card">
+          <form id="inspectionStateFilterForm" class="section-toolbar compact">
+            <input id="inspectionStateSearch" name="q" placeholder="搜索 sample_id / 源文件 / 状态标签" />
+            <select id="inspectionStateStatus" name="review_status">
+              <option value="">全部状态</option>
+              <option value="pending">待处理</option>
+              <option value="done">已完成</option>
+              <option value="needs_check">待复核</option>
+            </select>
+            <select id="inspectionStateSplit" name="split_hint">
+              <option value="">全部切分</option>
+              <option value="train">train</option>
+              <option value="validation">validation</option>
+            </select>
+            <select id="inspectionStateLabelFilter" name="label_value">
+              <option value="">全部标签</option>
+            </select>
+            <label class="checkbox-row"><input id="inspectionStateOnlyMissingLabel" type="checkbox" /> 仅看未补标签</label>
+            <button class="ghost" type="submit">刷新列表</button>
+          </form>
+          <div class="row-actions review-toolbar">
+            <button id="presetInspectionStateTodo" class="ghost" type="button">只看待处理</button>
+            <button id="presetInspectionStateNeedsCheck" class="ghost" type="button">只看待复核</button>
+            <button id="presetInspectionStateReset" class="ghost" type="button">重置筛选</button>
+          </div>
+          <div id="inspectionStateListMeta" class="hint"></div>
+          <div id="inspectionStateListWrap">${renderLoading('加载待复核样本...')}</div>
+        </section>
+        <section class="card">
+          <h3>复核提醒</h3>
+          <div class="hint">优先补足 train / validation 两侧都缺失的状态标签，再导出训练包或创建训练作业。</div>
+          <div class="selection-summary">
+            <strong>建议顺序</strong>
+            <span>先处理 <code>needs_check</code> 和没有标签的样本，再统一检查各标签是否覆盖。</span>
+          </div>
+        </section>
+      </section>
+    `,
+    async mount(root) {
+      const titleEl = root.querySelector('#inspectionStateTitle');
+      const descEl = root.querySelector('#inspectionStateDesc');
+      const summaryWrap = root.querySelector('#inspectionStateSummaryWrap');
+      const detailWrap = root.querySelector('#inspectionStateDetailWrap');
+      const listMeta = root.querySelector('#inspectionStateListMeta');
+      const listWrap = root.querySelector('#inspectionStateListWrap');
+      const filterForm = root.querySelector('#inspectionStateFilterForm');
+      const searchInput = root.querySelector('#inspectionStateSearch');
+      const statusInput = root.querySelector('#inspectionStateStatus');
+      const splitInput = root.querySelector('#inspectionStateSplit');
+      const labelFilterInput = root.querySelector('#inspectionStateLabelFilter');
+      const onlyMissingLabelInput = root.querySelector('#inspectionStateOnlyMissingLabel');
+      const presetTodoBtn = root.querySelector('#presetInspectionStateTodo');
+      const presetNeedsCheckBtn = root.querySelector('#presetInspectionStateNeedsCheck');
+      const presetResetBtn = root.querySelector('#presetInspectionStateReset');
+      const exportBtn = root.querySelector('#exportInspectionStateDataset');
+      const exportAssetsBtn = root.querySelector('#exportInspectionStateAssets');
+      const exportTrainingJobBtn = root.querySelector('#exportInspectionStateTrainingJob');
+      const openTrainingBtn = root.querySelector('#openTrainingFromInspectionState');
+      const exportReviewQueueBtn = root.querySelector('#exportInspectionStateReviewQueue');
+      const exportReviewPackBtn = root.querySelector('#exportInspectionStateReviewPack');
+      const previewImportBtn = root.querySelector('#previewInspectionStateImport');
+      const importReviewsBtn = root.querySelector('#importInspectionStateReviews');
+      const importReviewsFileInput = root.querySelector('#inspectionStateImportReviewsFile');
+      const exportMsg = root.querySelector('#inspectionStateExportMsg');
+      const importForm = root.querySelector('#inspectionStateImportAssetsForm');
+      const importAssetIdsInput = root.querySelector('#inspectionStateImportAssetIds');
+      const importNoteInput = root.querySelector('#inspectionStateImportNote');
+      const importMsg = root.querySelector('#inspectionStateImportMsg');
+      const importAssetsDatalist = root.querySelector('#inspectionStateAssetsDatalist');
+      const panelMeta = root.querySelector('#inspectionStatePanelMeta');
+      const panelTabs = Array.from(root.querySelectorAll('[data-inspection-state-panel-tab]'));
+      const panels = Array.from(root.querySelectorAll('[data-inspection-state-panel]'));
+      let activePanel = 'overview';
+      let currentSummary = null;
+      let currentItems = [];
+      let selectedSampleId = '';
+      let currentPreviewUrl = '';
+      let currentSourcePreviewUrl = '';
+      let recentImageAssets = [];
+
+      function revokePreviewUrl() {
+        if (currentPreviewUrl) URL.revokeObjectURL(currentPreviewUrl);
+        if (currentSourcePreviewUrl) URL.revokeObjectURL(currentSourcePreviewUrl);
+        currentPreviewUrl = '';
+        currentSourcePreviewUrl = '';
+      }
+
+      function setPanel(panel) {
+        activePanel = panel;
+        panelTabs.forEach((btn) => {
+          const active = btn.getAttribute('data-inspection-state-panel-tab') === panel;
+          btn.classList.toggle('primary', active);
+          btn.classList.toggle('ghost', !active);
+        });
+        panels.forEach((section) => {
+          section.hidden = section.getAttribute('data-inspection-state-panel') !== panel;
+        });
+        if (panelMeta) {
+          panelMeta.textContent = ({
+            overview: '先看当前任务的样本准备度、标签覆盖率和训练就绪状态。',
+            queue: '在这里筛选待复核样本；选择样本后会自动切到当前样本复核。',
+            review: '聚焦当前样本，确认状态标签并保存。',
+            export: '当 train 和 validation 都有已确认标签后，在这里导出训练包。',
+          })[panel] || '按当前工作区继续操作。';
+        }
+      }
+
+      function currentFilters() {
+        return {
+          q: String(searchInput?.value || '').trim(),
+          review_status: String(statusInput?.value || '').trim(),
+          split_hint: String(splitInput?.value || '').trim(),
+          label_value: String(labelFilterInput?.value || '').trim(),
+          has_label_value: onlyMissingLabelInput?.checked ? 'false' : '',
+          limit: 120,
+        };
+      }
+
+      function renderSummary(summary) {
+        const reviewCounts = summary?.review_status_counts || {};
+        const labelCounts = summary?.label_counts || {};
+        const readiness = summary?.training_readiness || {};
+        const latestExport = summary?.latest_export || null;
+        const starterSamples = summary?.starter_samples || [];
+        const captureProfile = summary?.capture_profile || {};
+        return `
+          <div class="result-overview-grid">
+            <article class="metric-card"><h4>总样本</h4><p class="metric">${esc(summary?.annotated_rows ?? '-')}</p><span>当前工作区中的状态样本数</span></article>
+            <article class="metric-card"><h4>已裁剪候选区域</h4><p class="metric">${esc(summary?.crop_ready_rows ?? '-')}</p><span>可直接打开 crop 或原图复核</span></article>
+            <article class="metric-card"><h4>已补标签</h4><p class="metric">${esc(summary?.reviewed_rows ?? '-')}</p><span>${esc(summary?.reviewed_ratio != null ? `${Math.round(Number(summary.reviewed_ratio) * 100)}%` : '-')}</span></article>
+            <article class="metric-card"><h4>待处理</h4><p class="metric">${esc(reviewCounts.pending ?? 0)}</p><span>${esc(`待复核 ${reviewCounts.needs_check ?? 0} / 已完成 ${reviewCounts.done ?? 0}`)}</span></article>
+            <article class="metric-card"><h4>训练就绪</h4><p class="metric">${esc(readiness.label || '仍不可导出')}</p><span>${esc(readiness.next_step || '请继续补状态标签')}</span></article>
+            <article class="metric-card"><h4>最近训练包</h4><p class="metric">${esc(latestExport?.accepted_rows ?? 0)}</p><span>${esc(latestExport ? `train ${latestExport?.bundles?.train?.sample_count ?? 0} / validation ${latestExport?.bundles?.validation?.sample_count ?? 0}` : '还没有导出记录')}</span></article>
+          </div>
+          <div class="selection-summary">
+            <strong>${esc(summary?.task_label || taskType)}</strong>
+            <span>${esc(summary?.notes?.[0] || '逐条确认状态/缺陷标签，再导出训练包。')}</span>
+            <span>${esc(`标签范围：${(summary?.label_values || []).join(' / ') || '-'}`)}</span>
+            <span>${esc(`验收目标：${Object.entries(summary?.qa_targets || {}).map(([key, value]) => `${key}:${value}`).join(' / ') || '-'}`)}</span>
+          </div>
+          <div class="selection-summary">
+            <strong>建议采集条件</strong>
+            <span>${esc(`场景：${captureProfile.scene || '-'}`)}</span>
+            <span>${esc(`拍摄距离：${Array.isArray(captureProfile.distance_m) ? `${captureProfile.distance_m[0]}-${captureProfile.distance_m[1]}m` : '-'}`)}</span>
+            <span>${esc(`拍摄角度：${captureProfile.view_angle_deg == null ? '-' : `${captureProfile.view_angle_deg}°`}`)}</span>
+            <span>${esc(`图像要求：${captureProfile.image_quality || '-'}`)}</span>
+          </div>
+          ${starterSamples.length ? `
+            <div class="selection-summary">
+              <strong>优先复核样本</strong>
+              <span>${starterSamples.map((sample) => `${sample.sample_id}${sample.split_hint ? ` · ${sample.split_hint}` : ''}${sample.asset_id ? ` · 资产 ${sample.asset_id}` : ''}${sample.quality_score != null ? ` · 质量 ${sample.quality_score}` : ''}`).join(' / ')}</span>
+            </div>
+          ` : ''}
+          ${Object.keys(labelCounts).length ? `
+            <div class="selection-summary">
+              <strong>当前标签覆盖</strong>
+              <span>${Object.entries(labelCounts).map(([key, value]) => `${key}:${value}`).join(' / ')}</span>
+            </div>
+          ` : ''}
+          ${readiness?.next_step ? `<div class="hint ${readiness?.status === 'ready' ? '' : 'warning'}">${esc(`训练建议：${readiness.next_step}`)}</div>` : ''}
+        `;
+      }
+
+      function renderImportAssetSuggestions(items) {
+        if (!importAssetsDatalist) return;
+        importAssetsDatalist.innerHTML = (items || []).map((item) => {
+          const label = `${item.id} · ${item.file_name || item.id}`;
+          return `<option value="${esc(item.id)}" label="${esc(label)}"></option>`;
+        }).join('');
+      }
+
+      function renderList(payload) {
+        const items = payload?.items || [];
+        if (!items.length) return renderEmpty('当前筛选条件下没有样本');
+        return `
+          <div class="text-review-list">
+            ${items.map((item) => `
+              <button class="text-review-item ${selectedSampleId === item.sample_id ? 'active' : ''}" type="button" data-inspection-state-sample="${esc(item.sample_id)}">
+                <div class="text-review-item-head">
+                  <strong>${esc(item.sample_id)}</strong>
+                  <span class="badge">${esc(item.review_status)}</span>
+                </div>
+                <div class="text-review-item-meta">${esc(item.source_file || '-')}</div>
+                <div class="text-review-item-badges">
+                  ${item.asset_id ? `<span class="badge">${esc(`资产 ${item.asset_id}`)}</span>` : ''}
+                  ${item.label_value ? `<span class="badge">${esc(`已标 ${item.label_value}`)}</span>` : '<span class="badge warning">未补标签</span>'}
+                  ${item.split_hint ? `<span class="badge">${esc(item.split_hint)}</span>` : ''}
+                  ${item.label_class ? `<span class="badge">${esc(`原始 ${item.label_class}`)}</span>` : ''}
+                </div>
+              </button>
+            `).join('')}
+          </div>
+        `;
+      }
+
+      function renderDetail(item) {
+        if (!item) {
+          detailWrap.innerHTML = renderEmpty('从左侧选择一个样本开始复核');
+          return;
+        }
+        detailWrap.innerHTML = `
+          <div class="text-review-detail">
+            <div class="grid-two">
+              <div class="text-review-preview">
+                ${currentPreviewUrl ? `<img src="${esc(currentPreviewUrl)}" alt="巡检状态 crop 预览" />` : `<div class="text-review-preview-empty">${renderLoading('加载 crop 预览...')}</div>`}
+              </div>
+              <div class="text-review-preview">
+                ${currentSourcePreviewUrl ? `<img src="${esc(currentSourcePreviewUrl)}" alt="巡检状态原图预览" />` : `<div class="text-review-preview-empty">${renderLoading('加载原图预览...')}</div>`}
+              </div>
+            </div>
+            <form id="inspectionStateReviewForm" class="form-grid">
+              <div class="selection-summary">
+                <strong>${esc(item.sample_id)}</strong>
+                <span>${esc(item.task_label || taskType)}</span>
+                ${item.asset_id ? `<span>${esc(`资产编号 ${item.asset_id}`)}</span>` : ''}
+                <span>${esc(item.source_file || '-')}</span>
+              </div>
+              <label>推荐状态</label>
+              <input name="label_class" value="${esc(item.label_class || '')}" disabled />
+              <label>确认标签</label>
+              <select name="label_value">
+                <option value="">请选择</option>
+                ${(item.label_values || []).map((value) => `<option value="${esc(value)}" ${value === item.label_value ? 'selected' : ''}>${esc(value)}</option>`).join('')}
+              </select>
+              <label>复核状态</label>
+              <select name="review_status">
+                <option value="pending" ${item.review_status === 'pending' ? 'selected' : ''}>待处理</option>
+                <option value="done" ${item.review_status === 'done' ? 'selected' : ''}>已完成</option>
+                <option value="needs_check" ${item.review_status === 'needs_check' ? 'selected' : ''}>待复核</option>
+              </select>
+              <label>复核人</label>
+              <input name="reviewer" value="${esc(item.reviewer || ctx.state.user?.username || '')}" placeholder="可留空，默认使用当前账号" />
+              <label>备注</label>
+              <textarea name="notes" rows="3" placeholder="记录为什么这样判定">${esc(item.notes || '')}</textarea>
+              <div class="row-actions">
+                <button class="primary" type="submit">保存复核</button>
+                <button class="ghost" type="button" data-save-next>保存并下一条</button>
+                <button class="ghost" type="button" data-open-source>打开原图</button>
+              </div>
+              <div id="inspectionStateReviewMsg" class="hint"></div>
+            </form>
+          </div>
+        `;
+        detailWrap.querySelector('[data-open-source]')?.addEventListener('click', () => {
+          if (currentSourcePreviewUrl) window.open(currentSourcePreviewUrl, '_blank', 'noopener');
+        });
+        detailWrap.querySelector('#inspectionStateReviewForm')?.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          await submitReview(event.currentTarget, { moveNext: false });
+        });
+        detailWrap.querySelector('[data-save-next]')?.addEventListener('click', async () => {
+          const form = detailWrap.querySelector('#inspectionStateReviewForm');
+          if (form) await submitReview(form, { moveNext: true });
+        });
+      }
+
+      async function loadPreview(sampleId) {
+        revokePreviewUrl();
+        currentPreviewUrl = await fetchAuthorizedBlobUrl(`/training/inspection-state/${encodeURIComponent(taskType)}/items/${encodeURIComponent(sampleId)}/crop`, ctx.token);
+        try {
+          currentSourcePreviewUrl = await fetchAuthorizedBlobUrl(`/training/inspection-state/${encodeURIComponent(taskType)}/items/${encodeURIComponent(sampleId)}/source`, ctx.token);
+        } catch {
+          currentSourcePreviewUrl = '';
+        }
+      }
+
+      async function selectItem(sampleId) {
+        selectedSampleId = sampleId;
+        const item = currentItems.find((row) => row.sample_id === sampleId);
+        if (!item) {
+          renderDetail(null);
+          return;
+        }
+        setPanel('review');
+        renderDetail(item);
+        try {
+          await loadPreview(sampleId);
+        } catch (error) {
+          ctx.toast(error.message || '加载样本预览失败', 'error');
+        }
+        renderDetail(item);
+        listWrap.innerHTML = renderList({ items: currentItems });
+        bindListButtons();
+      }
+
+      function bindListButtons() {
+        listWrap.querySelectorAll('[data-inspection-state-sample]').forEach((button) => {
+          button.addEventListener('click', async () => {
+            await selectItem(button.getAttribute('data-inspection-state-sample') || '');
+          });
+        });
+      }
+
+      async function loadSummary() {
+        summaryWrap.innerHTML = renderLoading('加载巡检状态复核摘要...');
+        try {
+          const summary = await ctx.get(`/training/inspection-state/${encodeURIComponent(taskType)}/summary`);
+          currentSummary = summary;
+          if (titleEl) titleEl.textContent = `${summary?.task_label || taskType} · 巡检状态复核`;
+          if (descEl) descEl.innerHTML = `浏览 <code>${esc(summary?.task_type || taskType)}</code> 工作区里的样本，补齐 <code>label_value</code> 后导出训练包。`;
+          if (labelFilterInput) {
+            labelFilterInput.innerHTML = `<option value="">全部标签</option>${(summary?.label_values || []).map((value) => `<option value="${esc(value)}">${esc(value)}</option>`).join('')}`;
+          }
+          summaryWrap.innerHTML = renderSummary(summary);
+        } catch (error) {
+          summaryWrap.innerHTML = renderError(error.message || '巡检状态复核摘要加载失败');
+        }
+      }
+
+      async function loadImportAssetSuggestions() {
+        if (!importAssetsDatalist) return;
+        try {
+          const assets = await ctx.get('/assets?asset_type=image&limit=24');
+          recentImageAssets = Array.isArray(assets) ? assets : [];
+          renderImportAssetSuggestions(recentImageAssets);
+        } catch {
+          recentImageAssets = [];
+          renderImportAssetSuggestions([]);
+        }
+      }
+
+      async function loadItems({ preserveSelection = true } = {}) {
+        listWrap.innerHTML = renderLoading('加载待复核样本...');
+        try {
+          const payload = await ctx.get(`/training/inspection-state/${encodeURIComponent(taskType)}/items${toQuery(currentFilters())}`);
+          currentItems = payload?.items || [];
+          if (listMeta) listMeta.textContent = `当前列表 ${currentItems.length} / ${payload?.total ?? currentItems.length}`;
+          listWrap.innerHTML = renderList(payload);
+          bindListButtons();
+          if (!preserveSelection || !currentItems.some((item) => item.sample_id === selectedSampleId)) {
+            const nextItem = currentItems.find((item) => item.review_status !== 'done') || currentItems[0];
+            selectedSampleId = nextItem?.sample_id || '';
+          }
+          if (selectedSampleId) {
+            const item = currentItems.find((row) => row.sample_id === selectedSampleId);
+            if (item && activePanel === 'review') {
+              try {
+                await loadPreview(selectedSampleId);
+              } catch {
+                revokePreviewUrl();
+              }
+              renderDetail(item);
+            }
+          } else {
+            revokePreviewUrl();
+            renderDetail(null);
+          }
+        } catch (error) {
+          listWrap.innerHTML = renderError(error.message || '状态样本列表加载失败');
+        }
+      }
+
+      async function selectRelativeItem(step) {
+        if (!currentItems.length) return;
+        const currentIndex = Math.max(0, currentItems.findIndex((row) => row.sample_id === selectedSampleId));
+        const nextIndex = Math.min(currentItems.length - 1, Math.max(0, currentIndex + step));
+        const nextItem = currentItems[nextIndex];
+        if (!nextItem) return;
+        await selectItem(nextItem.sample_id);
+      }
+
+      async function submitReview(form, { moveNext = false } = {}) {
+        const msg = detailWrap.querySelector('#inspectionStateReviewMsg');
+        const formData = new FormData(form);
+        const payload = {
+          label_value: String(formData.get('label_value') || '').trim(),
+          review_status: String(formData.get('review_status') || 'pending').trim(),
+          reviewer: String(formData.get('reviewer') || '').trim(),
+          notes: String(formData.get('notes') || '').trim(),
+        };
+        try {
+          const result = await ctx.post(`/training/inspection-state/${encodeURIComponent(taskType)}/items/${encodeURIComponent(selectedSampleId)}/review`, payload);
+          if (msg) msg.textContent = `已保存 ${result?.item?.sample_id || selectedSampleId}`;
+          ctx.toast('巡检状态复核已保存');
+          await Promise.all([loadSummary(), loadItems()]);
+          if (moveNext) await selectRelativeItem(1);
+        } catch (error) {
+          if (msg) msg.textContent = error.message || '保存复核失败';
+          ctx.toast(error.message || '保存复核失败', 'error');
+        }
+      }
+
+      async function exportDataset() {
+        if (!exportBtn || !exportMsg) return;
+        setPanel('export');
+        exportBtn.disabled = true;
+        if (exportAssetsBtn) exportAssetsBtn.disabled = true;
+        if (exportTrainingJobBtn) exportTrainingJobBtn.disabled = true;
+        exportMsg.textContent = '正在导出状态训练包...';
+        try {
+          const payload = await ctx.post(`/training/inspection-state/${encodeURIComponent(taskType)}/export-dataset`, {});
+          const trainBundle = payload?.bundles?.train?.zip_path || '-';
+          const validationBundle = payload?.bundles?.validation?.zip_path || '-';
+          exportMsg.textContent = `已导出训练包。train：${trainBundle} · validation：${validationBundle}`;
+          ctx.toast('巡检状态训练包已导出');
+          await loadSummary();
+        } catch (error) {
+          exportMsg.textContent = error.message || '导出训练包失败';
+          ctx.toast(error.message || '导出训练包失败', 'error');
+        } finally {
+          exportBtn.disabled = false;
+          if (exportAssetsBtn) exportAssetsBtn.disabled = false;
+          if (exportTrainingJobBtn) exportTrainingJobBtn.disabled = false;
+        }
+      }
+
+      async function exportAssetsToTraining() {
+        if (!exportAssetsBtn || !exportMsg) return;
+        setPanel('export');
+        exportBtn.disabled = true;
+        exportAssetsBtn.disabled = true;
+        if (exportTrainingJobBtn) exportTrainingJobBtn.disabled = true;
+        exportMsg.textContent = '正在导出并注册训练/验证资产，随后打开训练页...';
+        try {
+          const payload = await ctx.post(`/training/inspection-state/${encodeURIComponent(taskType)}/export-assets`, {});
+          const prefill = payload?.prefill || {};
+          localStorage.setItem(STORAGE_KEYS.prefillTrainingAssetIds, (prefill.train_asset_ids || []).join(', '));
+          localStorage.setItem(STORAGE_KEYS.prefillTrainingValidationAssetIds, (prefill.validation_asset_ids || []).join(', '));
+          if (prefill.dataset_label) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetLabel, prefill.dataset_label);
+          if (prefill.training_dataset_version_id) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetVersionId, prefill.training_dataset_version_id);
+          if (prefill.intended_model_code) localStorage.setItem(STORAGE_KEYS.prefillTrainingTargetModelCode, prefill.intended_model_code);
+          exportMsg.textContent = `已注册训练资产 ${payload?.training_asset?.asset_id || '-'} / 验证资产 ${payload?.validation_asset?.asset_id || '-'}。训练页已预填这些资产编号，但还需要你手动点“创建训练作业”。`;
+          ctx.toast('训练资产已导出，训练页已预填');
+          ctx.navigate('training');
+        } catch (error) {
+          exportMsg.textContent = error.message || '注册训练资产失败';
+          ctx.toast(error.message || '注册训练资产失败', 'error');
+        } finally {
+          exportBtn.disabled = false;
+          exportAssetsBtn.disabled = false;
+          if (exportTrainingJobBtn) exportTrainingJobBtn.disabled = false;
+        }
+      }
+
+      async function exportTrainingJob() {
+        if (!exportTrainingJobBtn || !exportMsg) return;
+        setPanel('export');
+        exportBtn.disabled = true;
+        if (exportAssetsBtn) exportAssetsBtn.disabled = true;
+        exportTrainingJobBtn.disabled = true;
+        exportMsg.textContent = `正在导出资产并直接创建 ${taskType} 训练作业...`;
+        try {
+          const payload = await ctx.post(`/training/inspection-state/${encodeURIComponent(taskType)}/export-training-job`, {});
+          const job = payload?.job || {};
+          if (job.id) localStorage.setItem(STORAGE_KEYS.focusTrainingJobId, job.id);
+          exportMsg.textContent = `已创建训练作业 ${job.job_code || '-'} · ${job.target_model_code || taskType}:${job.target_version || '-'}，即将跳转训练中心。`;
+          ctx.toast('巡检状态训练作业已创建');
+          ctx.navigate('training');
+        } catch (error) {
+          exportMsg.textContent = error.message || '创建训练作业失败';
+          ctx.toast(error.message || '创建训练作业失败', 'error');
+        } finally {
+          exportBtn.disabled = false;
+          if (exportAssetsBtn) exportAssetsBtn.disabled = false;
+          exportTrainingJobBtn.disabled = false;
+        }
+      }
+
+      async function exportReviewQueue() {
+        if (!exportMsg) return;
+        setPanel('export');
+        exportMsg.textContent = '正在导出状态复核队列...';
+        try {
+          const url = await fetchAuthorizedBlobUrl(`/training/inspection-state/${encodeURIComponent(taskType)}/export-review-queue`, ctx.token);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `${taskType}_state_review_queue.csv`;
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          exportMsg.textContent = '状态复核队列已导出，可离线填写 label_value 后再导入。';
+          ctx.toast('状态复核队列已导出');
+        } catch (error) {
+          exportMsg.textContent = error.message || '导出状态复核队列失败';
+          ctx.toast(error.message || '导出状态复核队列失败', 'error');
+        }
+      }
+
+      async function exportReviewPack() {
+        if (!exportMsg) return;
+        setPanel('export');
+        exportMsg.textContent = '正在导出人工复核包...';
+        try {
+          const url = await fetchAuthorizedBlobUrl(`/training/inspection-state/${encodeURIComponent(taskType)}/export-review-pack`, ctx.token);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = `${taskType}_state_review_pack.zip`;
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          exportMsg.textContent = '人工复核包已导出，内含 CSV、crop 和原图。';
+          ctx.toast('人工复核包已导出');
+        } catch (error) {
+          exportMsg.textContent = error.message || '导出人工复核包失败';
+          ctx.toast(error.message || '导出人工复核包失败', 'error');
+        }
+      }
+
+      async function submitImportReviews({ preview }) {
+        if (!importReviewsFileInput?.files?.length || !exportMsg) {
+          exportMsg.textContent = '请先选择一份离线复核 CSV。';
+          return;
+        }
+        setPanel('export');
+        const file = importReviewsFileInput.files[0];
+        const formData = new FormData();
+        formData.set('file', file);
+        exportMsg.textContent = preview ? '正在预检查离线复核 CSV...' : '正在导入离线复核 CSV...';
+        try {
+          const payload = await ctx.postForm(
+            `/training/inspection-state/${encodeURIComponent(taskType)}/${preview ? 'preview-import-reviews' : 'import-reviews'}`,
+            formData,
+          );
+          const changed = Number(payload?.would_update_rows ?? payload?.updated_rows ?? 0);
+          exportMsg.textContent = preview
+            ? `预检查完成：匹配 ${payload?.matched_rows ?? 0} 条，将更新 ${changed} 条，跳过 ${payload?.skipped_rows ?? 0} 条。`
+            : `导入完成：更新 ${payload?.updated_rows ?? 0} 条，跳过 ${payload?.skipped_rows ?? 0} 条。`;
+          ctx.toast(preview ? '预检查完成' : '离线复核已导入');
+          if (!preview) {
+            await Promise.all([loadSummary(), loadItems({ preserveSelection: false })]);
+          }
+        } catch (error) {
+          exportMsg.textContent = error.message || (preview ? '预检查离线复核 CSV 失败' : '导入离线复核 CSV 失败');
+          ctx.toast(error.message || (preview ? '预检查离线复核 CSV 失败' : '导入离线复核 CSV 失败'), 'error');
+        }
+      }
+
+      async function importAssetsToWorkspace() {
+        if (!importAssetIdsInput || !importMsg) return;
+        const assetIds = splitCsv(importAssetIdsInput.value || '');
+        const note = String(importNoteInput?.value || '').trim();
+        try {
+          const payload = await ctx.post(`/training/inspection-state/${encodeURIComponent(taskType)}/import-assets`, {
+            asset_ids: assetIds,
+            note,
+          });
+          importMsg.textContent = `已导入 ${payload?.imported_rows ?? 0} 条样本；跳过 ${payload?.skipped_asset_ids?.length ?? 0} 条已存在或不可导入的资产。`;
+          ctx.toast('状态样本已导入工作区');
+          setPanel('queue');
+          await Promise.all([loadSummary(), loadItems({ preserveSelection: false })]);
+        } catch (error) {
+          importMsg.textContent = error.message || '导入现有资产失败';
+          ctx.toast(error.message || '导入现有资产失败', 'error');
+        }
+      }
+
+      filterForm?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        await loadItems({ preserveSelection: false });
+      });
+      importForm?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        await importAssetsToWorkspace();
+      });
+      presetTodoBtn?.addEventListener('click', async () => {
+        statusInput.value = '';
+        onlyMissingLabelInput.checked = true;
+        searchInput.value = '';
+        labelFilterInput.value = '';
+        await loadItems({ preserveSelection: false });
+      });
+      presetNeedsCheckBtn?.addEventListener('click', async () => {
+        statusInput.value = 'needs_check';
+        onlyMissingLabelInput.checked = false;
+        searchInput.value = '';
+        labelFilterInput.value = '';
+        await loadItems({ preserveSelection: false });
+      });
+      presetResetBtn?.addEventListener('click', async () => {
+        statusInput.value = '';
+        splitInput.value = '';
+        labelFilterInput.value = '';
+        onlyMissingLabelInput.checked = false;
+        searchInput.value = '';
+        await loadItems({ preserveSelection: false });
+      });
+      exportBtn?.addEventListener('click', exportDataset);
+      exportAssetsBtn?.addEventListener('click', exportAssetsToTraining);
+      exportTrainingJobBtn?.addEventListener('click', exportTrainingJob);
+      exportReviewQueueBtn?.addEventListener('click', exportReviewQueue);
+      exportReviewPackBtn?.addEventListener('click', exportReviewPack);
+      previewImportBtn?.addEventListener('click', () => {
+        if (!importReviewsFileInput?.files?.length) {
+          importReviewsFileInput?.click();
+          return;
+        }
+        submitImportReviews({ preview: true });
+      });
+      importReviewsBtn?.addEventListener('click', () => {
+        if (!importReviewsFileInput?.files?.length) {
+          importReviewsFileInput?.click();
+          return;
+        }
+        submitImportReviews({ preview: false });
+      });
+      importReviewsFileInput?.addEventListener('change', () => {
+        if (!importReviewsFileInput?.files?.length || !exportMsg) return;
+        exportMsg.textContent = `已选择 ${importReviewsFileInput.files[0].name}，可先预检查再正式导入。`;
+      });
+      openTrainingBtn?.addEventListener('click', () => ctx.navigate('training'));
+      panelTabs.forEach((btn) => {
+        btn.addEventListener('click', () => {
+          setPanel(btn.getAttribute('data-inspection-state-panel-tab') || 'overview');
+        });
+      });
+
+      root.setAttribute('tabindex', '-1');
+      root.addEventListener('keydown', async (event) => {
+        const target = event.target;
+        const isTextEditing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
+        if (!event.altKey || (isTextEditing && !event.ctrlKey && !event.metaKey)) return;
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          await selectRelativeItem(-1);
+        }
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          await selectRelativeItem(1);
+        }
+      });
+
+      await Promise.all([loadSummary(), loadItems({ preserveSelection: false }), loadImportAssetSuggestions()]);
       setPanel(activePanel);
       root.focus();
     },
@@ -11907,6 +12674,7 @@ const factories = {
   training: pageTraining,
   carNumberLabeling: pageCarNumberLabeling,
   inspectionOcrLabeling: pageInspectionOcrLabeling,
+  inspectionStateLabeling: pageInspectionStateLabeling,
   pipelines: pagePipelines,
   tasks: pageTasks,
   taskDetail: pageTaskDetail,

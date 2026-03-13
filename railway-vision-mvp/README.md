@@ -54,6 +54,12 @@ Vistral 把资产准备、供应商协作、模型治理、任务执行、结果
 - 训练中心可直接从候选模型发起“直接验证候选模型”，只需补 1-3 张单图/视频资产，不必先手动切到任务中心再录入 `model_id`
 - 结果中心会额外展示“验证结论卡”，汇总样本数、低置信度数、建议动作，方便判断是否继续审批/发布
 - 结果中心还支持“结果回灌工作台”：基于当前 `task_id` 一键导出训练/验证数据集版本，并自动预填训练中心，不必再手抄 `asset_id / dataset_version_id`
+- 巡检 OCR 工作区摘要现在支持从 `manifest.csv` 重建，避免 `summary.json` 长期落后于真实复核状态：
+
+```bash
+cd <repo-root>
+python3 docker/scripts/refresh_inspection_workspace_summaries.py
+```
 
 ## 当前项目状态
 
@@ -368,6 +374,30 @@ python3 docker/scripts/seed_inspection_ocr_from_car_number_truth.py
 - inspection OCR 当前还带有默认质量门禁：
   - 如果工作区仍含代理回灌真值，默认会阻止导出训练包、导出资产和直接创建训练作业
   - 只有显式勾选 `允许带代理真值继续训练（仅冷启动）` 才会放行
+- `door_lock_state_detect / connector_defect_detect` 现在也已经具备正式状态复核闭环：
+  - 训练中心工作区卡片可直接点 `打开状态复核`
+  - 复核页支持：
+    - 导入现有资产
+    - 查看工作区摘要
+    - 查看样本列表
+    - 查看 crop / 原图
+    - 保存状态标签
+    - 导出状态复核队列
+    - 导出人工复核包
+    - 预检查离线复核 CSV
+    - 导入离线复核 CSV
+    - 导出训练包
+    - 导出训练资产
+    - 直接创建训练作业
+  - 当前真实状态已经推进到：
+    - `door_lock_state_detect.row_count = 2`
+    - `connector_defect_detect.row_count = 2`
+    - 两类任务的 `training_readiness.status = ready`
+    - 已各自产生首条真实训练作业与待验证模型
+  - 但状态复核页现在已经可以直接把平台里的真实图片资产导入工作区：
+    - `POST /training/inspection-state/{task_type}/import-assets`
+    - 不再需要线下手工改 `manifest.csv` 才能起步
+  - 说明这两类任务已经不再缺产品链路，也不再缺第一批真实状态样本；下一步重点转成继续扩样本和做待验证模型审批
 
 ### 方式C7：把巡检任务复核清单打成训练 / 验证包
 

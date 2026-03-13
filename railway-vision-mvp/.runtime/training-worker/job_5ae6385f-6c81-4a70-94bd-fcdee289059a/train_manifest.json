@@ -1,0 +1,64 @@
+[
+  {
+    "asset": {
+      "id": "4e08dca2-7de2-4356-a55f-c70f0b838ff6",
+      "file_name": "door_lock_state_detect_train_bundle.zip",
+      "asset_type": "archive",
+      "sensitivity_level": "L2",
+      "checksum": "9f38da8813e692d16a03ea48e9873322c6a01edc5a0c26cfb58a849e72d10eaf",
+      "meta": {
+        "size": 32708,
+        "split": "train",
+        "use_case": "railcar-door-lock-state-detect",
+        "extension": ".zip",
+        "task_type": "door_lock_state_detect",
+        "task_label": "门锁状态识别",
+        "dataset_key": "local-door-lock-state-train",
+        "archive_kind": "zip_dataset",
+        "accepted_rows": 2,
+        "asset_purpose": "training",
+        "dataset_label": "door_lock_state_detect-train",
+        "label_sources": {
+          "label_value": 2
+        },
+        "generated_from": "door_lock_state_detect_labeling_review",
+        "dataset_version": "v1",
+        "reviewer_counts": {
+          "platform_admin": 2
+        },
+        "archive_max_depth": 1,
+        "archive_file_count": 4,
+        "dataset_version_id": "9419937b-28ea-4012-9211-c110effc8a59",
+        "archive_entry_count": 4,
+        "archive_image_count": 1,
+        "archive_video_count": 0,
+        "dataset_source_type": "inspection_state_export",
+        "intended_model_code": "door_lock_state_detect",
+        "archive_resource_count": 1,
+        "archive_directory_count": 0,
+        "archive_preview_members": [
+          "images/59773299-54d8-4ae3-aa62-bca07fa5e657.jpg"
+        ],
+        "archive_uncompressed_bytes": 33500,
+        "archive_ignored_entry_count": 3
+      },
+      "purpose": "training"
+    },
+    "path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_5ae6385f-6c81-4a70-94bd-fcdee289059a/train/train_1_4e08dca2-7de2-4356-a55f-c70f0b838ff6_door_lock_state_detect_train_bundle.zip",
+    "size_bytes": 32708,
+    "archive_path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_5ae6385f-6c81-4a70-94bd-fcdee289059a/train/train_1_4e08dca2-7de2-4356-a55f-c70f0b838ff6_door_lock_state_detect_train_bundle.zip",
+    "extracted_dir": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_5ae6385f-6c81-4a70-94bd-fcdee289059a/train/train_1_4e08dca2-7de2-4356-a55f-c70f0b838ff6_door_lock_state_detect_train_bundle_dataset",
+    "members": [
+      {
+        "relative_path": "images/59773299-54d8-4ae3-aa62-bca07fa5e657.jpg",
+        "path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_5ae6385f-6c81-4a70-94bd-fcdee289059a/train/train_1_4e08dca2-7de2-4356-a55f-c70f0b838ff6_door_lock_state_detect_train_bundle_dataset/images/59773299-54d8-4ae3-aa62-bca07fa5e657.jpg",
+        "size_bytes": 32308
+      }
+    ],
+    "resource_count": 1,
+    "ignored_entry_count": 3,
+    "archive_preview_members": [
+      "images/59773299-54d8-4ae3-aa62-bca07fa5e657.jpg"
+    ]
+  }
+]

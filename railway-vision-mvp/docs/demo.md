@@ -310,6 +310,34 @@ docker compose -f docker/docker-compose.yml exec backend sh -lc '
       - README
       - crops
       - sources
+- 状态 / 缺陷两类任务这轮也已经进入正式产品闭环：
+  - `door_lock_state_detect / connector_defect_detect` 的训练中心卡片可直接点 `打开状态复核`
+  - 状态复核页支持：
+    - 导入现有资产
+    - 查看工作区摘要
+    - 查看样本列表
+    - 查看 crop / 原图
+    - 保存状态标签
+    - 导出状态复核队列
+    - 导出人工复核包
+    - 预检查离线复核 CSV
+    - 导入离线复核 CSV
+    - 导出训练包
+    - 导出训练资产
+    - 直接创建训练作业
+  - 当前真实状态已经推进到：
+    - `door_lock_state_detect.row_count = 2`
+    - `connector_defect_detect.row_count = 2`
+    - 两类任务的 `training_readiness.status = ready`
+    - 已各自产生首条真实训练作业与待验证模型
+  - 训练中心工作区卡片和状态复核页现在还会直接显示：
+    - `优先复核样本`
+    - `训练就绪`
+    - 建议采集条件
+  - 但状态复核页现在已经可以直接把平台里的真实图片资产导入工作区：
+    - `POST /training/inspection-state/{task_type}/import-assets`
+    - 也就是说这两类任务已经不再需要线下手工改 `manifest.csv` 才能起步
+  - 说明状态 / 缺陷类任务现在已经不再缺工具和入口，也不再缺第一批真实样本；下一步重点转成继续扩样本和做待验证模型审批
 - 车号 OCR 现在还额外对齐了“库内 45° 侧拍车身标记识别”这一类机器狗/轮足机器人场景，场景配置已预留：
   - `车号`
   - `定检标记`
@@ -482,8 +510,19 @@ python3 docker/scripts/generate_inspection_ocr_suggestions.py --task-type perfor
     - `优先确认高质量建议`
     - `导出高质量建议队列`
     - `导出高质量建议包`
+    - `预检查批量确认`
+    - `批量确认高质量建议`
 - 这些建议现在可以作为人工起步参考
 - 但正式训练仍应继续以人工确认的 `final_text` 为主，不能把自动建议直接当真值
+- 当前 inspection / performance OCR 的训练就绪状态都会直接显示：
+  - `可正常训练`
+  - `仅冷启动可训练`
+  - `仍不可导出`
+- 当前真实状态仍是：
+  - `inspection_mark_ocr = cold_start_only`
+  - `performance_mark_ocr = cold_start_only`
+  - 原因不是缺页面或缺脚手架，而是还存在 `proxy_seeded` 样本待替换
+- 也就是说，这条线接下来最该做的不是继续补工具，而是继续把代理回灌样本替换成真实 `final_text`
 
 ## 1.5.5 把巡检任务复核清单打成训练包
 

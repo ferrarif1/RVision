@@ -1,0 +1,64 @@
+[
+  {
+    "asset": {
+      "id": "ecd45b56-fa9f-4f65-b4b2-7e2691a02aed",
+      "file_name": "connector_defect_detect_validation_bundle.zip",
+      "asset_type": "archive",
+      "sensitivity_level": "L2",
+      "checksum": "618dd2ce32ec324407a208eeb75ad27c8f9cd4fa281b3543c0531844acf3b898",
+      "meta": {
+        "size": 33621,
+        "split": "validation",
+        "use_case": "railcar-connector-defect-detect",
+        "extension": ".zip",
+        "task_type": "connector_defect_detect",
+        "task_label": "连接件缺陷识别",
+        "dataset_key": "local-connector-defect-validation",
+        "archive_kind": "zip_dataset",
+        "accepted_rows": 2,
+        "asset_purpose": "validation",
+        "dataset_label": "connector_defect_detect-validation",
+        "label_sources": {
+          "label_value": 2
+        },
+        "generated_from": "connector_defect_detect_labeling_review",
+        "dataset_version": "v2",
+        "reviewer_counts": {
+          "platform_admin": 2
+        },
+        "archive_max_depth": 1,
+        "archive_file_count": 4,
+        "dataset_version_id": "659ce359-c487-406d-a848-e78bb58ae4eb",
+        "archive_entry_count": 4,
+        "archive_image_count": 1,
+        "archive_video_count": 0,
+        "dataset_source_type": "inspection_state_export",
+        "intended_model_code": "connector_defect_detect",
+        "archive_resource_count": 1,
+        "archive_directory_count": 0,
+        "archive_preview_members": [
+          "images/f85bce6f-eed3-43dc-a2e3-441214c3fb98.jpg"
+        ],
+        "archive_uncompressed_bytes": 34661,
+        "archive_ignored_entry_count": 3
+      },
+      "purpose": "validation"
+    },
+    "path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_d8ae928e-5a29-4f93-ad71-e9a084744b28/val/val_1_ecd45b56-fa9f-4f65-b4b2-7e2691a02aed_connector_defect_detect_validation_bundle.zip",
+    "size_bytes": 33621,
+    "archive_path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_d8ae928e-5a29-4f93-ad71-e9a084744b28/val/val_1_ecd45b56-fa9f-4f65-b4b2-7e2691a02aed_connector_defect_detect_validation_bundle.zip",
+    "extracted_dir": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_d8ae928e-5a29-4f93-ad71-e9a084744b28/val/val_1_ecd45b56-fa9f-4f65-b4b2-7e2691a02aed_connector_defect_detect_validation_bundle_dataset",
+    "members": [
+      {
+        "relative_path": "images/f85bce6f-eed3-43dc-a2e3-441214c3fb98.jpg",
+        "path": "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/.runtime/training-worker/job_d8ae928e-5a29-4f93-ad71-e9a084744b28/val/val_1_ecd45b56-fa9f-4f65-b4b2-7e2691a02aed_connector_defect_detect_validation_bundle_dataset/images/f85bce6f-eed3-43dc-a2e3-441214c3fb98.jpg",
+        "size_bytes": 33406
+      }
+    ],
+    "resource_count": 1,
+    "ignored_entry_count": 3,
+    "archive_preview_members": [
+      "images/f85bce6f-eed3-43dc-a2e3-441214c3fb98.jpg"
+    ]
+  }
+]
