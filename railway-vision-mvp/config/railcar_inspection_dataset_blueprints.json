@@ -6,6 +6,9 @@
       "dataset_kind": "ocr_text",
       "dataset_key_prefix": "local-inspection-mark-ocr",
       "annotation_format": "vistral_local_ocr_text_v1",
+      "training_readiness": {
+        "min_manual_rows_for_ready": 8
+      },
       "sample_target_min": 200,
       "sample_target_recommended": 500,
       "capture_profile": {
@@ -68,6 +71,9 @@
       "dataset_kind": "ocr_text",
       "dataset_key_prefix": "local-performance-mark-ocr",
       "annotation_format": "vistral_local_ocr_text_v1",
+      "training_readiness": {
+        "min_manual_rows_for_ready": 8
+      },
       "sample_target_min": 200,
       "sample_target_recommended": 500,
       "capture_profile": {

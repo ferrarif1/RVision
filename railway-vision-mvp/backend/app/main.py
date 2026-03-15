@@ -3,7 +3,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import assets, audit, auth, dashboard, devices, edge, models, pipelines, results, settings as settings_api, tasks, training, users
+from app.api import assistant, assets, audit, auth, dashboard, devices, edge, models, pipelines, results, settings as settings_api, tasks, training, users
 from app.core.brand import BRAND_TAGLINE
 from app.core.config import get_settings
 from app.db.database import SessionLocal
@@ -45,6 +45,7 @@ def health():
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(settings_api.router)
+app.include_router(assistant.router)
 app.include_router(models.router)
 app.include_router(pipelines.router)
 app.include_router(assets.router)

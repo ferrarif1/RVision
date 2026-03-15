@@ -145,3 +145,54 @@ WorkerError: POST /training/workers/heartbeat failed (502): <html>
 </body>
 </html>
 
+Traceback (most recent call last):
+  File "/Users/zhangyuanyi/Library/Python/3.9/lib/python/site-packages/httpx/_transports/default.py", line 101, in map_httpcore_exceptions
+    yield
+  File "/Users/zhangyuanyi/Library/Python/3.9/lib/python/site-packages/httpx/_transports/default.py", line 250, in handle_request
+    resp = self._pool.handle_request(req)
+  File "/Users/zhangyuanyi/Library/Python/3.9/lib/python/site-packages/httpcore/_sync/connection_pool.py", line 256, in handle_request
+    raise exc from None
+  File "/Users/zhangyuanyi/Library/Python/3.9/lib/python/site-packages/httpcore/_sync/connection_pool.py", line 236, in handle_request
+    response = connection.handle_request(
+  File "/Users/zhangyuanyi/Library/Python/3.9/lib/python/site-packages/httpcore/_sync/connection.py", line 103, in handle_request
+    return self._connection.handle_request(request)
+  File "/Users/zhangyuanyi/Library/Python/3.9/lib/python/site-packages/httpcore/_sync/http11.py", line 136, in handle_request
+    raise exc
+  File "/Users/zhangyuanyi/Library/Python/3.9/lib/python/site-packages/httpcore/_sync/http11.py", line 106, in handle_request
+    ) = self._receive_response_headers(**kwargs)
+  File "/Users/zhangyuanyi/Library/Python/3.9/lib/python/site-packages/httpcore/_sync/http11.py", line 177, in _receive_response_headers
+    event = self._receive_event(timeout=timeout)
+  File "/Users/zhangyuanyi/Library/Python/3.9/lib/python/site-packages/httpcore/_sync/http11.py", line 231, in _receive_event
+    raise RemoteProtocolError(msg)
+httpcore.RemoteProtocolError: Server disconnected without sending a response.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 1166, in <module>
+    main()
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 1160, in main
+    runner.run()
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 1056, in run
+    self.heartbeat()
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 759, in heartbeat
+    self._request_json(
+  File "/Users/zhangyuanyi/Downloads/RVision/railway-vision-mvp/deploy/training-worker/../../docker/scripts/training_worker_runner.py", line 753, in _request_json
+    resp = self.client.request(method, path, headers=final_headers, **kwargs)
+  File "/Users/zhangyuanyi/Library/Python/3.9/lib/python/site-packages/httpx/_client.py", line 825, in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+  File "/Users/zhangyuanyi/Library/Python/3.9/lib/python/site-packages/httpx/_client.py", line 914, in send
+    response = self._send_handling_auth(
+  File "/Users/zhangyuanyi/Library/Python/3.9/lib/python/site-packages/httpx/_client.py", line 942, in _send_handling_auth
+    response = self._send_handling_redirects(
+  File "/Users/zhangyuanyi/Library/Python/3.9/lib/python/site-packages/httpx/_client.py", line 979, in _send_handling_redirects
+    response = self._send_single_request(request)
+  File "/Users/zhangyuanyi/Library/Python/3.9/lib/python/site-packages/httpx/_client.py", line 1014, in _send_single_request
+    response = transport.handle_request(request)
+  File "/Users/zhangyuanyi/Library/Python/3.9/lib/python/site-packages/httpx/_transports/default.py", line 250, in handle_request
+    resp = self._pool.handle_request(req)
+  File "/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9/contextlib.py", line 135, in __exit__
+    self.gen.throw(type, value, traceback)
+  File "/Users/zhangyuanyi/Library/Python/3.9/lib/python/site-packages/httpx/_transports/default.py", line 118, in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+httpx.RemoteProtocolError: Server disconnected without sending a response.

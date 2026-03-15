@@ -1,8 +1,8 @@
-# 铁路货车巡检任务数据工作区说明（2026-03-13）
+# 铁路货车巡检任务数据工作区说明（2026-03-14）
 
 - Owner: Engineering / Product
 - Status: In Progress
-- Last Updated: 2026-03-13 17:10 CST
+- Last Updated: 2026-03-14 11:10 CST
 - Scope:
   - 说明机器人库内巡检任务族的数据工作区模板、字段设计、训练包生成方式、人工替换流程，以及训练中心里的准备度展示
 - Non-goals:
@@ -124,6 +124,9 @@ OCR 任务额外脚本：
   - `suggestion_rows = 59`
   - `high_quality_suggestion_rows = 51`
   - `high_quality_review_candidate_rows = 51`
+  - `readiness_action_plan.title = 先处理训练阻断样本`
+  - `readiness_action_plan.projected_status_after_blockers = ready`
+  - `readiness_action_plan.projected_manual_reviewed_rows = 9`
   - `reviewed_rows = 9`
   - `manual_reviewed_rows = 3`
   - `proxy_seeded_rows = 6`
@@ -193,6 +196,11 @@ OCR 任务额外脚本：
 - `inspection_mark_ocr.high_quality_suggestion_rows = 51`
 - `performance_mark_ocr.high_quality_suggestion_rows = 45`
 
+当前训练阻断样本统计：
+
+- `inspection_mark_ocr.readiness_blocker_rows = 6`
+- `performance_mark_ocr.readiness_blocker_rows = 6`
+
 ### 6.3 通用复核页
 
 当前 inspection/performance OCR 均可进入统一复核页，支持：
@@ -212,7 +220,9 @@ OCR 任务额外脚本：
 
 - 导出代理替换队列 CSV
 - 导出高质量建议队列 CSV
+- 导出训练阻断样本队列 CSV
 - 导出 review pack ZIP
+- 导出训练阻断样本 pack ZIP
 - 高质量建议批量预检查
 - 高质量建议批量确认
 - 预检查 CSV 导入
@@ -225,6 +235,47 @@ OCR 任务额外脚本：
 3. 再点 `批量确认高质量建议`
 
 这样 inspection/performance OCR 不再只能逐条点保存，可以先把高质量建议队列快速转成首批人工确认真值。
+
+### 6.4.1 训练阻断样本工作流
+
+当前 inspection/performance OCR 复核页已经把“真正阻断正式训练的样本”独立成正式工作流：
+
+- `仅看训练阻断样本`
+- `优先处理训练阻断样本`
+- `导出训练阻断队列`
+- `导出训练阻断包`
+
+后端同时提供：
+
+- `GET /training/inspection-ocr/{task_type}/export-readiness-blocker-queue`
+- `GET /training/inspection-ocr/{task_type}/export-readiness-blocker-pack`
+
+这批样本当前主要对应 `proxy_seeded_truth`，也就是仍带代理回灌真值、会直接阻断“可正常训练”的样本。
+
+### 6.4.2 训练就绪行动计划
+
+当前 inspection/performance OCR 摘要区和训练中心工作区卡片不再只显示 `cold_start_only`，还会直接给出行动计划：
+
+- 当前最优先做什么
+- 处理完训练阻断样本后，预计会不会进入 `ready`
+- 预计人工真值会提升到多少
+- 处理完阻断样本后还差多少条人工真值
+
+`inspection_mark_ocr` 当前真实返回：
+
+- `readiness_action_plan.title = 先处理训练阻断样本`
+- `readiness_action_plan.projected_status_after_blockers = ready`
+- `readiness_action_plan.projected_manual_reviewed_rows = 9`
+- `readiness_action_plan.remaining_manual_rows_after_blockers = 0`
+- 训练阻断样本现在还支持一键批量处理：
+  - `preview-resolve-readiness-blockers`
+  - `resolve-readiness-blockers`
+- live smoke：
+  - 预检查前 2 条阻断样本：`would_update_rows = 2`
+  - 正式处理后：`proxy_seeded_rows 6 -> 4`、`manual_reviewed_rows 3 -> 5`
+  - 验证后已恢复工作区基线
+
+这意味着当前主问题已经被系统压成单一路径：先处理完这 6 条阻断样本，再进入正式训练。
 
 ### 6.5 训练包与训练作业
 
@@ -249,7 +300,7 @@ inspection/performance OCR 当前默认是“安全优先”：
 
 ## 6.7 状态类任务当前已具备的闭环
 
-`door_lock_state_detect / connector_defect_detect` 当前虽然还没有真实样本，但工具链已经完整打通：
+`door_lock_state_detect / connector_defect_detect` 当前已经从“工具链完整”推进到“首批真实样本 + 首条真实训练作业”：
 
 - `GET /training/inspection-state/{task_type}/summary`
 - `GET /training/inspection-state/{task_type}/items`
@@ -279,32 +330,24 @@ inspection/performance OCR 当前默认是“安全优先”：
 - 导出训练资产
 - 直接创建训练作业
 
-当前真实 smoke 结果是：
+当前真实结果是：
 
-- `door_lock_state_detect.summary -> row_count = 0`
-- `connector_defect_detect.summary -> row_count = 0`
-- `POST /training/inspection-state/door_lock_state_detect/import-assets` 已真实返回：
-  - `imported_rows = 1`
-  - `skipped_asset_ids = []`
-  - `items[0].asset_id` 为真实图片资产编号
-  - 验证后已回滚 manifest/summary，当前基线仍保持 `row_count = 0`
-- `GET /training/inspection-state/door_lock_state_detect/export-review-queue` 已真实返回：
-  - `200 text/csv`
-- `GET /training/inspection-state/door_lock_state_detect/export-review-pack` 已真实返回：
-  - `200 application/zip`
-  - ZIP 内包含：
-    - `state_review_queue.csv`
-    - `README.txt`
-    - `sources/`
-- `POST /training/inspection-state/door_lock_state_detect/preview-import-reviews` 已真实返回：
-  - `would_update_rows = 1`
-- `POST /training/inspection-state/door_lock_state_detect/import-reviews` 已真实返回：
-  - `updated_rows = 1`
-  - 验证后已回滚 manifest/summary，当前基线仍保持 `row_count = 0`
-- 默认导出训练包会返回结构化阻断：
-  - `inspection_state_dataset_not_enough_rows`
+- `door_lock_state_detect`
+  - `row_count = 2`
+  - `reviewed_rows = 2`
+  - `training_readiness.status = ready`
+  - 首条真实训练作业：`train-bbab47f859`
+  - 作业状态：`SUCCEEDED`
+  - 待验证模型：`door_lock_state_detect:v20260313.085312.fb88`
+- `connector_defect_detect`
+  - `row_count = 2`
+  - `reviewed_rows = 2`
+  - `training_readiness.status = ready`
+  - 首条真实训练作业：`train-80b794db2e`
+  - 作业状态：`SUCCEEDED`
+  - 待验证模型：`connector_defect_detect:v20260313.085554.827f`
 
-所以这条线已经从“缺工具”推进到了“只缺真实样本”。
+所以这条线已经从“缺工具 / 缺真实样本”推进到了“已跑出首条真实训练闭环”。
 
 ## 7. 当前真正阻断点
 

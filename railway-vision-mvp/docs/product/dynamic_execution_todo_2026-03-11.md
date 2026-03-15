@@ -1,14 +1,15 @@
-# 动态待办清单（2026-03-13）
+# 动态待办清单（2026-03-14）
 
 - Owner: Engineering
 - Status: In Execution
-- Last Updated: 2026-03-13 17:10 CST
+- Last Updated: 2026-03-14 13:05 CST
 - Scope: 当前真实执行面板。只保留“仍未完成 / 正在推进 / 已验证完成”的事项。
 - Source of Truth:
   - [当前真实执行盘点](./current_execution_backlog_2026-03-10.md)
   - [真实运行审计](../qa/live_chain_audit_2026-03-10.md)
   - [页面级走查清单](../qa/browser_walkthrough_checklist_2026-03-11.md)
   - [巡检任务数据工作区](./railcar_inspection_data_workspace_2026-03-12.md)
+  - [智能引导 / LLM 工作台](./intelligent_guide_llm_workbench_2026-03-14.md)
 
 ## 使用规则
 
@@ -18,6 +19,8 @@
   - 更新相关业务/QA文档
   - 标记完成项为删除线
 - 只记录当前真实能力，不保留重复里程碑和过时状态。
+- 智能引导 / LLM 只能做“建议、预填、导航、可选自动调整”，不能取代手动控制。
+- 任何涉及模型、代码、参数、训练规格的自动调整，都必须保留显式人工编辑入口。
 
 ## 当前平台状态
 
@@ -99,6 +102,17 @@
   - ~~要求补材料~~
   - ~~驳回模型~~
   - ~~导出证据包~~
+
+### ~~T8. 智能引导 / LLM 入口~~
+
+- Priority: P1
+- Status: Done
+- Result:
+  - ~~新增独立 `智能引导` 入口，不再把“上传图片、选模型、问下一步”硬塞进任务页~~
+  - ~~支持 `API 模式 / 本地模型模式` 两种入口~~
+  - ~~平台内置精选 10 个开源本地模型，并支持直接下载 / 查看下载任务 / 取消下载~~
+  - ~~用户输入目标、资产、模型或任务类型后，可直接获得下一步引导：任务验证 / 训练准备 / 审批 / 发布~~
+  - ~~跨页面动作支持预填参数和跳转，不需要用户自己重新找入口~~
 
 ## 当前唯一持续主线
 
@@ -225,6 +239,7 @@
 - Status: Next
 - Why:
   - 当前唯一真正阻断 inspection/performance OCR 继续迈进的就是 `proxy_seeded` 样本仍未替换完。
+  - 系统现在已经会明确告诉用户：先处理训练阻断样本，处理完后预计可直接进入 `ready`。
 - Done When:
   - `inspection_mark_ocr.proxy_seeded_rows < 6`
   - `performance_mark_ocr.proxy_seeded_rows < 6`
@@ -242,6 +257,28 @@
   - 新待验证模型入库
   - 审批工作台里 `proxy_truth_risk` 弱化或数据比例下降
 
+### N4. 智能引导保留人工控制与可选自动调整
+
+- Priority: P1
+- Status: In Progress
+- Why:
+  - 智能引导已经成为正式入口，但不能演变成黑箱代理。
+  - 用户明确要求：LLM 自动调整是可选项，必须同时保留手动调整模型、代码、参数的能力。
+- Scope:
+  - 智能引导页明确区分：
+    - 仅给建议
+    - 自动预填
+    - 可选自动调整
+  - 训练、任务、模型、流水线相关跳转页必须保留：
+    - 手动选模型
+    - 手动改参数
+    - 手动改代码 / 算法配置
+  - 自动调整过的内容要可见、可撤销、可改写
+- Done When:
+  - 智能引导页与后续承接页都明确存在手动入口
+  - 自动生成的参数 / 代码 / 配置会带来源标记
+  - 用户可以在提交前显式覆盖和撤销
+
 ### ~~N3. door_lock_state_detect / connector_defect_detect 进入真实样本闭环~~
 
 - Priority: P2
@@ -253,6 +290,47 @@
   - ~~两类任务都已跑出首条真实训练作业，并成功回收到待验证模型~~
 
 ## 最近完成
+
+### D67. 智能引导 / LLM 工作台进入正式产品能力
+
+- Status: Done
+- Result:
+  - `GET /assistant/provider-modes`
+  - `GET /assistant/local-models`
+  - `GET /assistant/local-models/download-jobs`
+  - `POST /assistant/local-models/download`
+  - `POST /assistant/local-models/download-jobs/{job_id}/cancel`
+  - `POST /assistant/plan`
+  已在运行环境中真实验证通过。
+  - 本地模型目录已内置精选 10 个开源模型。
+  - 智能引导页已可根据目标、资产、模型、任务类型给出主推荐动作和次推荐动作。
+
+### D80. 智能引导默认切回人工控制优先
+
+- Status: Done
+- Result:
+  - 智能引导新增 `执行方式`
+  - 默认是 `仅导航，不改字段`
+  - `跳转并带建议过去` 改成显式可选
+  - 任务页、训练页、模型页已显示“来自智能引导的可编辑建议 / 模型定位”
+  - 承接页已支持：
+    - 一键清空建议
+    - 返回智能引导
+    - 明确提示“仍可手动修改模型、参数、代码配置”
+
+### D82. 全站新增 ChatGPT 清透白 / 夏日奶油色主题
+
+- Status: Done
+- Result:
+  - 顶栏新增全局主题切换：
+    - `夜幕金`
+    - `ChatGPT 清透白`
+    - `夏日奶油色`
+  - 智能引导页已重构成：
+    - 对话优先主舞台
+    - 右侧上下文抽屉
+    - 底部统一输入区
+  - 智能引导页内主题切换已改成作用于全站，而不是只限本页
 
 ### D68. inspection/performance OCR 代理裁剪与自动建议覆盖率提升
 
@@ -383,6 +461,72 @@
     - `training_readiness.status = ready`
     - 首条真实训练作业：`train-80b794db2e`
     - 待验证模型：`connector_defect_detect:v20260313.085554.827f`
+
+### D78. 本机训练机器恢复并重新承接真实训练作业
+
+- Status: Done
+- Result:
+  - `local-train-worker` 已恢复 `ACTIVE`
+  - `door_lock_state_detect` 与 `connector_defect_detect` 的首条真实训练作业均由本机训练机器完成
+
+### D79. inspection/performance OCR 增加训练阻断样本工作流
+
+- Status: Done
+- Result:
+  - inspection/performance OCR 现在把“当前真正阻断正式训练的样本”独立成正式工作流：
+    - `readiness_blocker_rows`
+    - `readiness_blocker_samples`
+  - 后端新增：
+    - `GET /training/inspection-ocr/{task_type}/export-readiness-blocker-queue`
+    - `GET /training/inspection-ocr/{task_type}/export-readiness-blocker-pack`
+  - 前端新增：
+    - `仅看训练阻断样本`
+    - `优先处理训练阻断样本`
+    - `导出训练阻断队列`
+    - `导出训练阻断包`
+  - 当前真实 smoke：
+    - `inspection_mark_ocr.readiness_blocker_rows = 6`
+    - `inspection_mark_ocr.readiness_blocker_samples = 6`
+    - 训练中心工作区卡片已同步回显相同数量
+
+### D80. inspection/performance OCR 增加训练就绪行动计划
+
+- Status: Done
+- Result:
+  - inspection/performance OCR 摘要与训练中心工作区卡片现在会返回并显示：
+    - `readiness_action_plan.title`
+    - `readiness_action_plan.summary`
+    - `projected_status_after_blockers`
+    - `projected_manual_reviewed_rows`
+    - `remaining_manual_rows_after_blockers`
+  - `inspection_mark_ocr` 当前真实行动计划已明确：
+    - `title = 先处理训练阻断样本`
+    - `projected_status_after_blockers = ready`
+    - `projected_manual_reviewed_rows = 9`
+  - 同时统一修正了 `high_quality_review_candidate_rows` 口径：
+    - 现在 summary 和工作区卡片都返回真实总数 `51`
+    - 不再混用“预览样本数 8”冒充总量
+
+### D81. inspection/performance OCR 增加训练阻断样本一键批量处理
+
+- Status: Done
+- Result:
+  - inspection/performance OCR 现在不只会导出训练阻断样本，还能直接批量预检查和处理：
+    - `POST /training/inspection-ocr/{task_type}/preview-resolve-readiness-blockers`
+    - `POST /training/inspection-ocr/{task_type}/resolve-readiness-blockers`
+  - 前端新增：
+    - `预检查阻断样本处理`
+    - `批量处理训练阻断样本`
+  - live smoke：
+    - `inspection_mark_ocr` 前 2 条阻断样本预检查：
+      - `would_update_rows = 2`
+      - `resolved_reasons = [proxy_seeded_truth]`
+    - 正式处理后：
+      - `updated_rows = 2`
+      - `proxy_seeded_rows: 6 -> 4`
+      - `manual_reviewed_rows: 3 -> 5`
+      - `readiness_blocker_rows: 6 -> 4`
+    - 验证后已恢复工作区文件并刷新摘要，不污染当前基线
 
 ## 执行原则
 

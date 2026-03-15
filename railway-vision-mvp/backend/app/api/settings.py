@@ -12,6 +12,14 @@ from app.db.database import get_db
 from app.security.dependencies import AuthUser, get_current_user, require_roles
 from app.security.roles import ROLE_PLATFORM_ADMIN, SETTINGS_VIEW_ROLES, has_any_role
 from app.services.audit_service import record_audit
+from app.services.assistant_service import (
+    cancel_local_llm_download,
+    delete_local_llm,
+    get_local_llm_catalog,
+    get_provider_modes,
+    list_local_llm_download_jobs,
+    start_local_llm_download,
+)
 from app.services.data_governance_service import (
     build_data_governance_preview,
     execute_cleanup_synthetic_runtime,
@@ -26,6 +34,11 @@ class DataGovernanceRunRequest(BaseModel):
     action: str = Field(description="执行动作 / keep_demo_chain | cleanup_synthetic_runtime | prune_ocr_exports")
     keep_latest: int = Field(default=3, ge=1, le=20, description="保留多少版 OCR 导出历史 / Keep latest OCR export versions")
     note: str | None = Field(default=None, description="执行说明 / Optional operator note")
+
+
+class LocalLlmDownloadRequest(BaseModel):
+    repo_id: str
+    display_name: str | None = None
 
 
 def _serialize_governance_preview(*, keep_latest: int, can_execute: bool) -> dict:
@@ -115,3 +128,137 @@ def run_data_governance_action(
         "action": action,
         "result": result,
     }
+
+
+@router.get("/llm/provider-modes")
+def get_settings_llm_provider_modes(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    payload = get_provider_modes()
+    record_audit(
+        db,
+        action=actions.ASSISTANT_PLAN,
+        resource_type="settings_llm",
+        resource_id="provider_modes",
+        detail={"generated_at": payload.get("generated_at")},
+        request=request,
+        actor=current_user,
+    )
+    return payload
+
+
+@router.get("/llm/local-models")
+def get_settings_llm_local_models(
+    request: Request,
+    force_refresh: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    payload = get_local_llm_catalog(force_refresh=force_refresh)
+    record_audit(
+        db,
+        action=actions.LLM_CATALOG_REFRESH if force_refresh else actions.ASSISTANT_PLAN,
+        resource_type="settings_llm",
+        resource_id="local_models",
+        detail={"force_refresh": force_refresh, "refreshed_at": payload.get("refreshed_at")},
+        request=request,
+        actor=current_user,
+    )
+    return payload
+
+
+@router.get("/llm/download-jobs")
+def get_settings_llm_download_jobs(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    payload = {"generated_at": datetime.utcnow().isoformat(), "jobs": list_local_llm_download_jobs()}
+    record_audit(
+        db,
+        action=actions.ASSISTANT_PLAN,
+        resource_type="settings_llm",
+        resource_id="download_jobs",
+        detail={"job_count": len(payload["jobs"])},
+        request=request,
+        actor=current_user,
+    )
+    return payload
+
+
+@router.post("/llm/download")
+def start_settings_llm_download(
+    payload: LocalLlmDownloadRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    repo_id = str(payload.repo_id or "").strip()
+    if not repo_id:
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "settings_llm_repo_required",
+            "请先选择一版本地模型，再开始下载。",
+            next_step="回到设置页的大模型与下载，先在本地模型列表里选择一版模型。",
+        )
+    result = start_local_llm_download(repo_id=repo_id, display_name=payload.display_name)
+    record_audit(
+        db,
+        action=actions.LLM_DOWNLOAD_REQUEST,
+        resource_type="settings_llm",
+        resource_id=repo_id,
+        detail=result,
+        request=request,
+        actor=current_user,
+    )
+    return result
+
+
+@router.post("/llm/download-jobs/{job_id}/cancel")
+def cancel_settings_llm_download(
+    job_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    result = cancel_local_llm_download(job_id)
+    record_audit(
+        db,
+        action=actions.LLM_DOWNLOAD_CANCEL,
+        resource_type="settings_llm",
+        resource_id=job_id,
+        detail=result,
+        request=request,
+        actor=current_user,
+    )
+    return result
+
+
+@router.delete("/llm/local-models/{repo_id:path}")
+def delete_settings_llm_local_model(
+    repo_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    normalized_repo_id = str(repo_id or "").strip()
+    if not normalized_repo_id:
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "settings_llm_repo_required",
+            "请先指定要删除的本地模型。",
+            next_step="回到设置页的大模型与下载，从已下载模型里选择一条记录删除。",
+        )
+    result = delete_local_llm(normalized_repo_id)
+    record_audit(
+        db,
+        action=actions.LLM_LOCAL_DELETE,
+        resource_type="settings_llm",
+        resource_id=normalized_repo_id,
+        detail=result,
+        request=request,
+        actor=current_user,
+    )
+    return result

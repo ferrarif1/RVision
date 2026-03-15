@@ -15,6 +15,7 @@ const ROLE_LABELS = {
 
 const NAV_ITEMS = [
   { page: 'dashboard', title: 'Dashboard', group: '主线1：客户资产准备' },
+  { page: 'assistant', title: 'Assistant', group: '主线1：客户资产准备' },
   { page: 'assets', title: 'Assets', group: '主线1：客户资产准备' },
   { page: 'models', title: 'Models', group: '主线2：供应商模型交付' },
   { page: 'training', title: 'Training', group: '主线2：供应商模型交付' },
@@ -29,6 +30,7 @@ const NAV_ITEMS = [
 const LABELS = {
   dashboard: '工作台',
   guide: '接入与使用指南',
+  assistant: '智能引导',
   assets: '资产',
   models: '模型',
   training: '训练',
@@ -140,6 +142,14 @@ export function renderShell({ state, routeView, contentHtml, commandPalette }) {
           </div>
           <div class="topbar-right">
             <button class="ghost topbar-guide-btn ${routeView.navPage === 'guide' ? 'active' : ''}" data-nav="guide">接入与使用指南</button>
+            <label class="theme-switcher">
+              <span>主题</span>
+              <select id="themeSelect">
+                <option value="classic_dark" ${state.visualTheme === 'classic_dark' ? 'selected' : ''}>夜幕金</option>
+                <option value="chatgpt_light" ${state.visualTheme === 'chatgpt_light' ? 'selected' : ''}>ChatGPT 清透白</option>
+                <option value="summer_cream" ${state.visualTheme === 'summer_cream' ? 'selected' : ''}>夏日奶油色</option>
+              </select>
+            </label>
             <button id="openCommandPaletteBtn" class="command-trigger" title="打开命令面板（Ctrl/Cmd + K）">
               <span>命令面板</span><kbd>Ctrl/⌘ K</kbd>
             </button>
@@ -163,6 +173,7 @@ export function bindShellEvents(root, {
   onNavigate,
   onLogout,
   onBack,
+  onThemeChange,
   onToggleSidebar,
   onOpenCommandPalette,
   onCloseCommandPalette,
@@ -174,6 +185,7 @@ export function bindShellEvents(root, {
   });
   root.querySelector('#homeBtn')?.addEventListener('click', () => onNavigate('dashboard'));
   root.querySelector('#backBtn')?.addEventListener('click', onBack);
+  root.querySelector('#themeSelect')?.addEventListener('change', (event) => onThemeChange?.(event.target.value));
   root.querySelector('#toggleSidebarBtn')?.addEventListener('click', onToggleSidebar);
   root.querySelector('#logoutBtn')?.addEventListener('click', onLogout);
   root.querySelector('#openCommandPaletteBtn')?.addEventListener('click', onOpenCommandPalette);

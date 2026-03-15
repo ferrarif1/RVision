@@ -1,5 +1,7 @@
 # 演示脚本（docs/demo.md）
 
+- Last Updated: 2026-03-14 13:05 CST
+
 ## 0. 一键全自动（推荐，零数据零模型）
 
 你现在没有任何视频/图片/模型时，直接运行：
@@ -203,6 +205,13 @@ docker compose -f docker/docker-compose.yml exec backend sh -lc '
 
 当前主要控制台页已经统一成“总览优先、低频操作分工作区展开”的结构：
 
+- 智能引导：`目标与资源 / 下一步引导 / API 模式 / 本地模型库 / 下载任务`
+- 智能引导（新版 IA）：
+  - 中间是对话主舞台
+  - 右侧是上下文抽屉
+  - 下方是统一输入区
+  - 主题可切到 `ChatGPT 清透白 / 夏日奶油色`
+
 - 工作台首页：`工作台总览 / 最近资产 / 最近模型 / 最近任务`
 - 工作台首页（工作台总览内部）：`主线指标 / 真实数据盘`
 - 模型中心：`模型总览 / 提交与训练协作 / 审批与发布`
@@ -238,6 +247,35 @@ docker compose -f docker/docker-compose.yml exec backend sh -lc '
 - 常见失败场景现在会统一显示“原因 + 下一步”，覆盖登录、权限不足、资产预览、流水线注册发布、结果截图、边缘拉资产/回传结果等主链，不再直接暴露后端英文错误。
 - 训练中心里的高频失败场景也已纳入这套提示，包括：
   - 敏感等级填写错误
+
+## 1.4 智能引导 / LLM 工作台演示
+
+适合在“我知道要识别什么，但不知道下一步该去哪”的场景演示。
+
+推荐演示路径：
+
+1. 打开 `智能引导`
+2. 上传一张铁路货车图片，或者直接填一条已有资产编号
+3. 输入目标，例如：
+   - `我想识别定检标记，并判断下一步是直接验证现有模型还是继续训练`
+4. 选择模式：
+   - `API 模式`
+   - `本地模型模式`
+5. 若选择本地模式，可直接在平台里浏览精选 10 个开源模型并发起下载
+6. 点击生成引导后，查看：
+   - 推断任务类型
+   - 当前状态
+   - 主推荐动作
+   - 次推荐动作
+7. 先选择执行方式：
+   - `仅导航，不改字段`
+   - `跳转并带建议过去`
+8. 直接从该页跳到：
+   - 任务中心
+   - 训练中心
+   - 模型审批 / 发布
+
+当前这页不是泛聊天机器人，而是平台内的智能路由入口。
   - 成功作业尝试改派
   - 非失败作业尝试重试
 - 巡检 OCR 工作区现在不只显示准备度，还能直接进入：
@@ -277,16 +315,37 @@ docker compose -f docker/docker-compose.yml exec backend sh -lc '
     - `data_provenance.proxy_seeded_rows = 12`
     - `proxy_truth_risk`
     - 也就是审批人能明确知道当前模型仍然混入了代理回灌真值，不会误当成“纯真实真值训练”的结果
-  - inspection OCR 复核页也已经进入“优先替换代理真值”模式：
-    - 可直接勾 `仅看代理回灌`
-    - 可点击 `优先替换代理真值`
-    - 当前真实返回：
+- inspection OCR 复核页也已经进入“优先替换代理真值”模式：
+  - 可直接勾 `仅看代理回灌`
+  - 可点击 `优先替换代理真值`
+  - 当前真实返回：
       - `inspection_mark_ocr.proxy_seeded_rows = 6`
       - `inspection_mark_ocr.manual_reviewed_rows = 3`
       - `inspection_mark_ocr.proxy_replacement_samples = 6`
-  - inspection OCR 导出训练包现在还有一层默认安全门禁：
-    - 如果工作区里还有代理回灌真值，默认会直接阻止导出
-    - 只有显式勾选 `允许带代理真值继续训练（仅冷启动）` 才会放行
+  - inspection OCR 复核页现已把“训练阻断样本”独立出来：
+  - 可直接勾 `仅看训练阻断样本`
+  - 可点击 `优先处理训练阻断样本`
+  - 还支持：
+    - `预检查阻断样本处理`
+    - `批量处理训练阻断样本`
+  - 可导出：
+    - `readiness_blocker_queue.csv`
+    - `readiness_blocker_pack.zip`
+  - 当前真实返回：
+    - `inspection_mark_ocr.readiness_blocker_rows = 6`
+    - `inspection_mark_ocr.readiness_blocker_samples = 6`
+  - 训练中心卡片和 OCR 复核摘要现在还会直接显示：
+    - `当前行动：先处理训练阻断样本`
+    - `处理完阻断样本后可正常训练`
+    - `预计人工真值 9 条`
+    - `处理完阻断样本后还差 0 条`
+  - live smoke：
+    - 前 2 条训练阻断样本预检查：`would_update_rows = 2`
+    - 正式处理后中间态：`proxy_seeded_rows 6 -> 4`、`manual_reviewed_rows 3 -> 5`
+    - 验证后已恢复工作区基线
+- inspection OCR 导出训练包现在还有一层默认安全门禁：
+  - 如果工作区里还有代理回灌真值，默认会直接阻止导出
+  - 只有显式勾选 `允许带代理真值继续训练（仅冷启动）` 才会放行
   - inspection OCR 现在还会直接给出训练结论：
     - `可正常训练`
     - `仅冷启动可训练`
@@ -330,6 +389,8 @@ docker compose -f docker/docker-compose.yml exec backend sh -lc '
     - `connector_defect_detect.row_count = 2`
     - 两类任务的 `training_readiness.status = ready`
     - 已各自产生首条真实训练作业与待验证模型
+    - `door_lock_state_detect` 作业：`train-bbab47f859`
+    - `connector_defect_detect` 作业：`train-80b794db2e`
   - 训练中心工作区卡片和状态复核页现在还会直接显示：
     - `优先复核样本`
     - `训练就绪`

@@ -9,10 +9,20 @@ const root = document.getElementById('app');
 
 migrateLegacyStorageKeys();
 
+function applyVisualTheme(theme) {
+  const normalized = ['classic_dark', 'chatgpt_light', 'summer_cream'].includes(theme) ? theme : 'classic_dark';
+  document.documentElement.setAttribute('data-ui-theme', normalized);
+  localStorage.setItem(STORAGE_KEYS.visualTheme, normalized);
+  return normalized;
+}
+
+const initialVisualTheme = applyVisualTheme(localStorage.getItem(STORAGE_KEYS.visualTheme) || 'classic_dark');
+
 const routes = [
   { name: 'login', pattern: 'login', requiresAuth: false, label: '登录', navPage: null },
   { name: 'dashboard', pattern: 'dashboard', requiresAuth: true, permission: 'dashboard.view', label: '工作台', navPage: 'dashboard' },
   { name: 'guide', pattern: 'guide', requiresAuth: true, permission: 'dashboard.view', label: '接入与使用指南', navPage: 'guide', parentPath: 'dashboard' },
+  { name: 'assistant', pattern: 'assistant', requiresAuth: true, permission: 'dashboard.view', label: '智能引导', navPage: 'assistant' },
   { name: 'assets', pattern: 'assets', requiresAuth: true, permission: 'asset.upload', label: '资产', navPage: 'assets' },
   { name: 'models', pattern: 'models', requiresAuth: true, permission: 'model.view', label: '模型', navPage: 'models' },
   { name: 'training', pattern: 'training', requiresAuth: true, permission: 'training.job.view', label: '训练', navPage: 'training' },
@@ -34,6 +44,7 @@ const routes = [
 const NAV_COMMANDS = [
   { path: 'dashboard', title: '工作台', description: '查看四条主线的整体状态', keywords: 'dashboard home 总览 主线' },
   { path: 'guide', title: '接入与使用指南', description: '查看平台接入步骤、角色上手和功能使用说明', keywords: 'guide docs onboarding 接入 文档 使用 指南' },
+  { path: 'assistant', title: '智能引导', description: '用可选大模型模式与平台规则一起规划下一步动作', keywords: 'assistant llm copilot 智能 引导 本地模型 api 模型下载' },
   { path: 'assets', title: '资产中心', description: '上传和筛选图片/视频资产', keywords: 'asset upload 资产 上传' },
   { path: 'models', title: '模型中心', description: '提交模型、审批、发布时间线', keywords: 'model release approve 模型 审批 发布' },
   { path: 'training', title: '训练管理', description: '训练作业与 worker 资源', keywords: 'training worker 训练 作业' },
@@ -50,6 +61,7 @@ const store = createStore({
   token: localStorage.getItem(STORAGE_KEYS.token) || '',
   user: JSON.parse(localStorage.getItem(STORAGE_KEYS.user) || 'null'),
   permissions: new Set(JSON.parse(localStorage.getItem(STORAGE_KEYS.permissions) || '[]')),
+  visualTheme: initialVisualTheme,
   route: routes[0],
   sidebarCollapsed: localStorage.getItem(STORAGE_KEYS.sidebarCollapsed) === '1',
   commandPaletteOpen: false,
@@ -537,6 +549,11 @@ function render() {
     onNavigate: (path) => router.navigate(path),
     onLogout: logout,
     onBack: () => router.back(routeView.backPath || 'dashboard'),
+    onThemeChange: (theme) => {
+      const nextTheme = applyVisualTheme(theme);
+      store.setState({ visualTheme: nextTheme });
+      render();
+    },
     onToggleSidebar: toggleSidebar,
     onOpenCommandPalette: () => openCommandPalette(state.commandPaletteQuery || ''),
     onCloseCommandPalette: () => closeCommandPalette(),

@@ -1,8 +1,8 @@
-# Live Chain Audit 2026-03-13
+# Live Chain Audit 2026-03-14
 
 本记录只写当前真实运行环境的实测结果，不写设想。
 
-- Last Updated: 2026-03-13 17:10 CST
+- Last Updated: 2026-03-14 13:05 CST
 
 关联执行面板：
 
@@ -18,6 +18,43 @@
   - 当前持续主线为 inspection / performance OCR 的真实真值替换
 
 ## 已实测跑通的主链
+
+### 0. 智能引导 / LLM 工作台
+
+- `POST /auth/login` -> `200`
+- `GET /assistant/provider-modes` -> `200`
+  - 返回模式：`api / local`
+- `GET /assistant/local-models` -> `200`
+  - 返回精选本地模型 `10` 条
+  - Top 3:
+    - `openai/gpt-oss-20b`
+    - `meta-llama/Llama-3.3-70B-Instruct`
+    - `Qwen/Qwen3-32B`
+- `GET /assistant/local-models/download-jobs` -> `200`
+- `POST /assistant/plan` -> `200`
+  - 目标为“上传铁路货车图片，识别定检标记，并判断下一步是直接验证现有模型还是先继续训练”
+  - 真实推断任务类型：
+    - `inspection_mark_ocr`
+    - `定检标记识别`
+  - 主推荐动作：
+    - `先准备这类任务的数据`
+  - 次推荐动作：
+    - `查看训练与微调入口`
+    - `查看待验证模型审批`
+- `POST /assistant/local-models/download` -> `200`
+  - 已成功创建下载任务
+- `POST /assistant/local-models/download-jobs/{job_id}/cancel` -> `200`
+  - 已成功进入 `cancel_requested`
+- 前端默认执行方式已改成：
+  - `仅导航，不改字段`
+  - 只有显式切到 `跳转并带建议过去` 才会写入预填
+- 前端视觉与 IA 已升级：
+  - 智能引导页改成对话优先布局
+  - 右侧上下文抽屉只展开一组能力
+  - 全站主题切换已支持：
+    - `夜幕金`
+    - `ChatGPT 清透白`
+    - `夏日奶油色`
 
 ### 1. 车号文本复核 -> 导出训练资产 -> 创建训练作业
 
@@ -60,15 +97,26 @@
   - `suggestion_rows = 59`
   - `high_quality_suggestion_rows = 51`
   - `high_quality_review_candidate_rows = 51`
+  - `readiness_blocker_rows = 6`
+  - `readiness_action_plan.title = 先处理训练阻断样本`
+  - `readiness_action_plan.projected_status_after_blockers = ready`
   - `reviewed_rows = 9`
   - `manual_reviewed_rows = 3`
   - `proxy_seeded_rows = 6`
   - `training_readiness.status = cold_start_only`
+  - `preview-resolve-readiness-blockers` live 预检查：
+    - `would_update_rows = 2`
+    - `resolved_reasons = [proxy_seeded_truth]`
+  - `resolve-readiness-blockers` live 验证：
+    - `updated_rows = 2`
+    - 中间态：`proxy_seeded_rows 6 -> 4`、`manual_reviewed_rows 3 -> 5`
+    - 验证后已恢复工作区基线
 - `performance_mark_ocr`
   - `row_count = 80`
   - `crop_ready_rows = 77`
   - `suggestion_rows = 57`
   - `high_quality_suggestion_rows = 45`
+  - `readiness_blocker_rows = 6`
   - `reviewed_rows = 9`
   - `manual_reviewed_rows = 3`
   - `proxy_seeded_rows = 6`
@@ -85,8 +133,10 @@
 - `POST /training/inspection-ocr/{task_type}/items/{sample_id}/review`
 - `GET /training/inspection-ocr/{task_type}/export-proxy-queue`
 - `GET /training/inspection-ocr/{task_type}/export-high-quality-queue`
+- `GET /training/inspection-ocr/{task_type}/export-readiness-blocker-queue`
 - `GET /training/inspection-ocr/{task_type}/export-review-pack`
 - `GET /training/inspection-ocr/{task_type}/export-high-quality-pack`
+- `GET /training/inspection-ocr/{task_type}/export-readiness-blocker-pack`
 - `POST /training/inspection-ocr/{task_type}/preview-accept-high-quality`
 - `POST /training/inspection-ocr/{task_type}/accept-high-quality`
 - `POST /training/inspection-ocr/{task_type}/preview-import-reviews`
@@ -104,8 +154,10 @@
 
 - `export-proxy-queue` -> `200 text/csv`
 - `export-high-quality-queue` -> `200 text/csv`
+- `export-readiness-blocker-queue` -> `200 text/csv`
 - `export-review-pack` -> `200 application/zip`
 - `export-high-quality-pack` -> `200 application/zip`
+- `export-readiness-blocker-pack` -> `200 application/zip`
 - `preview-import-reviews`
   - `total_rows = 6`
   - `matched_rows = 6`

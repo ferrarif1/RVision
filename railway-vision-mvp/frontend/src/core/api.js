@@ -174,6 +174,7 @@ export function formatDateTime(value) {
 
 export const PERMISSIONS = {
   dashboard: 'dashboard.view',
+  assistant: 'dashboard.view',
   assets: 'asset.upload',
   models: 'model.view',
   training: 'training.job.view',

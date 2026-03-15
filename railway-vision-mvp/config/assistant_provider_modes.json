@@ -1,0 +1,46 @@
+{
+  "last_updated": "2026-03-14",
+  "modes": [
+    {
+      "mode": "api",
+      "title": "API 模式",
+      "summary": "接 OpenAI 兼容接口，适合你已经有在线大模型配额或企业内部 API 网关。",
+      "providers": [
+        {
+          "provider_id": "openai_compatible",
+          "label": "OpenAI 兼容接口",
+          "fields": ["base_url", "api_key", "model_name"],
+          "default_base_url": "https://api.openai.com/v1",
+          "hint": "兼容大多数 OpenAI 风格接口，也适合对接内部 vLLM / one-api / API 网关。"
+        },
+        {
+          "provider_id": "siliconflow_compatible",
+          "label": "SiliconFlow / OpenAI 兼容",
+          "fields": ["base_url", "api_key", "model_name"],
+          "default_base_url": "https://api.siliconflow.cn/v1",
+          "hint": "适合快速试用云端开源模型。"
+        },
+        {
+          "provider_id": "dashscope_compatible",
+          "label": "DashScope 兼容接口",
+          "fields": ["base_url", "api_key", "model_name"],
+          "default_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          "hint": "适合企业内已经使用阿里云兼容网关的情况。"
+        }
+      ]
+    },
+    {
+      "mode": "local",
+      "title": "本地模型模式",
+      "summary": "直接在平台里选择、下载和管理本地开源模型，不跳出平台。",
+      "providers": [
+        {
+          "provider_id": "curated_local_catalog",
+          "label": "平台精选本地模型",
+          "fields": [],
+          "hint": "默认提供 10 个当前最值得本地部署的开源模型，并定期刷新模型元数据。"
+        }
+      ]
+    }
+  ]
+}

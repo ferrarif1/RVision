@@ -229,6 +229,43 @@ class InspectionOcrBulkAcceptHighQualitySummary(BaseModel):
     unchanged_sample_ids: list[str] = Field(default_factory=list, description="内容未变化的 sample_id / Unchanged sample ids")
 
 
+class InspectionOcrBulkConfirmProxyRequest(BaseModel):
+    sample_ids: list[str] = Field(default_factory=list, description="可选，仅处理这些代理样本 / Optional explicit proxy sample ids")
+    limit: int = Field(default=20, ge=1, le=200, description="本次最多处理多少条 / Max rows to process")
+    reviewer: str | None = Field(default=None, description="确认人 / Reviewer")
+    notes: str | None = Field(default=None, description="确认备注 / Notes")
+
+
+class InspectionOcrBulkConfirmProxySummary(BaseModel):
+    total_candidates: int = Field(default=0, description="当前代理回灌候选总数 / Total proxy-seeded candidates")
+    selected_rows: int = Field(default=0, description="本次命中的样本数 / Rows selected for this operation")
+    updated_rows: int = Field(default=0, description="正式执行时已更新的条数 / Updated rows")
+    would_update_rows: int = Field(default=0, description="预检查模式下将会更新的条数 / Rows that would be updated in preview mode")
+    skipped_rows: int = Field(default=0, description="跳过条数 / Skipped rows")
+    unmatched_sample_ids: list[str] = Field(default_factory=list, description="不在代理候选中的 sample_id / Sample ids not eligible")
+    changed_sample_ids: list[str] = Field(default_factory=list, description="将被更新或已更新的 sample_id / Changed sample ids")
+    unchanged_sample_ids: list[str] = Field(default_factory=list, description="内容未变化的 sample_id / Unchanged sample ids")
+
+
+class InspectionOcrBulkResolveBlockerRequest(BaseModel):
+    sample_ids: list[str] = Field(default_factory=list, description="可选，仅处理这些阻断样本 / Optional explicit blocker sample ids")
+    limit: int = Field(default=20, ge=1, le=200, description="本次最多处理多少条 / Max rows to process")
+    reviewer: str | None = Field(default=None, description="确认人 / Reviewer")
+    notes: str | None = Field(default=None, description="确认备注 / Notes")
+
+
+class InspectionOcrBulkResolveBlockerSummary(BaseModel):
+    total_blockers: int = Field(default=0, description="当前训练阻断样本总数 / Total readiness blocker rows")
+    selected_rows: int = Field(default=0, description="本次命中的样本数 / Rows selected for this operation")
+    updated_rows: int = Field(default=0, description="正式执行时已更新的条数 / Updated rows")
+    would_update_rows: int = Field(default=0, description="预检查模式下将会更新的条数 / Rows that would be updated in preview mode")
+    skipped_rows: int = Field(default=0, description="跳过条数 / Skipped rows")
+    unmatched_sample_ids: list[str] = Field(default_factory=list, description="不在当前阻断样本中的 sample_id / Sample ids not eligible")
+    changed_sample_ids: list[str] = Field(default_factory=list, description="将被更新或已更新的 sample_id / Changed sample ids")
+    unchanged_sample_ids: list[str] = Field(default_factory=list, description="内容未变化的 sample_id / Unchanged sample ids")
+    resolved_reasons: list[str] = Field(default_factory=list, description="本次涉及的阻断原因 / Resolved blocker reasons")
+
+
 class InspectionStateLabelingReviewRequest(BaseModel):
     label_value: str | None = Field(default=None, description="人工确认后的状态/缺陷标签 / Reviewed state label")
     review_status: str = Field(default="pending", pattern=REVIEW_STATUS_PATTERN, description="复核状态 / pending|done|needs_check")
@@ -883,6 +920,21 @@ def _inspection_proxy_seeded_rows(task_type: str) -> list[dict[str, str]]:
     ]
 
 
+def _inspection_readiness_blocker_rows(task_type: str) -> list[dict[str, str]]:
+    rows = _load_inspection_labeling_rows(task_type)
+    readiness = _inspection_ocr_training_readiness(task_type, rows)
+    if str(readiness.get("status") or "").strip() == "ready":
+        return []
+    return _inspection_proxy_seeded_rows(task_type)
+
+
+def _inspection_readiness_blocker_reason(row: dict[str, str]) -> str:
+    reviewer = str(row.get("reviewer") or "").strip()
+    if reviewer == "proxy_from_car_number_truth":
+        return "proxy_seeded_truth"
+    return "unknown"
+
+
 def _inspection_high_quality_suggestion_candidate_rows(task_type: str) -> list[dict[str, str]]:
     rows = _load_inspection_labeling_rows(task_type)
     candidates: list[tuple[float, dict[str, str]]] = []
@@ -917,6 +969,25 @@ def _inspection_high_quality_suggestion_samples(task_type: str, rows: list[dict[
                 "quality_score": _inspection_crop_quality_score(task_type, row),
                 "review_status": str(row.get("review_status") or "pending").strip() or "pending",
                 "review_origin_label": "高质量建议",
+            }
+        )
+    return samples
+
+
+def _inspection_readiness_blocker_samples(task_type: str, rows: list[dict[str, str]], *, limit: int = 8) -> list[dict[str, Any]]:
+    sample_rows = _inspection_readiness_blocker_rows(task_type)
+    samples: list[dict[str, Any]] = []
+    for row in sample_rows[:limit]:
+        samples.append(
+            {
+                "sample_id": str(row.get("sample_id") or "").strip(),
+                "split_hint": str(row.get("split_hint") or "").strip(),
+                "source_file": str(row.get("source_file") or "").strip(),
+                "crop_file": str(row.get("crop_file") or "").strip(),
+                "final_text": str(row.get("final_text") or "").strip(),
+                "quality_score": _inspection_crop_quality_score(task_type, row),
+                "review_status": str(row.get("review_status") or "pending").strip() or "pending",
+                "review_origin_label": "训练阻断样本",
             }
         )
     return samples
@@ -1319,6 +1390,7 @@ def _import_inspection_state_assets(
 
 
 def _inspection_ocr_training_readiness(task_type: str, rows: list[dict[str, str]]) -> dict[str, Any]:
+    blueprint = _get_inspection_ocr_blueprint_or_404(task_type)
     reviewed_rows = [row for row in rows if str(row.get("final_text") or "").strip()]
     clean_rows = [
         row for row in reviewed_rows
@@ -1333,12 +1405,14 @@ def _inspection_ocr_training_readiness(task_type: str, rows: list[dict[str, str]
     clean_validation = sum(1 for row in clean_rows if str(row.get("split_hint") or "").strip() == "validation")
     all_train = sum(1 for row in reviewed_rows if str(row.get("split_hint") or "").strip() == "train")
     all_validation = sum(1 for row in reviewed_rows if str(row.get("split_hint") or "").strip() == "validation")
+    readiness_rules = blueprint.get("training_readiness") if isinstance(blueprint.get("training_readiness"), dict) else {}
+    min_manual_rows_for_ready = max(2, int(readiness_rules.get("min_manual_rows_for_ready") or 2))
     cold_start_ready = len(reviewed_rows) >= 2 and all_train > 0 and all_validation > 0
-    normal_ready = len(proxy_rows) == 0 and len(clean_rows) >= 2 and clean_train > 0 and clean_validation > 0
+    normal_ready = len(proxy_rows) == 0 and len(clean_rows) >= min_manual_rows_for_ready and clean_train > 0 and clean_validation > 0
     blockers: list[str] = []
     if proxy_rows:
         blockers.append("proxy_truth_present")
-    if len(clean_rows) < 2:
+    if len(clean_rows) < min_manual_rows_for_ready:
         blockers.append("manual_truth_not_enough")
     if clean_train == 0:
         blockers.append("manual_train_split_missing")
@@ -1351,15 +1425,21 @@ def _inspection_ocr_training_readiness(task_type: str, rows: list[dict[str, str]
     elif cold_start_ready:
         status = "cold_start_only"
         label = "仅冷启动可训练"
-        next_step = "当前可用于冷启动验证，但建议先替换代理回灌真值，再进入正式训练。"
+        remaining_manual_rows = max(0, min_manual_rows_for_ready - len(clean_rows))
+        if proxy_rows:
+            next_step = f"当前可用于冷启动验证；还需要把 {len(proxy_rows)} 条代理回灌样本改成人工确认真值，并把人工真值补到至少 {min_manual_rows_for_ready} 条后，才能进入正式训练。"
+        else:
+            next_step = f"当前可用于冷启动验证；还需要再补 {remaining_manual_rows} 条人工确认真值后，才能进入正式训练。"
     else:
         status = "blocked"
         label = "仍不可导出"
         if proxy_rows:
-            next_step = "请先优先替换代理回灌样本，并确保 train 和 validation 都有人工确认真值。"
+            next_step = f"请先优先替换 {len(proxy_rows)} 条代理回灌样本，并把人工确认真值补到至少 {min_manual_rows_for_ready} 条。"
         else:
-            next_step = "请继续补人工确认真值，并确保 train 和 validation 都至少各有 1 条。"
+            remaining_manual_rows = max(0, min_manual_rows_for_ready - len(clean_rows))
+            next_step = f"请继续补人工确认真值；还需要再补 {remaining_manual_rows} 条，并确保 train 和 validation 都至少各有 1 条。"
     replacement_progress_pct = round((len(clean_rows) / (len(clean_rows) + len(proxy_rows))) * 100, 1) if (len(clean_rows) + len(proxy_rows)) else 0.0
+    manual_ready_progress_pct = round((min(len(clean_rows), min_manual_rows_for_ready) / min_manual_rows_for_ready) * 100, 1) if min_manual_rows_for_ready else 100.0
     suggestion_rows = [row for row in rows if str(row.get("ocr_suggestion") or "").strip()]
     high_quality_suggestion_rows = [
         row
@@ -1376,15 +1456,102 @@ def _inspection_ocr_training_readiness(task_type: str, rows: list[dict[str, str]
         "blockers": blockers,
         "manual_reviewed_rows": len(clean_rows),
         "proxy_seeded_rows": len(proxy_rows),
+        "min_manual_rows_for_ready": min_manual_rows_for_ready,
+        "remaining_manual_rows_for_ready": max(0, min_manual_rows_for_ready - len(clean_rows)),
         "clean_train_rows": clean_train,
         "clean_validation_rows": clean_validation,
         "reviewed_train_rows": all_train,
         "reviewed_validation_rows": all_validation,
         "replacement_progress_pct": replacement_progress_pct,
+        "manual_ready_progress_pct": manual_ready_progress_pct,
         "remaining_proxy_rows": len(proxy_rows),
         "suggestion_rows": len(suggestion_rows),
         "high_quality_suggestion_rows": len(high_quality_suggestion_rows),
         "high_quality_review_candidate_rows": len(high_quality_review_candidates),
+    }
+
+
+def _inspection_ocr_readiness_action_plan(task_type: str, rows: list[dict[str, str]], readiness: dict[str, Any] | None = None) -> dict[str, Any]:
+    current = readiness or _inspection_ocr_training_readiness(task_type, rows)
+    status_name = str(current.get("status") or "").strip() or "blocked"
+    manual_reviewed_rows = int(current.get("manual_reviewed_rows") or 0)
+    proxy_seeded_rows = int(current.get("proxy_seeded_rows") or 0)
+    blocker_rows = len(_inspection_readiness_blocker_rows(task_type))
+    remaining_manual_rows = int(current.get("remaining_manual_rows_for_ready") or 0)
+    high_quality_rows = int(current.get("high_quality_review_candidate_rows") or 0)
+    clean_train_rows = int(current.get("clean_train_rows") or 0)
+    clean_validation_rows = int(current.get("clean_validation_rows") or 0)
+    min_manual_rows = int(current.get("min_manual_rows_for_ready") or 2)
+
+    projected_manual_reviewed_rows = manual_reviewed_rows + blocker_rows
+    projected_clean_train_rows = clean_train_rows + min(
+        blocker_rows,
+        max(0, int(current.get("reviewed_train_rows") or 0) - clean_train_rows),
+    )
+    projected_clean_validation_rows = clean_validation_rows + max(
+        0,
+        blocker_rows - min(
+            blocker_rows,
+            max(0, int(current.get("reviewed_train_rows") or 0) - clean_train_rows),
+        ),
+    )
+    projected_ready_after_blockers = (
+        blocker_rows > 0
+        and projected_manual_reviewed_rows >= min_manual_rows
+        and projected_clean_train_rows > 0
+        and projected_clean_validation_rows > 0
+    )
+
+    if status_name == "ready":
+        title = "已经满足正式训练条件"
+        summary = "当前人工确认真值和切分都已达标，可以直接进入正式训练或继续扩大样本规模。"
+        primary_action = "start_normal_training"
+        steps = [
+            "继续抽查最近确认的真值，确保标签稳定。",
+            "直接导出正式训练包或创建下一轮训练作业。",
+        ]
+    elif blocker_rows > 0:
+        title = "先处理训练阻断样本"
+        summary = f"当前最优先的是把 {blocker_rows} 条训练阻断样本改成真实真值或人工确认当前文本，这一步会直接影响是否能进入正式训练。"
+        primary_action = "resolve_readiness_blockers"
+        steps = [
+            f"先打开训练阻断样本，逐条替换或确认这 {blocker_rows} 条代理回灌样本。",
+            "如果当前文本可信，可优先批量确认代理真值；不可信时改写 final_text。",
+            f"处理完后，再补足剩余人工真值，目标至少 {min_manual_rows} 条。",
+        ]
+    elif high_quality_rows > 0:
+        title = "优先确认高质量建议"
+        summary = f"当前没有代理阻断，但还有 {high_quality_rows} 条高质量建议可快速转成人工真值，先处理这批样本能最快提升训练准备度。"
+        primary_action = "accept_high_quality_suggestions"
+        steps = [
+            "先打开高质量建议队列，优先确认建议最清晰的样本。",
+            f"把人工确认真值补到至少 {min_manual_rows} 条，并保证 train / validation 都有样本。",
+        ]
+    else:
+        title = "继续补真实真值"
+        summary = "当前没有明显的捷径样本可直接确认，需要继续逐条补真实 final_text 才能推进训练准备度。"
+        primary_action = "review_more_samples"
+        steps = [
+            "先从优先起步样本开始，补最清晰的 crop。",
+            f"把人工确认真值补到至少 {min_manual_rows} 条，并保证 train / validation 都有样本。",
+        ]
+
+    if status_name == "cold_start_only":
+        projected_status = "ready" if projected_ready_after_blockers else "cold_start_only"
+    elif status_name == "blocked":
+        projected_status = "cold_start_only" if blocker_rows == 0 and remaining_manual_rows > 0 else ("ready" if projected_ready_after_blockers else "blocked")
+    else:
+        projected_status = "ready"
+
+    return {
+        "title": title,
+        "summary": summary,
+        "primary_action": primary_action,
+        "steps": steps,
+        "projected_status_after_blockers": projected_status,
+        "projected_ready_after_blockers": projected_ready_after_blockers,
+        "projected_manual_reviewed_rows": projected_manual_reviewed_rows,
+        "remaining_manual_rows_after_blockers": max(0, min_manual_rows - projected_manual_reviewed_rows),
     }
 
 
@@ -1527,6 +1694,82 @@ def _build_inspection_high_quality_review_pack(task_type: str, rows: list[dict[s
     )
     with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("high_quality_suggestion_queue.csv", csv_text)
+        zf.writestr("README.txt", readme)
+        manifest_path = _inspection_labeling_manifest_path(task_type)
+        for row in rows:
+            sample_id = str(row.get("sample_id") or "").strip() or secrets.token_hex(4)
+            crop_path = _resolve_image_path({"crop_file": row.get("crop_file")}, manifest_path=manifest_path)
+            if crop_path and crop_path.exists() and crop_path.is_file():
+                ext = crop_path.suffix or ".jpg"
+                zf.write(crop_path, arcname=f"crops/{sample_id}{ext}")
+            source_path = _resolve_image_path({"source_file": row.get("source_file")}, manifest_path=manifest_path)
+            if source_path and source_path.exists() and source_path.is_file():
+                ext = source_path.suffix or ".jpg"
+                zf.write(source_path, arcname=f"sources/{sample_id}{ext}")
+    return payload.getvalue()
+
+
+def _render_inspection_readiness_blocker_queue_csv(task_type: str, rows: list[dict[str, str]]) -> str:
+    header = [
+        "sample_id",
+        "task_type",
+        "split_hint",
+        "source_file",
+        "crop_file",
+        "final_text",
+        "review_status",
+        "reviewer",
+        "notes",
+        "quality_score",
+        "blocker_reason",
+    ]
+    sink = io.StringIO()
+    writer = csv.DictWriter(sink, fieldnames=header)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(
+            {
+                "sample_id": str(row.get("sample_id") or "").strip(),
+                "task_type": task_type,
+                "split_hint": str(row.get("split_hint") or "").strip(),
+                "source_file": str(row.get("source_file") or "").strip(),
+                "crop_file": str(row.get("crop_file") or "").strip(),
+                "final_text": str(row.get("final_text") or "").strip(),
+                "review_status": str(row.get("review_status") or "").strip(),
+                "reviewer": str(row.get("reviewer") or "").strip(),
+                "notes": str(row.get("notes") or "").strip(),
+                "quality_score": str(_inspection_crop_quality_score(task_type, row)),
+                "blocker_reason": _inspection_readiness_blocker_reason(row),
+            }
+        )
+    return sink.getvalue()
+
+
+def _build_inspection_readiness_blocker_pack(task_type: str, rows: list[dict[str, str]]) -> bytes:
+    payload = io.BytesIO()
+    csv_text = _render_inspection_readiness_blocker_queue_csv(task_type, rows)
+    readme = "\n".join(
+        [
+            f"Inspection OCR readiness blocker pack: {task_type}",
+            "",
+            "包含内容：",
+            "- readiness_blocker_queue.csv：当前阻断正式训练的样本队列",
+            "- crops/：当前裁剪图",
+            "- sources/：对应原图（若存在）",
+            "",
+            "建议流程：",
+            "1. 优先处理这批样本，它们直接阻断当前任务进入“可正常训练”",
+            "2. 对照 crops/ 和 sources/ 判断 final_text 是否为真实真值",
+            "3. 若当前 final_text 可信，可在系统里批量确认代理真值",
+            "4. 若不可信，请修正 final_text 后再导回工作区",
+            "",
+            "注意：",
+            "- 这批样本不等于所有待处理样本，而是当前真正阻断正式训练的样本",
+            "- 当前 blocker_reason=proxy_seeded_truth，后续可扩展为更多门禁原因",
+        ]
+    )
+    with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("readiness_blocker_queue.csv", csv_text)
         zf.writestr("README.txt", readme)
         manifest_path = _inspection_labeling_manifest_path(task_type)
         for row in rows:
@@ -1707,6 +1950,198 @@ def _summarize_inspection_high_quality_accept(
         unmatched_sample_ids=unmatched_sample_ids[:20],
         changed_sample_ids=changed_sample_ids[:20],
         unchanged_sample_ids=unchanged_sample_ids[:20],
+    )
+
+
+def _summarize_inspection_proxy_confirm(
+    task_type: str,
+    *,
+    sample_ids: list[str],
+    limit: int,
+    reviewer: str,
+    notes: str,
+    apply_updates: bool,
+) -> InspectionOcrBulkConfirmProxySummary:
+    rows = _load_inspection_labeling_rows(task_type)
+    if not rows:
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "inspection_ocr_workspace_empty",
+            "当前巡检文字工作区没有可处理的样本。",
+            next_step="请先生成代理裁剪和 OCR 建议，再进行人工确认。",
+        )
+    candidate_rows = _inspection_proxy_seeded_rows(task_type)
+    candidate_index = {
+        str(row.get("sample_id") or "").strip(): row
+        for row in candidate_rows
+    }
+    total_candidates = len(candidate_rows)
+    explicit_ids = [str(sample_id or "").strip() for sample_id in sample_ids if str(sample_id or "").strip()]
+    unmatched_sample_ids: list[str] = []
+    if explicit_ids:
+        selected_source = []
+        for sample_id in explicit_ids:
+            row = candidate_index.get(sample_id)
+            if row is None:
+                unmatched_sample_ids.append(sample_id)
+                continue
+            selected_source.append(row)
+    else:
+        selected_source = candidate_rows[:limit]
+    selected_rows = selected_source[:limit]
+    if not selected_rows and not unmatched_sample_ids:
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "inspection_ocr_proxy_confirm_empty",
+            "当前没有可人工确认的代理回灌样本。",
+            next_step="请先切到“代理回灌”队列，或继续补更多待确认样本后再试。",
+        )
+    row_index = {str(row.get("sample_id") or "").strip(): idx for idx, row in enumerate(rows)}
+    changed_sample_ids: list[str] = []
+    unchanged_sample_ids: list[str] = []
+    updated_rows = 0
+    would_update_rows = 0
+    skipped_rows = 0
+    changed = False
+    for source_row in selected_rows:
+        sample_id = str(source_row.get("sample_id") or "").strip()
+        idx = row_index.get(sample_id)
+        if idx is None:
+            unmatched_sample_ids.append(sample_id)
+            continue
+        current = dict(rows[idx])
+        final_text = str(current.get("final_text") or "").strip().upper()
+        if not final_text:
+            skipped_rows += 1
+            unchanged_sample_ids.append(sample_id)
+            continue
+        next_row = dict(current)
+        next_row["final_text"] = final_text
+        next_row["review_status"] = "done"
+        next_row["reviewer"] = reviewer
+        existing_notes = str(current.get("notes") or "").strip()
+        confirmation_note = notes or "已人工复核确认，保留当前文本作为真实真值"
+        next_row["notes"] = f"{existing_notes} / {confirmation_note}".strip(" /")
+        if next_row == current:
+            unchanged_sample_ids.append(sample_id)
+            skipped_rows += 1
+            continue
+        changed_sample_ids.append(sample_id)
+        if apply_updates:
+            rows[idx] = next_row
+            updated_rows += 1
+            changed = True
+        else:
+            would_update_rows += 1
+    if apply_updates and changed:
+        _rewrite_inspection_labeling_files(task_type, rows)
+    return InspectionOcrBulkConfirmProxySummary(
+        total_candidates=total_candidates,
+        selected_rows=len(selected_rows),
+        updated_rows=updated_rows,
+        would_update_rows=would_update_rows,
+        skipped_rows=skipped_rows,
+        unmatched_sample_ids=unmatched_sample_ids[:20],
+        changed_sample_ids=changed_sample_ids[:20],
+        unchanged_sample_ids=unchanged_sample_ids[:20],
+    )
+
+
+def _summarize_inspection_readiness_blocker_resolution(
+    task_type: str,
+    *,
+    sample_ids: list[str],
+    limit: int,
+    reviewer: str,
+    notes: str,
+    apply_updates: bool,
+) -> InspectionOcrBulkResolveBlockerSummary:
+    rows = _load_inspection_labeling_rows(task_type)
+    if not rows:
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "inspection_ocr_workspace_empty",
+            "当前巡检文字工作区没有可处理的样本。",
+            next_step="请先生成代理裁剪和 OCR 建议，再继续处理训练阻断样本。",
+        )
+    candidate_rows = _inspection_readiness_blocker_rows(task_type)
+    candidate_index = {str(row.get("sample_id") or "").strip(): row for row in candidate_rows}
+    total_blockers = len(candidate_rows)
+    explicit_ids = [str(sample_id or "").strip() for sample_id in sample_ids if str(sample_id or "").strip()]
+    unmatched_sample_ids: list[str] = []
+    if explicit_ids:
+        selected_source: list[dict[str, str]] = []
+        for sample_id in explicit_ids:
+            row = candidate_index.get(sample_id)
+            if row is None:
+                unmatched_sample_ids.append(sample_id)
+                continue
+            selected_source.append(row)
+    else:
+        selected_source = candidate_rows[:limit]
+    selected_rows = selected_source[:limit]
+    if not selected_rows and not unmatched_sample_ids:
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "inspection_ocr_readiness_blocker_empty",
+            "当前没有可批量处理的训练阻断样本。",
+            next_step="请先处理代理回灌样本，或等待新的训练阻断样本出现后再继续。",
+        )
+    row_index = {str(row.get("sample_id") or "").strip(): idx for idx, row in enumerate(rows)}
+    changed_sample_ids: list[str] = []
+    unchanged_sample_ids: list[str] = []
+    resolved_reasons: set[str] = set()
+    updated_rows = 0
+    would_update_rows = 0
+    skipped_rows = 0
+    changed = False
+    for source_row in selected_rows:
+        sample_id = str(source_row.get("sample_id") or "").strip()
+        idx = row_index.get(sample_id)
+        if idx is None:
+            unmatched_sample_ids.append(sample_id)
+            continue
+        blocker_reason = _inspection_readiness_blocker_reason(source_row)
+        resolved_reasons.add(blocker_reason)
+        current = dict(rows[idx])
+        final_text = str(current.get("final_text") or "").strip().upper()
+        if not final_text:
+            skipped_rows += 1
+            unchanged_sample_ids.append(sample_id)
+            continue
+        next_row = dict(current)
+        next_row["final_text"] = final_text
+        next_row["review_status"] = "done"
+        next_row["reviewer"] = reviewer
+        existing_notes = str(current.get("notes") or "").strip()
+        if blocker_reason == "proxy_seeded_truth":
+            blocker_note = notes or "已优先处理训练阻断样本，确认当前文本可作为真实真值"
+        else:
+            blocker_note = notes or f"已处理训练阻断样本（{blocker_reason}）"
+        next_row["notes"] = f"{existing_notes} / {blocker_note}".strip(" /")
+        if next_row == current:
+            unchanged_sample_ids.append(sample_id)
+            skipped_rows += 1
+            continue
+        changed_sample_ids.append(sample_id)
+        if apply_updates:
+            rows[idx] = next_row
+            updated_rows += 1
+            changed = True
+        else:
+            would_update_rows += 1
+    if apply_updates and changed:
+        _rewrite_inspection_labeling_files(task_type, rows)
+    return InspectionOcrBulkResolveBlockerSummary(
+        total_blockers=total_blockers,
+        selected_rows=len(selected_rows),
+        updated_rows=updated_rows,
+        would_update_rows=would_update_rows,
+        skipped_rows=skipped_rows,
+        unmatched_sample_ids=unmatched_sample_ids[:20],
+        changed_sample_ids=changed_sample_ids[:20],
+        unchanged_sample_ids=unchanged_sample_ids[:20],
+        resolved_reasons=sorted(reason for reason in resolved_reasons if reason),
     )
 
 
@@ -3343,6 +3778,9 @@ def get_inspection_workspace_summary(
             ready_rows = sum(1 for row in rows if str(row.get("final_text") or "").strip())
             starter_samples = _inspection_starter_samples(task_type, rows)
             proxy_replacement_samples = _inspection_proxy_replacement_samples(task_type, rows)
+            readiness_blocker_rows = _inspection_readiness_blocker_rows(task_type)
+            readiness_blocker_samples = _inspection_readiness_blocker_samples(task_type, rows)
+            high_quality_suggestion_rows = _inspection_high_quality_suggestion_candidate_rows(task_type)
             manual_reviewed_rows = sum(
                 1
                 for row in rows
@@ -3351,12 +3789,17 @@ def get_inspection_workspace_summary(
                 and str(row.get("reviewer") or "").strip() != "proxy_from_car_number_truth"
             )
             training_readiness = _inspection_ocr_training_readiness(task_type, rows)
+            readiness_action_plan = _inspection_ocr_readiness_action_plan(task_type, rows, training_readiness)
         else:
             ready_rows = sum(1 for row in rows if str(row.get("label_value") or row.get("final_label") or "").strip())
             starter_samples = _inspection_state_starter_samples(task_type, rows)
             proxy_replacement_samples = []
+            readiness_blocker_rows = []
+            readiness_blocker_samples = []
+            high_quality_suggestion_rows = []
             manual_reviewed_rows = ready_rows
             training_readiness = _inspection_state_training_readiness(task_type, rows)
+            readiness_action_plan = {}
 
         dataset_dir = _inspection_dataset_output_dir(task_type)
         latest_dataset_summary = None
@@ -3394,12 +3837,15 @@ def get_inspection_workspace_summary(
                 "reviewed_rows": ready_rows,
                 "manual_reviewed_rows": manual_reviewed_rows,
                 "proxy_seeded_rows": sum(1 for row in rows if str(row.get("reviewer") or "").strip() == "proxy_from_car_number_truth"),
+                "high_quality_review_candidate_rows": len(high_quality_suggestion_rows),
+                "readiness_blocker_rows": len(readiness_blocker_rows),
                 "ready_ratio": round((ready_rows / len(rows)), 4) if rows else 0.0,
                 "completed_rows": completed_rows,
                 "pending_rows": pending_rows,
                 "needs_check_rows": needs_check_rows,
                 "split_counts": split_counts,
                 "latest_dataset_summary": latest_dataset_summary,
+                "readiness_action_plan": readiness_action_plan,
                 "bootstrap_command": (
                     f"python3 docker/scripts/bootstrap_inspection_labeling_workspace.py --task-type {task_type} "
                     "--output-dir demo_data/generated_datasets"
@@ -3422,6 +3868,7 @@ def get_inspection_workspace_summary(
                 ),
                 "starter_samples": starter_samples,
                 "proxy_replacement_samples": proxy_replacement_samples,
+                "readiness_blocker_samples": readiness_blocker_samples,
                 "training_readiness": training_readiness,
                 "latest_training_job": _latest_job_for_target_model_code(db, task_type),
                 "latest_candidate_model": _latest_model_for_task_type(db, task_type),
@@ -3625,7 +4072,10 @@ def get_inspection_ocr_labeling_summary(
         if str(row.get("crop_file") or "").strip():
             crop_ready_rows += 1
     readiness = _inspection_ocr_training_readiness(task_type, rows)
+    readiness_action_plan = _inspection_ocr_readiness_action_plan(task_type, rows, readiness)
     high_quality_suggestion_samples = _inspection_high_quality_suggestion_samples(task_type, rows)
+    readiness_blocker_rows = _inspection_readiness_blocker_rows(task_type)
+    readiness_blocker_samples = _inspection_readiness_blocker_samples(task_type, rows)
     summary_payload.update(
         {
             "task_type": task_type,
@@ -3638,9 +4088,10 @@ def get_inspection_ocr_labeling_summary(
             "suggestion_rows": suggestion_rows,
             "suggestion_ratio": round((suggestion_rows / len(rows)), 4) if rows else 0.0,
             "high_quality_suggestion_rows": high_quality_suggestion_rows,
-            "high_quality_review_candidate_rows": len(high_quality_suggestion_samples),
+            "high_quality_review_candidate_rows": int(readiness.get("high_quality_review_candidate_rows") or 0),
             "proxy_seeded_rows": proxy_seeded_rows,
             "manual_reviewed_rows": manual_reviewed_rows,
+            "readiness_blocker_rows": len(readiness_blocker_rows),
             "structured_fields": list(blueprint.get("structured_fields") or []),
             "capture_profile": blueprint.get("capture_profile") or {},
             "qa_targets": blueprint.get("qa_targets") or {},
@@ -3648,7 +4099,9 @@ def get_inspection_ocr_labeling_summary(
             "starter_samples": _inspection_starter_samples(task_type, rows),
             "proxy_replacement_samples": _inspection_proxy_replacement_samples(task_type, rows),
             "high_quality_suggestion_samples": high_quality_suggestion_samples,
+            "readiness_blocker_samples": readiness_blocker_samples,
             "training_readiness": readiness,
+            "readiness_action_plan": readiness_action_plan,
         }
     )
     export_summary_path = _inspection_dataset_output_dir(task_type) / f"{task_type}_dataset_summary.json"
@@ -3677,6 +4130,7 @@ def list_inspection_ocr_labeling_items(
     has_suggestion: bool | None = Query(default=None, description="是否有 OCR 建议 / Has OCR suggestion"),
     high_quality_suggestion: bool | None = Query(default=None, description="是否只看高质量建议 / Filter high-quality suggestion rows"),
     proxy_seeded: bool | None = Query(default=None, description="是否只看代理回灌真值 / Filter proxy-seeded rows"),
+    readiness_blocker: bool | None = Query(default=None, description="是否只看当前阻断正式训练的样本 / Filter readiness blocker rows"),
     split_hint: str | None = Query(default=None, description="数据集切分 / train|validation"),
     limit: int = Query(default=80, ge=1, le=500, description="返回条数 / Max items"),
     offset: int = Query(default=0, ge=0, description="偏移量 / Offset"),
@@ -3687,6 +4141,10 @@ def list_inspection_ocr_labeling_items(
     rows = _load_inspection_labeling_rows(task_type)
     token = str(q or "").strip().lower()
     filtered = []
+    readiness_blocker_ids = {
+        str(row.get("sample_id") or "").strip()
+        for row in _inspection_readiness_blocker_rows(task_type)
+    }
     for row in rows:
         item = _inspection_ocr_labeling_item_summary(task_type, row)
         if token:
@@ -3715,6 +4173,10 @@ def list_inspection_ocr_labeling_items(
                 continue
         if proxy_seeded is not None and item["proxy_seeded"] != proxy_seeded:
             continue
+        if readiness_blocker is not None:
+            item_is_blocker = item["sample_id"] in readiness_blocker_ids
+            if item_is_blocker != readiness_blocker:
+                continue
         filtered.append(item)
     filtered.sort(key=_inspection_item_sort_key)
     total = len(filtered)
@@ -4262,6 +4724,40 @@ def export_inspection_high_quality_review_pack(
     )
 
 
+@router.get("/inspection-ocr/{task_type}/export-readiness-blocker-queue")
+def export_inspection_readiness_blocker_queue_csv(
+    task_type: str,
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_READ_ROLES)),
+):
+    _ = current_user
+    _get_inspection_ocr_blueprint_or_404(task_type)
+    rows = _inspection_readiness_blocker_rows(task_type)
+    csv_text = _render_inspection_readiness_blocker_queue_csv(task_type, rows)
+    filename = f"{task_type}_readiness_blocker_queue.csv"
+    return Response(
+        content=csv_text,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/inspection-ocr/{task_type}/export-readiness-blocker-pack")
+def export_inspection_readiness_blocker_pack(
+    task_type: str,
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_READ_ROLES)),
+):
+    _ = current_user
+    _get_inspection_ocr_blueprint_or_404(task_type)
+    rows = _inspection_readiness_blocker_rows(task_type)
+    archive = _build_inspection_readiness_blocker_pack(task_type, rows)
+    filename = f"{task_type}_readiness_blocker_pack.zip"
+    return Response(
+        content=archive,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.post("/inspection-ocr/{task_type}/preview-import-reviews")
 async def preview_inspection_ocr_reviews_import(
     task_type: str,
@@ -4351,6 +4847,84 @@ def accept_inspection_ocr_high_quality(
     reviewer = str(payload.reviewer or current_user.username or current_user.id or "bulk_accept").strip()
     notes = str(payload.notes or "").strip()
     return _summarize_inspection_high_quality_accept(
+        task_type,
+        sample_ids=payload.sample_ids,
+        limit=payload.limit,
+        reviewer=reviewer,
+        notes=notes,
+        apply_updates=True,
+    )
+
+
+@router.post("/inspection-ocr/{task_type}/preview-confirm-proxy")
+def preview_inspection_ocr_proxy_confirm(
+    task_type: str,
+    payload: InspectionOcrBulkConfirmProxyRequest,
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_CREATE_ROLES)),
+):
+    _ = current_user
+    _get_inspection_ocr_blueprint_or_404(task_type)
+    reviewer = str(payload.reviewer or current_user.username or current_user.id or "proxy_confirm_preview").strip()
+    notes = str(payload.notes or "").strip()
+    return _summarize_inspection_proxy_confirm(
+        task_type,
+        sample_ids=payload.sample_ids,
+        limit=payload.limit,
+        reviewer=reviewer,
+        notes=notes,
+        apply_updates=False,
+    )
+
+
+@router.post("/inspection-ocr/{task_type}/confirm-proxy")
+def confirm_inspection_ocr_proxy(
+    task_type: str,
+    payload: InspectionOcrBulkConfirmProxyRequest,
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_CREATE_ROLES)),
+):
+    _get_inspection_ocr_blueprint_or_404(task_type)
+    reviewer = str(payload.reviewer or current_user.username or current_user.id or "proxy_confirm").strip()
+    notes = str(payload.notes or "").strip()
+    return _summarize_inspection_proxy_confirm(
+        task_type,
+        sample_ids=payload.sample_ids,
+        limit=payload.limit,
+        reviewer=reviewer,
+        notes=notes,
+        apply_updates=True,
+    )
+
+
+@router.post("/inspection-ocr/{task_type}/preview-resolve-readiness-blockers")
+def preview_inspection_ocr_resolve_readiness_blockers(
+    task_type: str,
+    payload: InspectionOcrBulkResolveBlockerRequest,
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_CREATE_ROLES)),
+):
+    _ = current_user
+    _get_inspection_ocr_blueprint_or_404(task_type)
+    reviewer = str(payload.reviewer or current_user.username or current_user.id or "readiness_blocker_preview").strip()
+    notes = str(payload.notes or "").strip()
+    return _summarize_inspection_readiness_blocker_resolution(
+        task_type,
+        sample_ids=payload.sample_ids,
+        limit=payload.limit,
+        reviewer=reviewer,
+        notes=notes,
+        apply_updates=False,
+    )
+
+
+@router.post("/inspection-ocr/{task_type}/resolve-readiness-blockers")
+def resolve_inspection_ocr_readiness_blockers(
+    task_type: str,
+    payload: InspectionOcrBulkResolveBlockerRequest,
+    current_user: AuthUser = Depends(require_roles(*TRAINING_JOB_CREATE_ROLES)),
+):
+    _get_inspection_ocr_blueprint_or_404(task_type)
+    reviewer = str(payload.reviewer or current_user.username or current_user.id or "readiness_blocker_resolve").strip()
+    notes = str(payload.notes or "").strip()
+    return _summarize_inspection_readiness_blocker_resolution(
         task_type,
         sample_ids=payload.sample_ids,
         limit=payload.limit,

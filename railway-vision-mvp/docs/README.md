@@ -95,6 +95,8 @@
   将《铁路货车轮足式机器人库内智能巡检应用技术方案》收敛成可执行的巡检模型族、训练优先级和数据采集建议。
 - [product/railcar_inspection_data_workspace_2026-03-12.md](./product/railcar_inspection_data_workspace_2026-03-12.md)
   巡检任务族的数据工作区、标注模板与训练/验证包生成脚手架说明。
+- [product/intelligent_guide_llm_workbench_2026-03-14.md](./product/intelligent_guide_llm_workbench_2026-03-14.md)
+  智能引导 / LLM 工作台的产品定义、已落地能力、模式边界与验证证据。
 - [product/vistral_positioning_and_role_onboarding.md](./product/vistral_positioning_and_role_onboarding.md)
   Vistral 的产品定位、核心价值和角色上手路径。
 - [project_organization.md](./project_organization.md)

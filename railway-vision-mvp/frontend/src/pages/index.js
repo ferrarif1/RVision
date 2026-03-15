@@ -1331,7 +1331,38 @@ function makeContext(route, ctx) {
     postForm(path, formData) {
       return apiForm(path, formData, token);
     },
+    delete(path) {
+      return apiDelete(path, token);
+    },
   };
+}
+
+function readAssistantLocalSettings() {
+  return {
+    llmMode: localStorage.getItem(STORAGE_KEYS.assistantLlmMode) || 'disabled',
+    executionMode: localStorage.getItem(STORAGE_KEYS.assistantExecutionMode) || 'guide_only',
+    localRepoId: localStorage.getItem(STORAGE_KEYS.assistantLocalModelRepoId) || '',
+    apiProvider: localStorage.getItem(STORAGE_KEYS.assistantApiProvider) || 'openai_compatible',
+    apiBaseUrl: localStorage.getItem(STORAGE_KEYS.assistantApiBaseUrl) || '',
+    apiModelName: localStorage.getItem(STORAGE_KEYS.assistantApiModelName) || '',
+    apiKey: localStorage.getItem(STORAGE_KEYS.assistantApiKey) || '',
+  };
+}
+
+function persistAssistantLocalSettings(next) {
+  localStorage.setItem(STORAGE_KEYS.assistantLlmMode, next.llmMode || 'disabled');
+  localStorage.setItem(STORAGE_KEYS.assistantExecutionMode, next.executionMode || 'guide_only');
+  localStorage.setItem(STORAGE_KEYS.assistantLocalModelRepoId, next.localRepoId || '');
+  localStorage.setItem(STORAGE_KEYS.assistantApiProvider, next.apiProvider || 'openai_compatible');
+  localStorage.setItem(STORAGE_KEYS.assistantApiBaseUrl, next.apiBaseUrl || '');
+  localStorage.setItem(STORAGE_KEYS.assistantApiModelName, next.apiModelName || '');
+  localStorage.setItem(STORAGE_KEYS.assistantApiKey, next.apiKey || '');
+}
+
+function assistantModeLabel(mode) {
+  if (mode === 'api') return 'API 模式';
+  if (mode === 'local') return '本地模型模式';
+  return '平台规则引擎';
 }
 
 async function fetchAuthorizedBlobUrl(path, token) {
@@ -2026,6 +2057,918 @@ function pageGuide(route, rawCtx) {
   };
 }
 
+function pageAssistant(route, rawCtx) {
+  const ctx = makeContext(route, rawCtx);
+  const TASK_OPTIONS = [
+    ['', '让系统判断'],
+    ['car_number_ocr', '车号 / 编号'],
+    ['inspection_mark_ocr', '定检标记'],
+    ['performance_mark_ocr', '性能标记'],
+    ['door_lock_state_detect', '门锁状态'],
+    ['connector_defect_detect', '连接件缺陷'],
+    ['bolt_missing_detect', '螺栓缺失'],
+    ['object_detect', '通用目标检测'],
+  ];
+  return {
+    html: `
+      <section class="assistant-chat-shell" id="assistantChatShell">
+        <aside class="assistant-chat-rail">
+          <button class="assistant-chat-rail-logo" type="button" data-assistant-nav="dashboard" aria-label="返回工作台">V</button>
+          <div class="assistant-chat-rail-stack">
+            <button class="assistant-chat-rail-btn" type="button" data-assistant-panel-tab="context">上下文</button>
+            <button class="assistant-chat-rail-btn" type="button" data-assistant-panel-tab="plan">行动计划</button>
+            <button class="assistant-chat-rail-btn" type="button" data-assistant-panel-tab="api">API</button>
+            <button class="assistant-chat-rail-btn" type="button" data-assistant-panel-tab="local">本地模型</button>
+            <button class="assistant-chat-rail-btn" type="button" data-assistant-panel-tab="downloads">下载</button>
+          </div>
+          <div class="assistant-chat-rail-footer">
+            <button class="assistant-chat-avatar-btn" type="button" data-assistant-nav="guide" aria-label="查看使用指南">?</button>
+          </div>
+        </aside>
+        <div class="assistant-chat-main">
+          <header class="assistant-chat-header">
+            <div class="assistant-chat-header-copy">
+              <div class="assistant-chat-kicker">智能规划入口</div>
+              <h1>我们先从哪里开始呢？</h1>
+              <p>把图片、目标、模型偏好和训练意图交给我，我会给出下一步动作。默认只导航，不擅自改任何模型、代码或参数。</p>
+            </div>
+            <div class="assistant-chat-header-tools">
+              <button class="ghost" type="button" data-assistant-nav="dashboard">返回工作台</button>
+              <button class="ghost" type="button" data-assistant-nav="guide">使用指南</button>
+            </div>
+          </header>
+          <div id="assistantConversationWrap" class="assistant-chat-conversation"></div>
+          <section class="assistant-chat-composer">
+            <div class="assistant-chat-mode-strip">
+              <div class="assistant-chat-chip-group" id="assistantThemeWrap">
+                <button class="ghost" type="button" data-assistant-theme="chatgpt_light">ChatGPT 清透白</button>
+                <button class="ghost" type="button" data-assistant-theme="summer_cream">夏日奶油色</button>
+              </div>
+              <div class="assistant-chat-chip-group" id="assistantExecutionModeWrap">
+                <button class="ghost" type="button" data-assistant-execution-mode="guide_only">仅导航，不改字段</button>
+                <button class="ghost" type="button" data-assistant-execution-mode="prefill_navigate">跳转并带建议过去</button>
+              </div>
+              <div class="assistant-chat-status" id="assistantExecutionModeHint">当前只给建议并导航，不会自动改任何字段。</div>
+            </div>
+            <label class="assistant-chat-prompt">
+              <textarea id="assistantGoalInput" rows="3" placeholder="例如：我上传了一张铁路货车侧拍图片，想先识别定检标记。如果已有合适模型就直接验证，没有的话告诉我该去哪里补真值和训练。"></textarea>
+            </label>
+            <div class="assistant-chat-quick-intents">
+              <button class="ghost" type="button" data-assistant-quick-intent="帮我识别铁路货车车号，并判断该直接验证还是继续训练。">车号识别</button>
+              <button class="ghost" type="button" data-assistant-quick-intent="帮我识别铁路货车上的定检标记，并告诉我下一步是直接验证还是补真值训练。">定检标记</button>
+              <button class="ghost" type="button" data-assistant-quick-intent="帮我判断库内巡检图片里的门锁状态，优先给出最短路径。">门锁状态</button>
+            </div>
+            <div class="assistant-chat-inline-fields">
+              <label>
+                识别目标
+                <select id="assistantTaskTypeInput">
+                  ${TASK_OPTIONS.map(([value, label]) => `<option value="${esc(value)}">${esc(label)}</option>`).join('')}
+                </select>
+              </label>
+              <label>
+                已有资产编号
+                <input id="assistantAssetIdsInput" placeholder="例如：asset-id-1, asset-id-2" />
+              </label>
+            </div>
+            <details class="assistant-chat-advanced">
+              <summary>补充模型与资源上下文</summary>
+              <div class="assistant-chat-advanced-grid">
+                <label>
+                  显式模型编号（可选）
+                  <input id="assistantCurrentModelInput" placeholder="例如：04f3f0eb-f76f-4cee-b16e-c92ae1eafcc0" />
+                </label>
+                <div class="assistant-chat-upload-block">
+                  <span>上传新图片并加入当前引导</span>
+                  <div class="page-hero-actions">
+                    <button class="ghost" type="button" id="assistantUploadToggleBtn">打开上传区</button>
+                    <button class="ghost" type="button" data-assistant-panel-tab="api">API 模式</button>
+                    <button class="ghost" type="button" data-assistant-panel-tab="local">本地模型</button>
+                  </div>
+                </div>
+              </div>
+            </details>
+            <div id="assistantAssetHint" class="assistant-chat-footnote">如果你已经有资产编号，直接填写；没有的话，可以上传一张图片，系统会自动生成资产编号并加入当前上下文。</div>
+            <div class="assistant-chat-composer-actions">
+              <button class="ghost" type="button" id="assistantUploadToggleBtnMirror">上传图片</button>
+              <button class="primary" type="button" id="assistantGeneratePlanBtn">生成下一步引导</button>
+            </div>
+            <section id="assistantInlineUploadWrap" class="assistant-chat-upload-panel" hidden>
+              <label>
+                上传图片
+                <input id="assistantUploadFileInput" type="file" accept="image/*" />
+              </label>
+              <div class="page-hero-actions">
+                <button class="primary" type="button" id="assistantUploadFileBtn">上传并加入当前引导</button>
+                <button class="ghost" type="button" id="assistantCloseUploadBtn">收起上传区</button>
+              </div>
+            </section>
+          </section>
+        </div>
+        <aside class="assistant-chat-dock">
+          <div class="assistant-chat-dock-head">
+            <strong>上下文抽屉</strong>
+            <span id="assistantPanelMeta">默认只展开一组能力，避免把输入、模型库、下载任务同时摊在一个页面里。</span>
+          </div>
+          <div class="workspace-switcher assistant-chat-dock-tabs">
+            <button class="ghost" type="button" data-assistant-panel-tab="context">当前上下文</button>
+            <button class="ghost" type="button" data-assistant-panel-tab="plan">行动计划</button>
+            <button class="ghost" type="button" data-assistant-panel-tab="api">API 模式</button>
+            <button class="ghost" type="button" data-assistant-panel-tab="local">本地模型库</button>
+            <button class="ghost" type="button" data-assistant-panel-tab="downloads">下载任务</button>
+          </div>
+          <section class="assistant-chat-dock-panel" data-assistant-panel="context">
+            <div id="assistantContextWrap">${renderLoading('整理当前上下文...')}</div>
+          </section>
+          <section class="assistant-chat-dock-panel" data-assistant-panel="plan" hidden>
+            <div id="assistantPlanWrap">${renderEmpty('先在下方输入目标，然后生成下一步引导。')}</div>
+          </section>
+          <section class="assistant-chat-dock-panel" data-assistant-panel="api" hidden>
+            <div id="assistantApiWrap">${renderLoading('加载 API 模式配置...')}</div>
+          </section>
+          <section class="assistant-chat-dock-panel" data-assistant-panel="local" hidden>
+            <div id="assistantLocalWrap">${renderLoading('加载本地模型库...')}</div>
+          </section>
+          <section class="assistant-chat-dock-panel" data-assistant-panel="downloads" hidden>
+            <div id="assistantDownloadsWrap">${renderLoading('加载下载任务...')}</div>
+          </section>
+        </aside>
+      </section>
+    `,
+    async mount(root) {
+      const panelMeta = root.querySelector('#assistantPanelMeta');
+      const shell = root.querySelector('#assistantChatShell');
+      const panelTabs = [...root.querySelectorAll('[data-assistant-panel-tab]')];
+      const panels = [...root.querySelectorAll('[data-assistant-panel]')];
+      const conversationWrap = root.querySelector('#assistantConversationWrap');
+      const contextWrap = root.querySelector('#assistantContextWrap');
+      const goalInput = root.querySelector('#assistantGoalInput');
+      const taskTypeInput = root.querySelector('#assistantTaskTypeInput');
+      const currentModelInput = root.querySelector('#assistantCurrentModelInput');
+      const assetIdsInput = root.querySelector('#assistantAssetIdsInput');
+      const uploadToggleBtn = root.querySelector('#assistantUploadToggleBtn');
+      const uploadWrap = root.querySelector('#assistantInlineUploadWrap');
+      const uploadFileInput = root.querySelector('#assistantUploadFileInput');
+      const uploadFileBtn = root.querySelector('#assistantUploadFileBtn');
+      const closeUploadBtn = root.querySelector('#assistantCloseUploadBtn');
+      const uploadToggleBtnMirror = root.querySelector('#assistantUploadToggleBtnMirror');
+      const generatePlanBtn = root.querySelector('#assistantGeneratePlanBtn');
+      const themeWrap = root.querySelector('#assistantThemeWrap');
+      const executionModeWrap = root.querySelector('#assistantExecutionModeWrap');
+      const executionModeHint = root.querySelector('#assistantExecutionModeHint');
+      const planWrap = root.querySelector('#assistantPlanWrap');
+      const apiWrap = root.querySelector('#assistantApiWrap');
+      const localWrap = root.querySelector('#assistantLocalWrap');
+      const downloadsWrap = root.querySelector('#assistantDownloadsWrap');
+      let activePanel = 'context';
+      let providerModes = null;
+      let localCatalog = null;
+      let downloadJobs = [];
+      let latestPlan = null;
+      let assistantMode = localStorage.getItem(STORAGE_KEYS.assistantLlmMode) || 'disabled';
+      let assistantExecutionMode = localStorage.getItem(STORAGE_KEYS.assistantExecutionMode) || 'guide_only';
+      let assistantVisualTheme = localStorage.getItem(STORAGE_KEYS.visualTheme) || localStorage.getItem(STORAGE_KEYS.assistantVisualTheme) || 'summer_cream';
+      let selectedLocalRepoId = localStorage.getItem(STORAGE_KEYS.assistantLocalModelRepoId) || '';
+      let selectedApiProvider = localStorage.getItem(STORAGE_KEYS.assistantApiProvider) || 'openai_compatible';
+      let selectedApiBaseUrl = localStorage.getItem(STORAGE_KEYS.assistantApiBaseUrl) || '';
+      let selectedApiModelName = localStorage.getItem(STORAGE_KEYS.assistantApiModelName) || '';
+      let selectedApiKey = localStorage.getItem(STORAGE_KEYS.assistantApiKey) || '';
+
+      function parseAssetIds() {
+        return String(assetIdsInput?.value || '')
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean);
+      }
+
+      function persistAssistantState() {
+        localStorage.setItem(STORAGE_KEYS.assistantLlmMode, assistantMode);
+        localStorage.setItem(STORAGE_KEYS.assistantExecutionMode, assistantExecutionMode);
+        localStorage.setItem(STORAGE_KEYS.assistantVisualTheme, assistantVisualTheme);
+        localStorage.setItem(STORAGE_KEYS.visualTheme, assistantVisualTheme);
+        localStorage.setItem(STORAGE_KEYS.assistantLocalModelRepoId, selectedLocalRepoId);
+        localStorage.setItem(STORAGE_KEYS.assistantApiProvider, selectedApiProvider);
+        localStorage.setItem(STORAGE_KEYS.assistantApiBaseUrl, selectedApiBaseUrl);
+        localStorage.setItem(STORAGE_KEYS.assistantApiModelName, selectedApiModelName);
+        localStorage.setItem(STORAGE_KEYS.assistantApiKey, selectedApiKey);
+      }
+
+      function setAssistantPanel(panel) {
+        activePanel = ['context', 'plan', 'api', 'local', 'downloads'].includes(panel) ? panel : 'context';
+        panels.forEach((section) => {
+          section.hidden = section.getAttribute('data-assistant-panel') !== activePanel;
+        });
+        panelTabs.forEach((button) => {
+          const active = button.getAttribute('data-assistant-panel-tab') === activePanel;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.classList.toggle('assistant-chat-rail-btn-active', active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (panelMeta) {
+          panelMeta.textContent = activePanel === 'context'
+            ? '这里收口查看当前识别目标、执行方式和资源上下文，默认只展开这一层。'
+            : activePanel === 'plan'
+              ? '这里会显示当前最该做的一步，以及可选的备选路径。'
+              : activePanel === 'api'
+                ? 'API 模式只在本次引导里使用，不会默认长期保存到后端。'
+                : activePanel === 'local'
+                  ? '本地模型库提供平台精选 10 个开源模型，并直接发起下载，不跳第三方页面。'
+                  : '这里查看本地模型下载任务的运行状态。';
+        }
+      }
+
+      function renderContext() {
+        const providerLabel = selectedApiProvider === 'openai_compatible'
+          ? 'OpenAI 兼容接口'
+          : selectedApiProvider === 'siliconflow_compatible'
+            ? 'SiliconFlow 兼容接口'
+            : selectedApiProvider === 'dashscope_compatible'
+              ? 'DashScope 兼容接口'
+              : 'API 接口';
+        const localModel = (localCatalog?.models || []).find((item) => item.repo_id === selectedLocalRepoId);
+        const assetSummary = parseAssetIds();
+        contextWrap.innerHTML = `
+          <div class="assistant-chat-dock-stack">
+            <article class="assistant-chat-dock-card">
+              <div class="assistant-chat-dock-card-head">
+                <strong>当前会话</strong>
+                <span class="badge">${esc(assistantMode === 'api' ? 'API 模式' : assistantMode === 'local' ? '本地模型模式' : '平台规则引擎')}</span>
+              </div>
+              <div class="selection-summary">
+                <span>执行方式：${esc(assistantExecutionMode === 'prefill_navigate' ? '跳转并带建议过去' : '仅导航，不改字段')}</span>
+                <span>识别目标：${esc((TASK_OPTIONS.find(([value]) => value === (taskTypeInput?.value || '')) || [null, '让系统判断'])[1])}</span>
+                <span>已有资产：${esc(assetSummary.length ? `${assetSummary.length} 个编号` : '暂未提供')}</span>
+              </div>
+            </article>
+            <article class="assistant-chat-dock-card">
+              <div class="assistant-chat-dock-card-head">
+                <strong>模式说明</strong>
+              </div>
+              <div class="selection-summary">
+                ${assistantMode === 'api'
+                  ? `<span>当前使用 API 模式。</span><span>提供方：${esc(providerLabel)}</span><span>模型名：${esc(selectedApiModelName || '未填写')}</span>`
+                  : assistantMode === 'local'
+                    ? `<span>当前使用本地模型模式。</span><span>已选模型：${esc(localModel?.display_name || selectedLocalRepoId || '未选择')}</span><span>可直接在本平台发起下载与跟踪。</span>`
+                    : `<span>当前使用平台规则引擎。</span><span>如果你想让外部大模型参与理解目标，可切到 API 模式；如果想提前准备本地大模型环境，可切到本地模型模式。</span>`
+                }
+              </div>
+              <div class="page-hero-actions">
+                <button class="ghost" type="button" data-assistant-open-tab="api">配置 API 模式</button>
+                <button class="ghost" type="button" data-assistant-open-tab="local">选择本地模型</button>
+              </div>
+            </article>
+            <article class="assistant-chat-dock-card assistant-prefill-banner">
+              <div class="assistant-chat-dock-card-head">
+                <strong>人工控制优先</strong>
+              </div>
+              <div class="selection-summary">
+                <span>智能引导负责建议、预填、导航，可选自动调整。</span>
+                <span>模型、参数、代码和训练规格仍然保留显式人工编辑入口。</span>
+              </div>
+            </article>
+          </div>
+        `;
+      }
+
+      function renderExecutionMode() {
+        executionModeWrap?.querySelectorAll('[data-assistant-execution-mode]').forEach((button) => {
+          const active = button.getAttribute('data-assistant-execution-mode') === assistantExecutionMode;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+        if (executionModeHint) {
+          executionModeHint.textContent = assistantExecutionMode === 'prefill_navigate'
+            ? '当前会把建议作为可编辑预填带到下一页；你仍可以手动改模型、参数和代码配置。'
+            : '当前只给出建议并导航，不会自动改任何字段。需要时你可以在这里切到“跳转并带建议过去”。';
+        }
+        renderContext();
+      }
+
+      function renderVisualTheme() {
+        shell?.setAttribute('data-assistant-theme', assistantVisualTheme);
+        document.documentElement.setAttribute('data-ui-theme', assistantVisualTheme);
+        themeWrap?.querySelectorAll('[data-assistant-theme]').forEach((button) => {
+          const active = button.getAttribute('data-assistant-theme') === assistantVisualTheme;
+          button.classList.toggle('primary', active);
+          button.classList.toggle('ghost', !active);
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
+      }
+
+      function renderPlanAction(action, options = {}) {
+        if (!action) return '';
+        const buttonLabel = assistantExecutionMode === 'prefill_navigate'
+          ? (options.primary ? '带建议过去并继续' : '按建议走这条备选路径')
+          : (options.primary ? '只跳转去查看' : '只跳转到这条备选路径');
+        return `
+          <article class="selection-card ${options.primary ? 'selection-card-active' : ''}">
+            <div class="selection-card-head selection-card-head--stack">
+              <div class="selection-card-title">
+                <strong>${esc(action.title || '下一步')}</strong>
+                <span class="selection-card-subtitle">${esc(action.summary || '')}</span>
+              </div>
+              <span class="badge">${esc(options.primary ? '推荐动作' : '备选动作')}</span>
+            </div>
+            <div class="selection-summary">
+              <span>${esc(action.reason || '')}</span>
+              ${action.path ? `<span>目标页面：${esc(action.path)}</span>` : ''}
+              <span>${esc(assistantExecutionMode === 'prefill_navigate' ? '当前会附带可编辑建议。' : '当前只导航，不自动预填。')}</span>
+            </div>
+            <div class="page-hero-actions">
+              <button class="${options.primary ? 'primary' : 'ghost'}" type="button" data-assistant-run-action="${esc(action.action_id || '')}">${esc(buttonLabel)}</button>
+            </div>
+          </article>
+        `;
+      }
+
+      function renderConversation() {
+        const assetIds = parseAssetIds();
+        const taskLabel = (TASK_OPTIONS.find(([value]) => value === (taskTypeInput?.value || '')) || [null, '让系统判断'])[1];
+        const chips = [
+          assistantMode === 'api' ? 'API 模式' : assistantMode === 'local' ? '本地模型模式' : '平台规则引擎',
+          assistantExecutionMode === 'prefill_navigate' ? '带建议过去' : '仅导航',
+          taskLabel,
+          assetIds.length ? `${assetIds.length} 个资产` : '未带资产',
+        ];
+        conversationWrap.innerHTML = `
+          <article class="assistant-message assistant-message-assistant">
+            <div class="assistant-message-avatar">AI</div>
+            <div class="assistant-message-bubble">
+              <strong>你好，我会先帮你理顺路径。</strong>
+              <p>你只需要描述目标、给出图片或资产，再决定是否让建议自动带到后续页面。默认我只给建议，不直接改字段。</p>
+              <div class="assistant-chip-row">
+                ${chips.map((item) => `<span class="assistant-inline-chip">${esc(item)}</span>`).join('')}
+              </div>
+            </div>
+          </article>
+          ${String(goalInput?.value || '').trim() ? `
+            <article class="assistant-message assistant-message-user">
+              <div class="assistant-message-bubble">
+                <strong>我的目标</strong>
+                <p>${esc(goalInput.value.trim())}</p>
+                <div class="assistant-chip-row">
+                  <span class="assistant-inline-chip">${esc(taskLabel)}</span>
+                  ${assetIds.map((assetId) => `<span class="assistant-inline-chip">${esc(assetId)}</span>`).join('')}
+                  ${currentModelInput?.value ? `<span class="assistant-inline-chip">模型 ${esc(currentModelInput.value)}</span>` : ''}
+                </div>
+              </div>
+            </article>
+          ` : ''}
+          ${latestPlan ? `
+            <article class="assistant-message assistant-message-assistant">
+              <div class="assistant-message-avatar">AI</div>
+              <div class="assistant-message-bubble assistant-plan-bubble">
+                <strong>${esc(latestPlan.guidance_summary || '已经生成下一步引导。')}</strong>
+                <p>${esc(latestPlan.primary_action?.summary || latestPlan.primary_action?.title || '建议先处理最重要的一步。')}</p>
+                <div class="assistant-chip-row">
+                  <span class="assistant-inline-chip">${esc(latestPlan.inferred_task_label || '通用任务')}</span>
+                  ${latestPlan.current_state?.released_model?.model_code ? `<span class="assistant-inline-chip">已发布 ${esc(latestPlan.current_state.released_model.model_code)}</span>` : ''}
+                  ${latestPlan.current_state?.submitted_model?.model_code ? `<span class="assistant-inline-chip">待验证 ${esc(latestPlan.current_state.submitted_model.model_code)}</span>` : ''}
+                </div>
+                <div class="assistant-message-actions">
+                  ${latestPlan.primary_action ? `<button class="primary" type="button" data-assistant-run-action="${esc(latestPlan.primary_action.action_id || '')}">${esc(assistantExecutionMode === 'prefill_navigate' ? '按建议继续' : '跳到推荐页面')}</button>` : ''}
+                  <button class="ghost" type="button" data-assistant-panel-tab="plan">查看完整行动计划</button>
+                </div>
+              </div>
+            </article>
+          ` : `
+            <article class="assistant-message assistant-message-assistant assistant-message-assistant-muted">
+              <div class="assistant-message-avatar">AI</div>
+              <div class="assistant-message-bubble">
+                <strong>可以从这些方向开始：</strong>
+                <div class="assistant-suggestion-list">
+                  <button class="ghost" type="button" data-assistant-quick-intent="我有一张图片，想先确认有没有现成模型可以直接识别。">先找能直接验证的现有模型</button>
+                  <button class="ghost" type="button" data-assistant-quick-intent="我想知道这张图应该进入任务验证、训练还是审批发布。">先判断该去任务、训练还是审批</button>
+                  <button class="ghost" type="button" data-assistant-panel-tab="local">先看看本地模型库</button>
+                </div>
+              </div>
+            </article>
+          `}
+        `;
+        conversationWrap.querySelectorAll('[data-assistant-quick-intent]').forEach((button) => {
+          button.addEventListener('click', () => {
+            goalInput.value = button.getAttribute('data-assistant-quick-intent') || '';
+            renderConversation();
+          });
+        });
+        conversationWrap.querySelectorAll('[data-assistant-panel-tab]').forEach((button) => {
+          button.addEventListener('click', () => setAssistantPanel(button.getAttribute('data-assistant-panel-tab') || 'plan'));
+        });
+        if (latestPlan?.primary_action) {
+          const action = latestPlan.primary_action;
+          conversationWrap.querySelector('[data-assistant-run-action]')?.addEventListener('click', () => {
+            const sourceMeta = JSON.stringify({
+              source: 'assistant',
+              mode: assistantMode,
+              execution_mode: assistantExecutionMode,
+              action_title: action.title || '',
+              action_summary: action.summary || '',
+              generated_at: new Date().toISOString(),
+              editable: true,
+            });
+            const prefill = action.prefill || {};
+            if (assistantExecutionMode === 'prefill_navigate') {
+              if (prefill.taskModelId !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTaskModelId, String(prefill.taskModelId || ''));
+              if (prefill.taskAssetId !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTaskAssetId, String(prefill.taskAssetId || ''));
+              if (prefill.taskType !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTaskType, String(prefill.taskType || ''));
+              if (prefill.taskHint !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTaskHint, String(prefill.taskHint || ''));
+              if (prefill.taskModelId !== undefined || prefill.taskAssetId !== undefined || prefill.taskType !== undefined || prefill.taskHint !== undefined) {
+                localStorage.setItem(STORAGE_KEYS.prefillTaskMeta, sourceMeta);
+              }
+              if (prefill.trainingAssetIds !== undefined || prefill.trainingValidationAssetIds !== undefined || prefill.trainingDatasetLabel !== undefined || prefill.trainingDatasetVersionId !== undefined || prefill.trainingTargetModelCode !== undefined) {
+                if (prefill.trainingAssetIds !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingAssetIds, String(prefill.trainingAssetIds || ''));
+                if (prefill.trainingValidationAssetIds !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingValidationAssetIds, String(prefill.trainingValidationAssetIds || ''));
+                if (prefill.trainingDatasetLabel !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetLabel, String(prefill.trainingDatasetLabel || ''));
+                if (prefill.trainingDatasetVersionId !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetVersionId, String(prefill.trainingDatasetVersionId || ''));
+                if (prefill.trainingTargetModelCode !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingTargetModelCode, String(prefill.trainingTargetModelCode || ''));
+                localStorage.setItem(STORAGE_KEYS.prefillTrainingMeta, sourceMeta);
+              }
+              if (prefill.focusModelId !== undefined) {
+                localStorage.setItem(STORAGE_KEYS.focusModelId, String(prefill.focusModelId || ''));
+                localStorage.setItem(STORAGE_KEYS.focusModelMeta, sourceMeta);
+              }
+            }
+            ctx.navigate(action.path || 'dashboard');
+          });
+        }
+      }
+
+      function renderPlan() {
+        if (!latestPlan) {
+          planWrap.innerHTML = renderEmpty('先在“目标与资源”里填写目标，然后生成下一步引导。');
+          renderConversation();
+          return;
+        }
+        const assetSummary = Array.isArray(latestPlan.asset_summary) ? latestPlan.asset_summary : [];
+        const secondaryActions = Array.isArray(latestPlan.secondary_actions) ? latestPlan.secondary_actions : [];
+        const llmAdvice = latestPlan.llm_advice && typeof latestPlan.llm_advice === 'object' ? latestPlan.llm_advice : null;
+        planWrap.innerHTML = `
+          ${renderWorkbenchOverview({
+            title: '智能下一步引导',
+            summary: latestPlan.guidance_summary || '系统已经根据你的目标和现有资源生成推荐路径。',
+            status: latestPlan.inferred_task_label || '通用任务',
+            metrics: [
+                { label: '大模型模式', value: latestPlan.llm_mode || 'disabled', note: '当前引导上下文' },
+                { label: '已带资产', value: assetSummary.length, note: assetSummary[0]?.file_name || '还没带资产' },
+                { label: '推荐主线', value: latestPlan.primary_action?.title || '-', note: '当前最建议先做的动作' },
+            ],
+            actions: [
+              { id: 'assistant-back-input', label: '返回修改输入', primary: true },
+              { id: 'assistant-open-downloads', label: '查看本地模型下载任务' },
+            ],
+          })}
+          <div class="selection-grid">
+            ${renderPlanAction(latestPlan.primary_action, { primary: true })}
+            ${secondaryActions.map((action) => renderPlanAction(action)).join('')}
+          </div>
+          <div class="grid-two">
+            <article class="selection-card">
+              <div class="selection-card-head"><strong>系统判断依据</strong></div>
+              <div class="selection-summary">
+                ${(latestPlan.signals || []).map((item) => `<span>${esc(item)}</span>`).join('') || '<span>暂无额外判断依据。</span>'}
+              </div>
+            </article>
+            <article class="selection-card">
+              <div class="selection-card-head"><strong>当前模型状态</strong></div>
+              <div class="selection-summary">
+                <span>已发布模型：${esc(latestPlan.current_state?.released_model?.model_code || '暂无')}</span>
+                <span>待验证模型：${esc(latestPlan.current_state?.submitted_model?.model_code || '暂无')}</span>
+                <span>已审批未发布：${esc(latestPlan.current_state?.approved_model?.model_code || '暂无')}</span>
+              </div>
+            </article>
+          </div>
+          ${llmAdvice ? `
+            <details class="inline-details">
+              <summary>查看大模型补充建议</summary>
+              <div class="details-panel">
+                <div class="selection-summary">
+                  ${llmAdvice.summary ? `<span>${esc(llmAdvice.summary)}</span>` : ''}
+                  ${Array.isArray(llmAdvice.risks) ? llmAdvice.risks.map((item) => `<span>${esc(item)}</span>`).join('') : ''}
+                  ${llmAdvice.suggested_path ? `<span>建议路径：${esc(llmAdvice.suggested_path)}</span>` : ''}
+                </div>
+              </div>
+            </details>
+          ` : ''}
+        `;
+        planWrap.querySelector('[data-workbench-action="assistant-back-input"]')?.addEventListener('click', () => setAssistantPanel('context'));
+        planWrap.querySelector('[data-workbench-action="assistant-open-downloads"]')?.addEventListener('click', () => setAssistantPanel('downloads'));
+        const actionMap = [latestPlan.primary_action, ...secondaryActions].filter(Boolean).reduce((acc, item) => {
+          acc[item.action_id] = item;
+          return acc;
+        }, {});
+        planWrap.querySelectorAll('[data-assistant-run-action]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const action = actionMap[button.getAttribute('data-assistant-run-action')];
+            if (!action) return;
+            const prefill = action.prefill || {};
+            if (assistantExecutionMode === 'prefill_navigate') {
+              const sourceMeta = JSON.stringify({
+                source: 'assistant',
+                mode: assistantMode,
+                execution_mode: assistantExecutionMode,
+                action_title: action.title || '',
+                action_summary: action.summary || '',
+                generated_at: new Date().toISOString(),
+                editable: true,
+              });
+              if (prefill.taskModelId !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTaskModelId, String(prefill.taskModelId || ''));
+              if (prefill.taskAssetId !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTaskAssetId, String(prefill.taskAssetId || ''));
+              if (prefill.taskType !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTaskType, String(prefill.taskType || ''));
+              if (prefill.taskHint !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTaskHint, String(prefill.taskHint || ''));
+              if (
+                prefill.taskModelId !== undefined
+                || prefill.taskAssetId !== undefined
+                || prefill.taskType !== undefined
+                || prefill.taskHint !== undefined
+              ) {
+                localStorage.setItem(STORAGE_KEYS.prefillTaskMeta, sourceMeta);
+              }
+              if (
+                prefill.trainingAssetIds !== undefined
+                || prefill.trainingValidationAssetIds !== undefined
+                || prefill.trainingDatasetLabel !== undefined
+                || prefill.trainingDatasetVersionId !== undefined
+                || prefill.trainingTargetModelCode !== undefined
+              ) {
+                if (prefill.trainingAssetIds !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingAssetIds, String(prefill.trainingAssetIds || ''));
+                if (prefill.trainingValidationAssetIds !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingValidationAssetIds, String(prefill.trainingValidationAssetIds || ''));
+                if (prefill.trainingDatasetLabel !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetLabel, String(prefill.trainingDatasetLabel || ''));
+                if (prefill.trainingDatasetVersionId !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetVersionId, String(prefill.trainingDatasetVersionId || ''));
+                if (prefill.trainingTargetModelCode !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingTargetModelCode, String(prefill.trainingTargetModelCode || ''));
+                localStorage.setItem(STORAGE_KEYS.prefillTrainingMeta, sourceMeta);
+              }
+              if (prefill.focusModelId !== undefined) {
+                localStorage.setItem(STORAGE_KEYS.focusModelId, String(prefill.focusModelId || ''));
+                localStorage.setItem(STORAGE_KEYS.focusModelMeta, sourceMeta);
+              }
+            }
+            ctx.navigate(action.path || 'dashboard');
+          });
+        });
+        renderConversation();
+      }
+
+      function renderApiModes() {
+        if (!providerModes) {
+          apiWrap.innerHTML = renderLoading('加载 API 模式配置...');
+          return;
+        }
+        const apiMode = (providerModes.modes || []).find((item) => item.mode === 'api');
+        const providers = Array.isArray(apiMode?.providers) ? apiMode.providers : [];
+        apiWrap.innerHTML = `
+          ${renderWorkbenchOverview({
+            title: 'API 模式',
+            summary: apiMode?.summary || '把外部大模型接进当前引导，但不改变平台主流程。',
+            status: assistantMode === 'api' ? '当前启用' : '可选增强',
+            metrics: [
+              { label: '接口类型', value: 'OpenAI 兼容', note: '当前版本统一按兼容模式接入' },
+              { label: '当前提供方', value: selectedApiProvider || '未选择', note: selectedApiModelName || '未填写模型名' },
+            ],
+            actions: [
+              { id: 'assistant-enable-api-mode', label: '切换到 API 模式', primary: true },
+              { id: 'assistant-back-input-from-api', label: '回到目标输入' },
+            ],
+          })}
+          <div class="selection-grid">
+            ${providers.map((provider) => `
+              <article class="selection-card ${selectedApiProvider === provider.provider_id ? 'selection-card-active' : ''}">
+                <div class="selection-card-head selection-card-head--stack">
+                  <div class="selection-card-title">
+                    <strong>${esc(provider.label)}</strong>
+                    <span class="selection-card-subtitle">${esc(provider.hint || '')}</span>
+                  </div>
+                  <span class="badge">${esc(selectedApiProvider === provider.provider_id ? '当前选择' : '可选择')}</span>
+                </div>
+                <div class="page-hero-actions">
+                  <button class="${selectedApiProvider === provider.provider_id ? 'primary' : 'ghost'}" type="button" data-assistant-provider="${esc(provider.provider_id)}">${esc(selectedApiProvider === provider.provider_id ? '正在使用这类接口' : '选这类接口')}</button>
+                </div>
+              </article>
+            `).join('')}
+          </div>
+          <div class="selection-summary">
+            <label>接口 Base URL<input id="assistantApiBaseUrlInput" placeholder="https://api.openai.com/v1" value="${esc(selectedApiBaseUrl)}" /></label>
+            <label>模型名<input id="assistantApiModelNameInput" placeholder="例如：gpt-4.1-mini 或企业内部模型名" value="${esc(selectedApiModelName)}" /></label>
+            <label>API Key<input id="assistantApiKeyInput" type="password" placeholder="只保存在当前浏览器，用于本次智能引导" value="${esc(selectedApiKey)}" /></label>
+          </div>
+        `;
+        apiWrap.querySelector('[data-workbench-action="assistant-enable-api-mode"]')?.addEventListener('click', () => {
+          assistantMode = 'api';
+          persistAssistantState();
+          renderContext();
+          renderConversation();
+          renderApiModes();
+        });
+        apiWrap.querySelector('[data-workbench-action="assistant-back-input-from-api"]')?.addEventListener('click', () => setAssistantPanel('context'));
+        apiWrap.querySelectorAll('[data-assistant-provider]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const provider = providers.find((item) => item.provider_id === button.getAttribute('data-assistant-provider'));
+            selectedApiProvider = provider?.provider_id || selectedApiProvider;
+            selectedApiBaseUrl = provider?.default_base_url || selectedApiBaseUrl;
+            assistantMode = 'api';
+            persistAssistantState();
+            renderContext();
+            renderConversation();
+            renderApiModes();
+          });
+        });
+        apiWrap.querySelector('#assistantApiBaseUrlInput')?.addEventListener('input', (event) => {
+          selectedApiBaseUrl = event.target.value;
+          persistAssistantState();
+          renderContext();
+        });
+        apiWrap.querySelector('#assistantApiModelNameInput')?.addEventListener('input', (event) => {
+          selectedApiModelName = event.target.value;
+          persistAssistantState();
+          renderContext();
+          renderConversation();
+        });
+        apiWrap.querySelector('#assistantApiKeyInput')?.addEventListener('input', (event) => {
+          selectedApiKey = event.target.value;
+          persistAssistantState();
+        });
+      }
+
+      function renderLocalCatalog() {
+        if (!localCatalog) {
+          localWrap.innerHTML = renderLoading('加载本地模型库...');
+          return;
+        }
+        const models = Array.isArray(localCatalog.models) ? localCatalog.models : [];
+        localWrap.innerHTML = `
+          ${renderWorkbenchOverview({
+            title: '本地模型库',
+            summary: '平台精选当前最值得本地部署的 10 个开源模型，并直接在这里发起下载和跟踪任务。',
+            status: assistantMode === 'local' ? '当前启用本地模式' : '可选增强',
+            metrics: [
+              { label: '精选模型', value: models.length, note: localCatalog.refreshed_at ? `元数据刷新 ${formatDateTime(localCatalog.refreshed_at)}` : '未刷新' },
+              { label: '当前选择', value: selectedLocalRepoId || '未选择', note: '后续会作为智能引导的大模型上下文' },
+            ],
+            actions: [
+              { id: 'assistant-refresh-local-catalog', label: '刷新模型元数据', primary: true },
+              { id: 'assistant-open-downloads-from-local', label: '查看下载任务' },
+            ],
+          })}
+          <div class="assistant-local-grid">
+            ${models.map((model) => `
+              <article class="selection-card ${selectedLocalRepoId === model.repo_id ? 'selection-card-active' : ''}">
+                <div class="selection-card-head selection-card-head--stack">
+                  <div class="selection-card-title">
+                    <strong>${esc(model.display_name)}</strong>
+                    <span class="selection-card-subtitle">${esc(model.vendor || '')} · ${esc(model.parameter_label || '')}</span>
+                  </div>
+                  <span class="badge">${esc(`#${model.rank}`)}</span>
+                </div>
+                <div class="selection-summary">
+                  <span>${esc(model.recommended_for || '')}</span>
+                  <span>长处：${esc((model.strengths || []).join(' / ') || '通用')}</span>
+                  <span>下载量：${esc(String(model.runtime_metadata?.downloads || 0))}</span>
+                  <span>点赞：${esc(String(model.runtime_metadata?.likes || 0))}</span>
+                  <span>${esc(model.runtime_metadata?.gated ? '需要访问授权' : '可直接访问')}</span>
+                </div>
+                <div class="page-hero-actions">
+                  <button class="${selectedLocalRepoId === model.repo_id ? 'primary' : 'ghost'}" type="button" data-assistant-local-select="${esc(model.repo_id)}">${esc(selectedLocalRepoId === model.repo_id ? '当前用于智能引导' : '选作当前本地模型')}</button>
+                  <button class="ghost" type="button" data-assistant-local-download="${esc(model.repo_id)}">直接下载</button>
+                </div>
+              </article>
+            `).join('')}
+          </div>
+        `;
+        localWrap.querySelector('[data-workbench-action="assistant-refresh-local-catalog"]')?.addEventListener('click', async () => {
+          localWrap.innerHTML = renderLoading('刷新本地模型元数据...');
+          try {
+          localCatalog = await ctx.get('/assistant/local-models?force_refresh=true');
+          renderLocalCatalog();
+          renderContext();
+        } catch (error) {
+          localWrap.innerHTML = renderError(error.message);
+        }
+        });
+        localWrap.querySelector('[data-workbench-action="assistant-open-downloads-from-local"]')?.addEventListener('click', async () => {
+          await loadDownloadJobs();
+          setAssistantPanel('downloads');
+        });
+        localWrap.querySelectorAll('[data-assistant-local-select]').forEach((button) => {
+          button.addEventListener('click', () => {
+            selectedLocalRepoId = button.getAttribute('data-assistant-local-select') || '';
+            assistantMode = 'local';
+            persistAssistantState();
+            renderContext();
+            renderLocalCatalog();
+            renderConversation();
+          });
+        });
+        localWrap.querySelectorAll('[data-assistant-local-download]').forEach((button) => {
+          button.addEventListener('click', async () => {
+            const repoId = button.getAttribute('data-assistant-local-download') || '';
+            const model = models.find((item) => item.repo_id === repoId);
+            try {
+              await ctx.post('/assistant/local-models/download', { repo_id: repoId, display_name: model?.display_name || repoId });
+              await loadDownloadJobs();
+              setAssistantPanel('downloads');
+            } catch (error) {
+              alert(error.message);
+            }
+          });
+        });
+      }
+
+      async function loadDownloadJobs() {
+        downloadsWrap.innerHTML = renderLoading('加载下载任务...');
+        try {
+          const payload = await ctx.get('/assistant/local-models/download-jobs');
+          downloadJobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+          downloadsWrap.innerHTML = `
+            ${renderWorkbenchOverview({
+              title: '下载任务',
+              summary: '本地模型下载在后台执行，可以随时回来看状态。',
+              status: downloadJobs.some((item) => item.status === 'running' || item.status === 'starting') ? '有任务正在下载' : '当前没有运行中的下载',
+              metrics: [
+                { label: '任务总数', value: downloadJobs.length, note: '历史与当前任务' },
+                { label: '运行中', value: downloadJobs.filter((item) => ['starting', 'running'].includes(item.status)).length, note: '后台任务' },
+              ],
+              actions: [
+                { id: 'assistant-refresh-download-jobs', label: '刷新下载任务', primary: true },
+                { id: 'assistant-open-local-catalog', label: '回到本地模型库' },
+              ],
+            })}
+            <div class="selection-grid">
+              ${downloadJobs.length ? downloadJobs.map((job) => `
+                <article class="selection-card">
+                  <div class="selection-card-head selection-card-head--stack">
+                    <div class="selection-card-title">
+                      <strong>${esc(job.display_name || job.repo_id || job.job_id)}</strong>
+                      <span class="selection-card-subtitle">${esc(job.repo_id || '')}</span>
+                    </div>
+                    <span class="badge">${esc(job.status || 'unknown')}</span>
+                  </div>
+                  <div class="selection-summary">
+                    <span>目标目录：${esc(job.target_dir || '-')}</span>
+                    <span>开始时间：${esc(job.started_at ? formatDateTime(job.started_at) : '-')}</span>
+                    <span>日志文件：${esc(job.log_file || '-')}</span>
+                  </div>
+                  <div class="page-hero-actions">
+                    ${(job.status === 'running' || job.status === 'starting' || job.status === 'cancel_requested') ? `<button class="ghost" type="button" data-assistant-cancel-download="${esc(job.job_id || '')}">取消下载</button>` : ''}
+                  </div>
+                </article>
+              `).join('') : renderEmpty('当前还没有本地模型下载任务。')}
+            </div>
+          `;
+          downloadsWrap.querySelector('[data-workbench-action="assistant-refresh-download-jobs"]')?.addEventListener('click', () => loadDownloadJobs());
+          downloadsWrap.querySelector('[data-workbench-action="assistant-open-local-catalog"]')?.addEventListener('click', () => setAssistantPanel('local'));
+          downloadsWrap.querySelectorAll('[data-assistant-cancel-download]').forEach((button) => {
+            button.addEventListener('click', async () => {
+              const jobId = button.getAttribute('data-assistant-cancel-download');
+              try {
+                await ctx.post(`/assistant/local-models/download-jobs/${encodeURIComponent(jobId)}/cancel`, {});
+                await loadDownloadJobs();
+              } catch (error) {
+                alert(error.message);
+              }
+            });
+          });
+        } catch (error) {
+          downloadsWrap.innerHTML = renderError(error.message);
+        }
+      }
+
+      async function loadProviderModes() {
+        providerModes = await ctx.get('/assistant/provider-modes');
+        renderApiModes();
+      }
+
+      async function loadLocalCatalog() {
+        localCatalog = await ctx.get('/assistant/local-models');
+        renderLocalCatalog();
+        renderContext();
+      }
+
+      async function generatePlan() {
+        generatePlanBtn.disabled = true;
+        planWrap.innerHTML = renderLoading('生成下一步引导...');
+        try {
+          const llmSelection = assistantMode === 'local'
+            ? { repo_id: selectedLocalRepoId }
+            : assistantMode === 'api'
+              ? { provider_id: selectedApiProvider, model_name: selectedApiModelName }
+              : {};
+          latestPlan = await ctx.post('/assistant/plan', {
+            goal: goalInput?.value || '',
+            asset_ids: parseAssetIds(),
+            current_task_type: taskTypeInput?.value || '',
+            current_model_id: currentModelInput?.value || '',
+            llm_mode: assistantMode,
+            llm_selection: llmSelection,
+            api_config: assistantMode === 'api' ? {
+              provider_id: selectedApiProvider,
+              base_url: selectedApiBaseUrl,
+              api_key: selectedApiKey,
+              model_name: selectedApiModelName,
+            } : {},
+          });
+          renderPlan();
+          setAssistantPanel('plan');
+        } catch (error) {
+          latestPlan = null;
+          planWrap.innerHTML = renderError(error.message);
+          renderConversation();
+          setAssistantPanel('plan');
+        } finally {
+          generatePlanBtn.disabled = false;
+        }
+      }
+
+      async function uploadInlineAsset() {
+        const file = uploadFileInput?.files?.[0];
+        if (!file) {
+          alert('请先选择一张图片。');
+          return;
+        }
+        uploadFileBtn.disabled = true;
+        try {
+          const formData = new FormData();
+          formData.append('file', file);
+          formData.append('purpose', 'inference');
+          formData.append('sensitivity_level', 'L2');
+          formData.append('use_case', 'assistant_planning');
+          const result = await ctx.postForm('/assets/upload', formData);
+          const current = parseAssetIds();
+          current.push(result.asset_id);
+          assetIdsInput.value = [...new Set(current)].join(', ');
+          uploadFileInput.value = '';
+          renderConversation();
+          renderContext();
+          setAssistantPanel('context');
+        } catch (error) {
+          alert(error.message);
+        } finally {
+          uploadFileBtn.disabled = false;
+        }
+      }
+
+      root.querySelectorAll('[data-assistant-open-tab]').forEach((button) => {
+        button.addEventListener('click', () => setAssistantPanel(button.getAttribute('data-assistant-open-tab') || 'context'));
+      });
+      executionModeWrap?.querySelectorAll('[data-assistant-execution-mode]').forEach((button) => {
+        button.addEventListener('click', () => {
+          assistantExecutionMode = button.getAttribute('data-assistant-execution-mode') || 'guide_only';
+          persistAssistantState();
+          renderExecutionMode();
+          renderPlan();
+          renderConversation();
+        });
+      });
+      themeWrap?.querySelectorAll('[data-assistant-theme]').forEach((button) => {
+        button.addEventListener('click', () => {
+          assistantVisualTheme = button.getAttribute('data-assistant-theme') || 'summer_cream';
+          persistAssistantState();
+          renderVisualTheme();
+        });
+      });
+      panelTabs.forEach((button) => {
+        button.addEventListener('click', () => setAssistantPanel(button.getAttribute('data-assistant-panel-tab') || 'context'));
+      });
+      root.querySelectorAll('[data-assistant-nav]').forEach((button) => {
+        button.addEventListener('click', () => ctx.navigate(button.getAttribute('data-assistant-nav') || 'dashboard'));
+      });
+      root.querySelectorAll('[data-assistant-quick-intent]').forEach((button) => {
+        button.addEventListener('click', () => {
+          goalInput.value = button.getAttribute('data-assistant-quick-intent') || '';
+          renderConversation();
+        });
+      });
+      [goalInput, taskTypeInput, currentModelInput, assetIdsInput].forEach((element) => {
+        element?.addEventListener('input', () => {
+          renderConversation();
+          renderContext();
+        });
+      });
+      uploadToggleBtn?.addEventListener('click', () => {
+        uploadWrap.hidden = !uploadWrap.hidden;
+      });
+      uploadToggleBtnMirror?.addEventListener('click', () => {
+        uploadWrap.hidden = !uploadWrap.hidden;
+      });
+      closeUploadBtn?.addEventListener('click', () => {
+        uploadWrap.hidden = true;
+      });
+      uploadFileBtn?.addEventListener('click', uploadInlineAsset);
+      generatePlanBtn?.addEventListener('click', generatePlan);
+
+      setAssistantPanel('context');
+      renderVisualTheme();
+      renderExecutionMode();
+      renderConversation();
+      renderContext();
+      await Promise.all([
+        loadProviderModes().catch((error) => { apiWrap.innerHTML = renderError(error.message); }),
+        loadLocalCatalog().catch((error) => { localWrap.innerHTML = renderError(error.message); }),
+        loadDownloadJobs().catch(() => {}),
+      ]);
+    },
+  };
+}
+
 function pageAssets(route, rawCtx) {
   const ctx = makeContext(route, rawCtx);
   const role = primaryRole(ctx.state.user);
@@ -2453,6 +3396,7 @@ function pageModels(route, rawCtx) {
       </section>
       <section class="card" data-model-panel="overview" data-model-overview-panel="workbench" hidden>
         <h3>模型工作台概览</h3>
+        <div id="modelAssistantFocusNotice"></div>
         <div id="modelWorkbenchOverviewWrap">${renderEmpty('先从模型列表选择一版待验证模型，这里会汇总当前状态、验证结论和推荐下一步动作。')}</div>
       </section>
       <section class="card">
@@ -2601,6 +3545,7 @@ function pageModels(route, rawCtx) {
       const registerMsg = root.querySelector('#modelRegisterMsg');
       const registerResult = root.querySelector('#modelRegisterResult');
       const modelWorkbenchOverviewWrap = root.querySelector('#modelWorkbenchOverviewWrap');
+      const modelAssistantFocusNotice = root.querySelector('#modelAssistantFocusNotice');
       const modelPanelMeta = root.querySelector('#modelPanelMeta');
       const modelPanelTabs = [...root.querySelectorAll('[data-model-panel-tab]')];
       const modelPanels = [...root.querySelectorAll('[data-model-panel]')];
@@ -2628,6 +3573,12 @@ function pageModels(route, rawCtx) {
       let activeApprovalModelId = '';
       let activeReleaseModelId = '';
       const requestedFocusModelId = localStorage.getItem(STORAGE_KEYS.focusModelId);
+      let requestedFocusModelMeta = null;
+      try {
+        requestedFocusModelMeta = JSON.parse(localStorage.getItem(STORAGE_KEYS.focusModelMeta) || 'null');
+      } catch {
+        requestedFocusModelMeta = null;
+      }
       const requestedOpenModelTimeline = localStorage.getItem(STORAGE_KEYS.focusModelTimeline) === '1';
       let activeModelId = requestedFocusModelId || '';
       let activeModelPanel = requestedFocusModelId ? 'governance' : 'overview';
@@ -2721,6 +3672,32 @@ function pageModels(route, rawCtx) {
         if (activeModelPanel === 'overview') setModelOverviewPanel(activeModelOverviewPanel);
         if (activeModelPanel === 'build') setModelBuildPanel(activeModelBuildPanel);
         if (activeModelPanel === 'governance') setModelGovernancePanel(activeModelGovernancePanel);
+      }
+
+      if (requestedFocusModelId && modelAssistantFocusNotice) {
+        modelAssistantFocusNotice.innerHTML = `
+          <div class="selection-summary assistant-prefill-banner">
+            <strong>来自智能引导的模型定位</strong>
+            <span>${esc(requestedFocusModelMeta?.action_title || '系统已帮你定位到相关模型。')}</span>
+            <span>这里只是帮你聚焦到当前模型；后续仍可手动切换模型、审批分区和发布时间线。</span>
+            <div class="page-hero-actions">
+              <button class="ghost" type="button" id="clearAssistantModelFocusBtn">取消这次聚焦</button>
+              <button class="ghost" type="button" id="backToAssistantFromModelBtn">回到智能引导</button>
+            </div>
+          </div>
+        `;
+        modelAssistantFocusNotice.querySelector('#clearAssistantModelFocusBtn')?.addEventListener('click', () => {
+          localStorage.removeItem(STORAGE_KEYS.focusModelId);
+          localStorage.removeItem(STORAGE_KEYS.focusModelMeta);
+          localStorage.removeItem(STORAGE_KEYS.focusModelTimeline);
+          activeModelId = '';
+          activeModelPanel = 'overview';
+          activeModelOverviewPanel = 'list';
+          modelAssistantFocusNotice.innerHTML = '';
+          setModelPanel(activeModelPanel);
+          loadModels();
+        });
+        modelAssistantFocusNotice.querySelector('#backToAssistantFromModelBtn')?.addEventListener('click', () => ctx.navigate('assistant'));
       }
 
       function selectedModelRecord() {
@@ -3980,6 +4957,7 @@ function pageTraining(route, rawCtx) {
               </section>
             </section>
             <section class="card" data-training-panel="create" data-training-create-panel="form" hidden>
+              <div id="trainingAssistantPrefillNotice"></div>
               <form id="trainingCreateForm" class="form-grid">
                 <div class="grid-two">
                   <div class="form-grid">
@@ -4056,6 +5034,7 @@ function pageTraining(route, rawCtx) {
       const createForm = root.querySelector('#trainingCreateForm');
       const createMsg = root.querySelector('#trainingCreateMsg');
       const createResultWrap = root.querySelector('#trainingCreateResultWrap');
+      const trainingAssistantPrefillNotice = root.querySelector('#trainingAssistantPrefillNotice');
       const trainingPanelMeta = root.querySelector('#trainingPanelMeta');
       const trainingPanelTabs = [...root.querySelectorAll('[data-training-panel-tab]')];
       const trainingPanels = [...root.querySelectorAll('[data-training-panel]')];
@@ -4101,6 +5080,12 @@ function pageTraining(route, rawCtx) {
       const prefillTrainingDatasetLabel = localStorage.getItem(STORAGE_KEYS.prefillTrainingDatasetLabel);
       let prefillTrainingDatasetVersionId = localStorage.getItem(STORAGE_KEYS.prefillTrainingDatasetVersionId);
       const prefillTrainingTargetModelCode = localStorage.getItem(STORAGE_KEYS.prefillTrainingTargetModelCode);
+      let prefillTrainingMeta = null;
+      try {
+        prefillTrainingMeta = JSON.parse(localStorage.getItem(STORAGE_KEYS.prefillTrainingMeta) || 'null');
+      } catch {
+        prefillTrainingMeta = null;
+      }
       const requestedFocusTrainingJobId = localStorage.getItem(STORAGE_KEYS.focusTrainingJobId);
       const assetIdsInput = createForm?.querySelector('input[name="asset_ids"]');
       const validationAssetIdsInput = createForm?.querySelector('input[name="validation_asset_ids"]');
@@ -4361,13 +5346,35 @@ function pageTraining(route, rawCtx) {
         if (validationAssetIdsInput && prefillTrainingValidationAssetIds) validationAssetIdsInput.value = prefillTrainingValidationAssetIds;
         if (targetModelCodeInput && prefillTrainingTargetModelCode) targetModelCodeInput.value = prefillTrainingTargetModelCode;
         if (createMsg) {
-          createMsg.textContent = `已预填 OCR 文本训练资产：train ${prefillTrainingAssetIds || '-'} / validation ${prefillTrainingValidationAssetIds || '-'}${prefillTrainingDatasetLabel ? ` · ${prefillTrainingDatasetLabel}` : ''}${prefillTrainingDatasetVersionId ? ` · ${prefillTrainingDatasetVersionId}` : ''}。这一步还没有创建训练作业，确认参数后请点击“创建训练作业”。`;
+          createMsg.textContent = `已预填训练数据：train ${prefillTrainingAssetIds || '-'} / validation ${prefillTrainingValidationAssetIds || '-'}${prefillTrainingDatasetLabel ? ` · ${prefillTrainingDatasetLabel}` : ''}${prefillTrainingDatasetVersionId ? ` · ${prefillTrainingDatasetVersionId}` : ''}。这一步还没有创建训练作业，确认参数后请点击“创建训练作业”。`;
+        }
+        if (trainingAssistantPrefillNotice) {
+          trainingAssistantPrefillNotice.innerHTML = `
+            <div class="selection-summary assistant-prefill-banner">
+              <strong>来自智能引导的可编辑建议</strong>
+              <span>${esc(prefillTrainingMeta?.action_title || '当前已把建议带到训练创建页。')}</span>
+              <span>系统只帮你把训练数据和目标模型方向带过来；训练预设、基础算法、训练机器、训练参数仍由你手动确认和覆盖。</span>
+              <div class="page-hero-actions">
+                <button class="ghost" type="button" id="clearAssistantTrainingPrefillBtn">清空这些建议</button>
+                <button class="ghost" type="button" id="backToAssistantFromTrainingBtn">回到智能引导</button>
+              </div>
+            </div>
+          `;
+          trainingAssistantPrefillNotice.querySelector('#clearAssistantTrainingPrefillBtn')?.addEventListener('click', () => {
+            if (assetIdsInput && prefillTrainingAssetIds) assetIdsInput.value = '';
+            if (validationAssetIdsInput && prefillTrainingValidationAssetIds) validationAssetIdsInput.value = '';
+            if (targetModelCodeInput && prefillTrainingTargetModelCode) targetModelCodeInput.value = '';
+            if (createMsg) createMsg.textContent = '已清空来自智能引导的建议，接下来完全按你手动选择的训练数据、算法、参数和训练机器继续。';
+            trainingAssistantPrefillNotice.innerHTML = '';
+          });
+          trainingAssistantPrefillNotice.querySelector('#backToAssistantFromTrainingBtn')?.addEventListener('click', () => ctx.navigate('assistant'));
         }
         localStorage.removeItem(STORAGE_KEYS.prefillTrainingAssetIds);
         localStorage.removeItem(STORAGE_KEYS.prefillTrainingValidationAssetIds);
         localStorage.removeItem(STORAGE_KEYS.prefillTrainingDatasetLabel);
         localStorage.removeItem(STORAGE_KEYS.prefillTrainingDatasetVersionId);
         localStorage.removeItem(STORAGE_KEYS.prefillTrainingTargetModelCode);
+        localStorage.removeItem(STORAGE_KEYS.prefillTrainingMeta);
         activeTrainingPanel = 'create';
         activeTrainingCreatePanel = prefillTrainingDatasetVersionId ? 'form' : 'prep';
       }
@@ -5295,6 +6302,12 @@ function pageTraining(route, rawCtx) {
         return '仍不可导出';
       }
 
+      function inspectionProjectedReadinessText(status) {
+        if (status === 'ready') return '处理完阻断样本后可正常训练';
+        if (status === 'cold_start_only') return '处理完阻断样本后仍仅冷启动';
+        return '处理完阻断样本后仍需继续补真值';
+      }
+
       function renderInspectionWorkspaceSummary(payload) {
         if (!inspectionWorkspaceSummaryWrap) return;
         const items = payload?.items || [];
@@ -5352,10 +6365,12 @@ function pageTraining(route, rawCtx) {
               const recommended = Number(item.sample_target_recommended || 0);
               const readyRows = Number(item.ready_rows || 0);
               const proxySeededRows = Number(item.proxy_seeded_rows || 0);
+              const readinessBlockerRows = Number(item.readiness_blocker_rows || 0);
               const latestSummary = item.latest_dataset_summary || {};
               const latestJob = item.latest_training_job || null;
               const latestCandidate = item.latest_candidate_model || null;
               const readiness = item.training_readiness || {};
+              const readinessPlan = item.readiness_action_plan || {};
               const captureProfile = item.capture_profile || {};
               const qaTargets = item.qa_targets || {};
               const starterSamples = item.starter_samples || [];
@@ -5384,11 +6399,21 @@ function pageTraining(route, rawCtx) {
                     <span>需复核</span><strong>${esc(item.needs_check_rows || 0)} 条</strong>
                     <span>已完成</span><strong>${esc(item.completed_rows || 0)} 条</strong>
                     <span>代理回灌</span><strong>${esc(proxySeededRows)} 条</strong>
+                    ${item.dataset_kind === 'ocr_text' ? `<span>训练阻断</span><strong>${esc(readinessBlockerRows)} 条</strong>` : ''}
                     <span>训练就绪</span><strong>${esc(inspectionTrainingReadinessText(readiness))}</strong>
                   </div>
                   <p class="muted">${esc(inspectionWorkspaceReadiness(item))}</p>
                   ${item.dataset_kind === 'ocr_text' ? `<p class="hint ${readiness.status === 'ready' ? '' : readiness.status === 'cold_start_only' ? 'warning' : 'error'}">${esc(readiness.next_step || '请继续补真值后再导出训练包。')}</p>` : ''}
+                  ${item.dataset_kind === 'ocr_text' && readinessPlan.title ? `
+                    <div class="selection-summary">
+                      <strong>${esc(readinessPlan.title)}</strong>
+                      <span>${esc(readinessPlan.summary || '-')}</span>
+                      <span>${esc(inspectionProjectedReadinessText(readinessPlan.projected_status_after_blockers || 'blocked'))}</span>
+                      <span>${esc(`阻断样本处理后预计人工真值 ${readinessPlan.projected_manual_reviewed_rows ?? 0} 条；剩余 ${readinessPlan.remaining_manual_rows_after_blockers ?? 0} 条`)}</span>
+                    </div>
+                  ` : ''}
                   ${proxySeededRows ? `<p class="hint warning">当前有 ${esc(proxySeededRows)} 条文本来自同图车号真值代理回灌，适合先跑训练闭环，但还需要继续补真实标记真值。</p>` : ''}
+                  ${readinessBlockerRows ? `<p class="hint warning">当前有 ${esc(readinessBlockerRows)} 条样本直接阻断正式训练，建议先打开“训练阻断样本”优先处理。</p>` : ''}
                   ${item.notes?.length ? `<p class="hint">${esc(item.notes[0])}</p>` : ''}
                   <div class="selection-card-meta selection-card-meta--compact">
                     <span>建议场景</span><strong>${esc(captureProfile.scene || '-')}</strong>
@@ -5410,6 +6435,7 @@ function pageTraining(route, rawCtx) {
                   <div class="row-actions">
                     ${item.dataset_kind === 'ocr_text' ? `<button class="ghost" type="button" data-open-inspection-ocr-review="${esc(item.task_type)}">打开文字复核</button>` : ''}
                     ${item.dataset_kind === 'ocr_text' && proxySeededRows ? `<button class="ghost" type="button" data-open-inspection-ocr-proxy-review="${esc(item.task_type)}">优先替换代理真值</button>` : ''}
+                    ${item.dataset_kind === 'ocr_text' && readinessBlockerRows ? `<button class="ghost" type="button" data-open-inspection-ocr-blocker-review="${esc(item.task_type)}">优先处理训练阻断样本</button>` : ''}
                     ${item.dataset_kind === 'state_classification' ? `<button class="ghost" type="button" data-open-inspection-state-review="${esc(item.task_type)}">打开状态复核</button>` : ''}
                     <button class="ghost" type="button" data-copy-inspection-command="${esc(item.build_command || '')}">复制打包命令</button>
                   </div>
@@ -5423,6 +6449,12 @@ function pageTraining(route, rawCtx) {
                     <div class="selection-summary">
                       <strong>优先替换代理真值</strong>
                       <span>${proxyReplacementSamples.map((sample) => `${sample.sample_id}${sample.split_hint ? ` · ${sample.split_hint}` : ''}`).join(' / ')}</span>
+                    </div>
+                  ` : ''}
+                  ${(item.readiness_blocker_samples || []).length ? `
+                    <div class="selection-summary">
+                      <strong>训练阻断样本</strong>
+                      <span>${item.readiness_blocker_samples.map((sample) => `${sample.sample_id}${sample.split_hint ? ` · ${sample.split_hint}` : ''}`).join(' / ')}</span>
                     </div>
                   ` : ''}
                   ${latestJob ? `
@@ -5472,6 +6504,7 @@ function pageTraining(route, rawCtx) {
             const nextTaskType = button.getAttribute('data-open-inspection-ocr-review') || '';
             if (!nextTaskType) return;
             localStorage.removeItem(STORAGE_KEYS.inspectionOcrProxyOnly);
+            localStorage.removeItem(STORAGE_KEYS.inspectionOcrReadinessBlockerOnly);
             ctx.navigate(`training/inspection-ocr/${nextTaskType}`);
           });
         });
@@ -5480,6 +6513,16 @@ function pageTraining(route, rawCtx) {
             const nextTaskType = button.getAttribute('data-open-inspection-ocr-proxy-review') || '';
             if (!nextTaskType) return;
             localStorage.setItem(STORAGE_KEYS.inspectionOcrProxyOnly, '1');
+            localStorage.removeItem(STORAGE_KEYS.inspectionOcrReadinessBlockerOnly);
+            ctx.navigate(`training/inspection-ocr/${nextTaskType}`);
+          });
+        });
+        inspectionWorkspaceSummaryWrap.querySelectorAll('[data-open-inspection-ocr-blocker-review]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const nextTaskType = button.getAttribute('data-open-inspection-ocr-blocker-review') || '';
+            if (!nextTaskType) return;
+            localStorage.setItem(STORAGE_KEYS.inspectionOcrReadinessBlockerOnly, '1');
+            localStorage.removeItem(STORAGE_KEYS.inspectionOcrProxyOnly);
             ctx.navigate(`training/inspection-ocr/${nextTaskType}`);
           });
         });
@@ -7105,6 +8148,7 @@ function pageInspectionOcrLabeling(route, rawCtx) {
             <label class="checkbox-row"><input id="inspectionOcrOnlyWithSuggestion" type="checkbox" /> 仅看有建议</label>
             <label class="checkbox-row"><input id="inspectionOcrOnlyHighQualitySuggestion" type="checkbox" /> 仅看高质量建议</label>
             <label class="checkbox-row"><input id="inspectionOcrOnlyProxySeeded" type="checkbox" /> 仅看代理回灌</label>
+            <label class="checkbox-row"><input id="inspectionOcrOnlyReadinessBlocker" type="checkbox" /> 仅看训练阻断样本</label>
             <button class="ghost" type="submit">刷新列表</button>
           </form>
         <div class="row-actions review-toolbar">
@@ -7112,16 +8156,29 @@ function pageInspectionOcrLabeling(route, rawCtx) {
           <button id="presetInspectionOcrNeedsCheck" class="ghost" type="button">只看待复核</button>
           <button id="presetInspectionOcrHighQuality" class="ghost" type="button">优先确认高质量建议</button>
           <button id="presetInspectionOcrProxySeeded" class="ghost" type="button">优先替换代理真值</button>
+          <button id="presetInspectionOcrReadinessBlocker" class="ghost" type="button">优先处理训练阻断样本</button>
           <button id="exportInspectionOcrProxyQueue" class="ghost" type="button">导出代理替换队列</button>
           <button id="exportInspectionOcrHighQualityQueue" class="ghost" type="button">导出高质量建议队列</button>
+          <button id="exportInspectionOcrReadinessBlockerQueue" class="ghost" type="button">导出训练阻断队列</button>
           <button id="exportInspectionOcrReviewPack" class="ghost" type="button">导出人工替换包</button>
           <button id="exportInspectionOcrHighQualityPack" class="ghost" type="button">导出高质量建议包</button>
+          <button id="exportInspectionOcrReadinessBlockerPack" class="ghost" type="button">导出训练阻断包</button>
           <button id="presetInspectionOcrReset" class="ghost" type="button">重置筛选</button>
         </div>
         <div class="row-actions review-toolbar">
           <label class="inline-field">批量确认上限 <input id="inspectionOcrBulkHighQualityLimit" type="number" min="1" max="200" step="1" value="12" /></label>
           <button id="previewInspectionOcrHighQualityAccept" class="ghost" type="button">预检查批量确认</button>
           <button id="acceptInspectionOcrHighQuality" class="ghost" type="button">批量确认高质量建议</button>
+        </div>
+        <div class="row-actions review-toolbar">
+          <label class="inline-field">代理确认上限 <input id="inspectionOcrBulkProxyLimit" type="number" min="1" max="200" step="1" value="12" /></label>
+          <button id="previewInspectionOcrProxyConfirm" class="ghost" type="button">预检查确认代理真值</button>
+          <button id="confirmInspectionOcrProxy" class="ghost" type="button">确认当前代理真值</button>
+        </div>
+        <div class="row-actions review-toolbar">
+          <label class="inline-field">阻断处理上限 <input id="inspectionOcrBulkBlockerLimit" type="number" min="1" max="200" step="1" value="12" /></label>
+          <button id="previewInspectionOcrReadinessBlockerResolve" class="ghost" type="button">预检查阻断样本处理</button>
+          <button id="resolveInspectionOcrReadinessBlocker" class="ghost" type="button">批量处理训练阻断样本</button>
         </div>
           <div id="inspectionOcrListMeta" class="hint"></div>
           <div id="inspectionOcrListWrap">${renderLoading('加载待复核样本...')}</div>
@@ -7151,17 +8208,27 @@ function pageInspectionOcrLabeling(route, rawCtx) {
       const onlyWithSuggestionInput = root.querySelector('#inspectionOcrOnlyWithSuggestion');
       const onlyHighQualitySuggestionInput = root.querySelector('#inspectionOcrOnlyHighQualitySuggestion');
       const onlyProxySeededInput = root.querySelector('#inspectionOcrOnlyProxySeeded');
+      const onlyReadinessBlockerInput = root.querySelector('#inspectionOcrOnlyReadinessBlocker');
       const presetTodoBtn = root.querySelector('#presetInspectionOcrTodo');
       const presetNeedsCheckBtn = root.querySelector('#presetInspectionOcrNeedsCheck');
       const presetHighQualityBtn = root.querySelector('#presetInspectionOcrHighQuality');
       const presetProxySeededBtn = root.querySelector('#presetInspectionOcrProxySeeded');
+      const presetReadinessBlockerBtn = root.querySelector('#presetInspectionOcrReadinessBlocker');
       const exportProxyQueueBtn = root.querySelector('#exportInspectionOcrProxyQueue');
       const exportHighQualityQueueBtn = root.querySelector('#exportInspectionOcrHighQualityQueue');
+      const exportReadinessBlockerQueueBtn = root.querySelector('#exportInspectionOcrReadinessBlockerQueue');
       const exportReviewPackBtn = root.querySelector('#exportInspectionOcrReviewPack');
       const exportHighQualityPackBtn = root.querySelector('#exportInspectionOcrHighQualityPack');
+      const exportReadinessBlockerPackBtn = root.querySelector('#exportInspectionOcrReadinessBlockerPack');
       const bulkHighQualityLimitInput = root.querySelector('#inspectionOcrBulkHighQualityLimit');
       const previewHighQualityAcceptBtn = root.querySelector('#previewInspectionOcrHighQualityAccept');
       const acceptHighQualityBtn = root.querySelector('#acceptInspectionOcrHighQuality');
+      const bulkProxyLimitInput = root.querySelector('#inspectionOcrBulkProxyLimit');
+      const previewProxyConfirmBtn = root.querySelector('#previewInspectionOcrProxyConfirm');
+      const confirmProxyBtn = root.querySelector('#confirmInspectionOcrProxy');
+      const bulkBlockerLimitInput = root.querySelector('#inspectionOcrBulkBlockerLimit');
+      const previewReadinessBlockerResolveBtn = root.querySelector('#previewInspectionOcrReadinessBlockerResolve');
+      const resolveReadinessBlockerBtn = root.querySelector('#resolveInspectionOcrReadinessBlocker');
       const presetResetBtn = root.querySelector('#presetInspectionOcrReset');
       const exportAllowSuggestionsInput = root.querySelector('#inspectionOcrAllowSuggestionsExport');
       const exportAllowProxySeededInput = root.querySelector('#inspectionOcrAllowProxySeededExport');
@@ -7199,6 +8266,7 @@ function pageInspectionOcrLabeling(route, rawCtx) {
           has_suggestion: onlyWithSuggestionInput?.checked ? 'true' : '',
           high_quality_suggestion: onlyHighQualitySuggestionInput?.checked ? 'true' : '',
           proxy_seeded: onlyProxySeededInput?.checked ? 'true' : '',
+          readiness_blocker: onlyReadinessBlockerInput?.checked ? 'true' : '',
           limit: 120,
         };
       }
@@ -7227,6 +8295,7 @@ function pageInspectionOcrLabeling(route, rawCtx) {
         const reviewCounts = summary?.review_status_counts || {};
         const latestExport = summary?.latest_export || null;
         const readiness = summary?.training_readiness || {};
+        const readinessPlan = summary?.readiness_action_plan || {};
         const latestTrainCount = latestExport?.bundles?.train?.sample_count ?? 0;
         const latestValidationCount = latestExport?.bundles?.validation?.sample_count ?? 0;
         const latestSourceLabel = Object.entries(latestExport?.label_sources || {})
@@ -7235,10 +8304,14 @@ function pageInspectionOcrLabeling(route, rawCtx) {
         const starterSamples = summary?.starter_samples || [];
         const proxyReplacementSamples = summary?.proxy_replacement_samples || [];
         const highQualitySuggestionSamples = summary?.high_quality_suggestion_samples || [];
+        const readinessBlockerSamples = summary?.readiness_blocker_samples || [];
         const proxySeededRows = Number(summary?.proxy_seeded_rows || 0);
         const manualReviewedRows = Number(summary?.manual_reviewed_rows || 0);
         const highQualitySuggestionRows = Number(summary?.high_quality_suggestion_rows || 0);
         const highQualityReviewCandidateRows = Number(summary?.high_quality_review_candidate_rows || 0);
+        const readinessBlockerRows = Number(summary?.readiness_blocker_rows || 0);
+        const minManualRowsForReady = Number(readiness?.min_manual_rows_for_ready || 2);
+        const remainingManualRowsForReady = Number(readiness?.remaining_manual_rows_for_ready || 0);
         return `
           <div class="result-overview-grid">
             <article class="metric-card">
@@ -7272,9 +8345,14 @@ function pageInspectionOcrLabeling(route, rawCtx) {
               <span>先把代理回灌的文本替换成真实标记真值</span>
             </article>
             <article class="metric-card">
+              <h4>训练阻断样本</h4>
+              <p class="metric">${esc(readinessBlockerRows)}</p>
+              <span>先清掉这些样本，才能进入正式训练</span>
+            </article>
+            <article class="metric-card">
               <h4>人工确认真值</h4>
               <p class="metric">${esc(manualReviewedRows)}</p>
-              <span>由人工直接确认的真实文本</span>
+              <span>${esc(`正式训练至少需要 ${minManualRowsForReady} 条人工真值`)}</span>
             </article>
             <article class="metric-card">
               <h4>复核状态</h4>
@@ -7317,8 +8395,25 @@ function pageInspectionOcrLabeling(route, rawCtx) {
               <span>${proxyReplacementSamples.map((sample) => `${sample.sample_id}${sample.split_hint ? ` · ${sample.split_hint}` : ''} · 质量分 ${sample.quality_score}`).join(' / ')}</span>
             </div>
           ` : ''}
+          ${readinessBlockerSamples.length ? `
+            <div class="selection-summary">
+              <strong>训练阻断样本</strong>
+              <span>${readinessBlockerSamples.map((sample) => `${sample.sample_id}${sample.split_hint ? ` · ${sample.split_hint}` : ''} · 质量分 ${sample.quality_score}`).join(' / ')}</span>
+            </div>
+          ` : ''}
+          ${readinessBlockerRows ? `<div class="hint warning">当前还有 ${esc(readinessBlockerRows)} 条训练阻断样本。建议先点“优先处理训练阻断样本”，把这批样本逐条改成真实真值或确认当前文本。</div>` : ''}
           ${proxySeededRows ? `<div class="hint warning">当前仍有 ${esc(proxySeededRows)} 条文本来自同图车号真值代理回灌。建议先点“优先替换代理真值”，逐条改成真实标记文本后再导出训练包。</div>` : ''}
+          ${remainingManualRowsForReady > 0 ? `<div class="hint warning">距离正式训练还差 ${esc(remainingManualRowsForReady)} 条人工确认真值；如果已核对当前代理文本无误，可先在“待处理样本”里批量确认代理真值。</div>` : ''}
           ${readiness?.next_step ? `<div class="hint ${readiness?.status === 'ready' ? '' : readiness?.status === 'cold_start_only' ? 'warning' : 'error'}">${esc(`训练建议：${readiness.next_step}`)}</div>` : ''}
+          ${readinessPlan?.title ? `
+            <div class="selection-summary">
+              <strong>${esc(`当前行动：${readinessPlan.title}`)}</strong>
+              <span>${esc(readinessPlan.summary || '-')}</span>
+              <span>${esc(inspectionProjectedReadinessText(readinessPlan.projected_status_after_blockers || 'blocked'))}</span>
+              <span>${esc(`如果先处理完训练阻断样本，预计人工真值会到 ${readinessPlan.projected_manual_reviewed_rows ?? 0} 条；之后还差 ${readinessPlan.remaining_manual_rows_after_blockers ?? 0} 条`)}</span>
+              ${(readinessPlan.steps || []).length ? `<span>${esc(`建议步骤：${readinessPlan.steps.join(' -> ')}`)}</span>` : ''}
+            </div>
+          ` : ''}
           ${
             latestExport
               ? `<div class="hint">最近导出：${esc(formatDateTime(latestExport.generated_at) || '-')} · ${esc(latestSourceLabel || '无来源拆分统计')} · 输出 ${esc(latestExport.output_dir || '-')}</div>`
@@ -7341,6 +8436,7 @@ function pageInspectionOcrLabeling(route, rawCtx) {
                 <div class="text-review-item-meta">${esc(item.source_file || '-')}</div>
                 <div class="text-review-item-badges">
                   ${item.proxy_seeded ? '<span class="badge warning">代理回灌</span>' : ''}
+                  ${item.proxy_seeded ? '<span class="badge warning">训练阻断</span>' : ''}
                   ${item.ocr_suggestion_quality != null ? `<span class="badge ${Number(item.ocr_suggestion_quality) >= 1 ? 'success' : Number(item.ocr_suggestion_quality) >= 0.8 ? '' : 'warning'}">${esc(Number(item.ocr_suggestion_quality) >= 1 ? '高质量建议' : Number(item.ocr_suggestion_quality) >= 0.8 ? '中质量建议' : '低质量建议')}</span>` : ''}
                   ${item.ocr_suggestion ? `<span class="badge">${esc(`建议 ${item.ocr_suggestion}`)}</span>` : '<span class="badge">无建议</span>'}
                   ${item.final_text ? `<span class="badge">${esc(`真值 ${item.final_text}`)}</span>` : ''}
@@ -7696,6 +8792,30 @@ function pageInspectionOcrLabeling(route, rawCtx) {
         return Math.min(200, Math.max(1, Number.isFinite(raw) ? raw : 12));
       }
 
+      function currentProxyCandidateIds(limit) {
+        return currentItems
+          .filter((item) => item.proxy_seeded && item.has_final_text)
+          .slice(0, limit)
+          .map((item) => item.sample_id);
+      }
+
+      function resolveBulkProxyLimit() {
+        const raw = Number(bulkProxyLimitInput?.value || 12);
+        return Math.min(200, Math.max(1, Number.isFinite(raw) ? raw : 12));
+      }
+
+      function currentReadinessBlockerIds(limit) {
+        return currentItems
+          .filter((item) => item.proxy_seeded && item.has_final_text)
+          .slice(0, limit)
+          .map((item) => item.sample_id);
+      }
+
+      function resolveBulkReadinessBlockerLimit() {
+        const raw = Number(bulkBlockerLimitInput?.value || 12);
+        return Math.min(200, Math.max(1, Number.isFinite(raw) ? raw : 12));
+      }
+
       async function previewBulkAcceptHighQuality() {
         const limit = resolveBulkHighQualityLimit();
         const sampleIds = currentHighQualityCandidateIds(limit);
@@ -7758,6 +8878,132 @@ function pageInspectionOcrLabeling(route, rawCtx) {
         }
       }
 
+      async function previewBulkConfirmProxy() {
+        const limit = resolveBulkProxyLimit();
+        const sampleIds = currentProxyCandidateIds(limit);
+        if (!sampleIds.length) {
+          ctx.toast('当前筛选结果里没有可确认的代理真值样本', 'error');
+          return;
+        }
+        setPanel('queue');
+        if (listMeta) listMeta.textContent = '正在预检查代理真值确认...';
+        if (previewProxyConfirmBtn) previewProxyConfirmBtn.disabled = true;
+        try {
+          const payload = await ctx.post(`/training/inspection-ocr/${encodeURIComponent(taskType)}/preview-confirm-proxy`, {
+            sample_ids: sampleIds,
+            limit,
+            notes: '已人工复核确认，保留当前文本作为真实真值',
+          });
+          const changed = payload?.would_update_rows ?? 0;
+          const skipped = payload?.skipped_rows ?? 0;
+          const unchanged = (payload?.unchanged_sample_ids || []).length;
+          const unmatched = (payload?.unmatched_sample_ids || []).length;
+          if (listMeta) {
+            listMeta.textContent = `预检查完成：当前代理候选 ${payload?.total_candidates ?? 0} 条，本次命中 ${payload?.selected_rows ?? 0} 条，将更新 ${changed} 条，跳过 ${skipped} 条${unchanged ? `，未变化 ${unchanged} 条` : ''}${unmatched ? `，不匹配 ${unmatched} 条` : ''}。`;
+          }
+          ctx.toast('代理真值确认预检查完成');
+        } catch (error) {
+          if (listMeta) listMeta.textContent = error.message || '预检查代理真值确认失败';
+          ctx.toast(error.message || '预检查代理真值确认失败', 'error');
+        } finally {
+          if (previewProxyConfirmBtn) previewProxyConfirmBtn.disabled = false;
+        }
+      }
+
+      async function confirmBulkProxy() {
+        const limit = resolveBulkProxyLimit();
+        const sampleIds = currentProxyCandidateIds(limit);
+        if (!sampleIds.length) {
+          ctx.toast('当前筛选结果里没有可确认的代理真值样本', 'error');
+          return;
+        }
+        setPanel('queue');
+        if (listMeta) listMeta.textContent = '正在确认当前代理真值...';
+        if (confirmProxyBtn) confirmProxyBtn.disabled = true;
+        try {
+          const payload = await ctx.post(`/training/inspection-ocr/${encodeURIComponent(taskType)}/confirm-proxy`, {
+            sample_ids: sampleIds,
+            limit,
+            notes: '已人工复核确认，保留当前文本作为真实真值',
+          });
+          if (listMeta) {
+            listMeta.textContent = `已确认 ${payload?.updated_rows ?? 0} 条代理真值，跳过 ${payload?.skipped_rows ?? 0} 条。`;
+          }
+          ctx.toast('代理真值已转成人工确认真值');
+          await Promise.all([loadSummary(), loadItems({ preserveSelection: false })]);
+          setPanel('queue');
+        } catch (error) {
+          if (listMeta) listMeta.textContent = error.message || '确认代理真值失败';
+          ctx.toast(error.message || '确认代理真值失败', 'error');
+        } finally {
+          if (confirmProxyBtn) confirmProxyBtn.disabled = false;
+        }
+      }
+
+      async function previewBulkResolveReadinessBlockers() {
+        const limit = resolveBulkReadinessBlockerLimit();
+        const sampleIds = currentReadinessBlockerIds(limit);
+        if (!sampleIds.length) {
+          ctx.toast('当前筛选结果里没有可处理的训练阻断样本', 'error');
+          return;
+        }
+        setPanel('queue');
+        if (listMeta) listMeta.textContent = '正在预检查训练阻断样本处理...';
+        if (previewReadinessBlockerResolveBtn) previewReadinessBlockerResolveBtn.disabled = true;
+        try {
+          const payload = await ctx.post(`/training/inspection-ocr/${encodeURIComponent(taskType)}/preview-resolve-readiness-blockers`, {
+            sample_ids: sampleIds,
+            limit,
+            notes: '已优先处理训练阻断样本，确认当前文本可作为真实真值',
+          });
+          const changed = payload?.would_update_rows ?? 0;
+          const skipped = payload?.skipped_rows ?? 0;
+          const unchanged = (payload?.unchanged_sample_ids || []).length;
+          const unmatched = (payload?.unmatched_sample_ids || []).length;
+          const reasons = (payload?.resolved_reasons || []).join(' / ');
+          if (listMeta) {
+            listMeta.textContent = `预检查完成：当前阻断样本 ${payload?.total_blockers ?? 0} 条，本次命中 ${payload?.selected_rows ?? 0} 条，将更新 ${changed} 条，跳过 ${skipped} 条${unchanged ? `，未变化 ${unchanged} 条` : ''}${unmatched ? `，不匹配 ${unmatched} 条` : ''}${reasons ? `；阻断原因 ${reasons}` : ''}。`;
+          }
+          ctx.toast('训练阻断样本预检查完成');
+        } catch (error) {
+          if (listMeta) listMeta.textContent = error.message || '预检查训练阻断样本失败';
+          ctx.toast(error.message || '预检查训练阻断样本失败', 'error');
+        } finally {
+          if (previewReadinessBlockerResolveBtn) previewReadinessBlockerResolveBtn.disabled = false;
+        }
+      }
+
+      async function resolveBulkReadinessBlockers() {
+        const limit = resolveBulkReadinessBlockerLimit();
+        const sampleIds = currentReadinessBlockerIds(limit);
+        if (!sampleIds.length) {
+          ctx.toast('当前筛选结果里没有可处理的训练阻断样本', 'error');
+          return;
+        }
+        setPanel('queue');
+        if (listMeta) listMeta.textContent = '正在批量处理训练阻断样本...';
+        if (resolveReadinessBlockerBtn) resolveReadinessBlockerBtn.disabled = true;
+        try {
+          const payload = await ctx.post(`/training/inspection-ocr/${encodeURIComponent(taskType)}/resolve-readiness-blockers`, {
+            sample_ids: sampleIds,
+            limit,
+            notes: '已优先处理训练阻断样本，确认当前文本可作为真实真值',
+          });
+          const reasons = (payload?.resolved_reasons || []).join(' / ');
+          if (listMeta) {
+            listMeta.textContent = `已处理 ${payload?.updated_rows ?? 0} 条训练阻断样本，跳过 ${payload?.skipped_rows ?? 0} 条${reasons ? `；阻断原因 ${reasons}` : ''}。`;
+          }
+          ctx.toast('训练阻断样本已批量处理');
+          await Promise.all([loadSummary(), loadItems({ preserveSelection: false })]);
+          setPanel('queue');
+        } catch (error) {
+          if (listMeta) listMeta.textContent = error.message || '批量处理训练阻断样本失败';
+          ctx.toast(error.message || '批量处理训练阻断样本失败', 'error');
+        } finally {
+          if (resolveReadinessBlockerBtn) resolveReadinessBlockerBtn.disabled = false;
+        }
+      }
+
       filterForm?.addEventListener('submit', async (event) => {
         event.preventDefault();
         await loadItems({ preserveSelection: false });
@@ -7784,6 +9030,7 @@ function pageInspectionOcrLabeling(route, rawCtx) {
         onlyWithSuggestionInput.checked = false;
         onlyHighQualitySuggestionInput.checked = true;
         onlyProxySeededInput.checked = false;
+        onlyReadinessBlockerInput.checked = false;
         searchInput.value = '';
         setPanel('queue');
         await loadItems({ preserveSelection: false });
@@ -7794,6 +9041,18 @@ function pageInspectionOcrLabeling(route, rawCtx) {
         onlyWithSuggestionInput.checked = false;
         onlyHighQualitySuggestionInput.checked = false;
         onlyProxySeededInput.checked = true;
+        onlyReadinessBlockerInput.checked = false;
+        searchInput.value = '';
+        setPanel('queue');
+        await loadItems({ preserveSelection: false });
+      });
+      presetReadinessBlockerBtn?.addEventListener('click', async () => {
+        statusInput.value = '';
+        onlyMissingFinalInput.checked = false;
+        onlyWithSuggestionInput.checked = false;
+        onlyHighQualitySuggestionInput.checked = false;
+        onlyProxySeededInput.checked = false;
+        onlyReadinessBlockerInput.checked = true;
         searchInput.value = '';
         setPanel('queue');
         await loadItems({ preserveSelection: false });
@@ -7850,8 +9109,38 @@ function pageInspectionOcrLabeling(route, rawCtx) {
           ctx.toast(error.message || '导出高质量建议包失败', 'error');
         }
       });
+      exportReadinessBlockerQueueBtn?.addEventListener('click', async () => {
+        try {
+          const url = await fetchAuthorizedBlobUrl(`/training/inspection-ocr/${encodeURIComponent(taskType)}/export-readiness-blocker-queue`, ctx.token);
+          const anchor = document.createElement('a');
+          anchor.href = url;
+          anchor.download = `${taskType}_readiness_blocker_queue.csv`;
+          anchor.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          ctx.toast('训练阻断队列已导出');
+        } catch (error) {
+          ctx.toast(error.message || '导出训练阻断队列失败', 'error');
+        }
+      });
+      exportReadinessBlockerPackBtn?.addEventListener('click', async () => {
+        try {
+          const url = await fetchAuthorizedBlobUrl(`/training/inspection-ocr/${encodeURIComponent(taskType)}/export-readiness-blocker-pack`, ctx.token);
+          const anchor = document.createElement('a');
+          anchor.href = url;
+          anchor.download = `${taskType}_readiness_blocker_pack.zip`;
+          anchor.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          ctx.toast('训练阻断包已导出');
+        } catch (error) {
+          ctx.toast(error.message || '导出训练阻断包失败', 'error');
+        }
+      });
       previewHighQualityAcceptBtn?.addEventListener('click', previewBulkAcceptHighQuality);
       acceptHighQualityBtn?.addEventListener('click', acceptBulkHighQuality);
+      previewProxyConfirmBtn?.addEventListener('click', previewBulkConfirmProxy);
+      confirmProxyBtn?.addEventListener('click', confirmBulkProxy);
+      previewReadinessBlockerResolveBtn?.addEventListener('click', previewBulkResolveReadinessBlockers);
+      resolveReadinessBlockerBtn?.addEventListener('click', resolveBulkReadinessBlockers);
       presetResetBtn?.addEventListener('click', async () => {
         statusInput.value = '';
         splitInput.value = '';
@@ -7859,6 +9148,7 @@ function pageInspectionOcrLabeling(route, rawCtx) {
         onlyWithSuggestionInput.checked = false;
         onlyHighQualitySuggestionInput.checked = false;
         onlyProxySeededInput.checked = false;
+        onlyReadinessBlockerInput.checked = false;
         searchInput.value = '';
         await loadItems({ preserveSelection: false });
       });
@@ -7890,9 +9180,15 @@ function pageInspectionOcrLabeling(route, rawCtx) {
       });
 
       const proxyOnlyPreset = localStorage.getItem(STORAGE_KEYS.inspectionOcrProxyOnly) === '1';
+      const readinessBlockerPreset = localStorage.getItem(STORAGE_KEYS.inspectionOcrReadinessBlockerOnly) === '1';
       if (proxyOnlyPreset && onlyProxySeededInput) {
         onlyProxySeededInput.checked = true;
         localStorage.removeItem(STORAGE_KEYS.inspectionOcrProxyOnly);
+        activePanel = 'queue';
+      }
+      if (readinessBlockerPreset && onlyReadinessBlockerInput) {
+        onlyReadinessBlockerInput.checked = true;
+        localStorage.removeItem(STORAGE_KEYS.inspectionOcrReadinessBlockerOnly);
         activePanel = 'queue';
       }
       await Promise.all([loadSummary(), loadItems({ preserveSelection: false })]);
@@ -9116,6 +10412,7 @@ function pageTasks(route, rawCtx) {
           <button class="ghost" type="button" data-create-flow-tab="result">创建反馈</button>
         </div>
         <div id="createFlowMeta" class="hint">默认先填写任务；创建成功后会自动切到创建反馈。</div>
+        <div id="taskAssistantPrefillNotice"></div>
         <form id="taskCreateForm" class="form-grid" data-create-flow-panel="form">
           <h3>创建任务</h3>
           <label>资产编号</label>
@@ -9197,6 +10494,7 @@ function pageTasks(route, rawCtx) {
       const createForm = root.querySelector('#taskCreateForm');
       const createMsg = root.querySelector('#taskCreateMsg');
       const createResult = root.querySelector('#taskCreateResult');
+      const taskAssistantPrefillNotice = root.querySelector('#taskAssistantPrefillNotice');
       const taskCreateAssist = root.querySelector('#taskCreateAssist');
       const tableWrap = root.querySelector('#tasksTableWrap');
       const assetsDatalist = root.querySelector('#taskAssetsDatalist');
@@ -9702,6 +11000,12 @@ function pageTasks(route, rawCtx) {
       const prefillTaskType = localStorage.getItem(STORAGE_KEYS.prefillTaskType);
       const prefillTaskDeviceCode = localStorage.getItem(STORAGE_KEYS.prefillTaskDeviceCode);
       const prefillTaskHint = localStorage.getItem(STORAGE_KEYS.prefillTaskHint);
+      let prefillTaskMeta = null;
+      try {
+        prefillTaskMeta = JSON.parse(localStorage.getItem(STORAGE_KEYS.prefillTaskMeta) || 'null');
+      } catch {
+        prefillTaskMeta = null;
+      }
       if (createForm && (prefillTaskModelId || prefillTaskAssetId || prefillTaskType || prefillTaskDeviceCode || prefillTaskHint)) {
         const modelInput = createForm.querySelector('input[name="model_id"]');
         const assetInput = createForm.querySelector('input[name="asset_id"]');
@@ -9715,11 +11019,40 @@ function pageTasks(route, rawCtx) {
           createMsg.textContent = prefillTaskHint
             || `已预填验证任务：模型 ${prefillTaskModelId || '-'} · 任务类型 ${prefillTaskType || '-'} · 设备 ${prefillTaskDeviceCode || '-'}`;
         }
+        if (taskAssistantPrefillNotice) {
+          taskAssistantPrefillNotice.innerHTML = `
+            <div class="selection-summary assistant-prefill-banner">
+              <strong>来自智能引导的可编辑建议</strong>
+              <span>${esc(prefillTaskMeta?.action_title || '当前已把建议带到任务创建页。')}</span>
+              <span>${esc(prefillTaskMeta?.execution_mode === 'prefill_navigate' ? '这些字段只是建议预填，你仍可继续手动改模型、任务类型、设备和补充说明。' : '当前只做导航，没有自动改字段。')}</span>
+              <div class="page-hero-actions">
+                <button class="ghost" type="button" id="clearAssistantTaskPrefillBtn">清空这些建议</button>
+                <button class="ghost" type="button" id="backToAssistantBtn">回到智能引导</button>
+              </div>
+            </div>
+          `;
+          taskAssistantPrefillNotice.querySelector('#clearAssistantTaskPrefillBtn')?.addEventListener('click', () => {
+            const modelInput = createForm.querySelector('input[name="model_id"]');
+            const assetInput = createForm.querySelector('input[name="asset_id"]');
+            const taskTypeInput = createForm.querySelector('select[name="task_type"]');
+            const deviceCodeInput = createForm.querySelector('input[name="device_code"]');
+            const intentInput = createForm.querySelector('input[name="intent_text"]');
+            if (modelInput && prefillTaskModelId) modelInput.value = '';
+            if (assetInput && prefillTaskAssetId) assetInput.value = '';
+            if (taskTypeInput && prefillTaskType) taskTypeInput.value = '';
+            if (deviceCodeInput && prefillTaskDeviceCode) deviceCodeInput.value = 'edge-01';
+            if (intentInput && prefillTaskHint) intentInput.value = '';
+            if (createMsg) createMsg.textContent = '已清空来自智能引导的建议，接下来完全按你手动填写的内容创建任务。';
+            taskAssistantPrefillNotice.innerHTML = '';
+          });
+          taskAssistantPrefillNotice.querySelector('#backToAssistantBtn')?.addEventListener('click', () => ctx.navigate('assistant'));
+        }
         localStorage.removeItem(STORAGE_KEYS.prefillTaskModelId);
         localStorage.removeItem(STORAGE_KEYS.prefillTaskAssetId);
         localStorage.removeItem(STORAGE_KEYS.prefillTaskType);
         localStorage.removeItem(STORAGE_KEYS.prefillTaskDeviceCode);
         localStorage.removeItem(STORAGE_KEYS.prefillTaskHint);
+        localStorage.removeItem(STORAGE_KEYS.prefillTaskMeta);
       }
       const quickPrefillAsset = localStorage.getItem(STORAGE_KEYS.quickDetectAssetId);
       if (quickPrefillAsset && quickDetectAssetInput) {
@@ -12669,6 +14002,7 @@ const factories = {
   login: pageLogin,
   dashboard: pageDashboard,
   guide: pageGuide,
+  assistant: pageAssistant,
   assets: pageAssets,
   models: pageModels,
   training: pageTraining,

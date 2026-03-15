@@ -35,6 +35,13 @@ Vistral 把资产准备、供应商协作、模型治理、任务执行、结果
 - 快速识别：上传单张或多张图片/短视频后可先做一轮预检扫描，自动给出候选目标标签 / 任务类型 / OCR 文本建议；确认方向后平台自动选模、创建任务并返回标注结果。结果支持删误检、手工补框、拖动缩放修订框、修订 OCR 文本、保存修订，并把结果导出成可预览、可版本对比的数据集版本
 - 模型中心：支持模型包提交、自动验证门禁、发布前风险摘要、审批、发布、时间线查看和交付元数据管理
 - 流水线中心：支持 `Router + Experts + Thresholds + Fusion + Human Review` 的 pipeline 编排与发布
+- 智能引导：支持独立 `智能引导` 入口，用户可上传图片、说明目标、选择 `API 模式 / 本地模型模式`，由系统给出“直接验证 / 先训练 / 去审批 / 去发布”的下一步动作；本地模式内置精选 10 个开源模型并支持直接下载、取消与任务查看
+- 智能引导默认只做“建议与导航”，不会自动改字段；只有用户显式选择“跳转并带建议过去”时，才会把模型/任务/训练建议作为可编辑预填写入下一页
+- 全站主题现在支持：
+  - `夜幕金`
+  - `ChatGPT 清透白`
+  - `夏日奶油色`
+  智能引导页已经重构成对话优先布局，但主题切换作用于所有页面，不再只限该页
 - 训练控制面：支持训练作业、worker 注册/心跳、受控拉取训练资产和基线模型、候选模型自动回收，以及作业取消 / 重试 / 改派 / 超时回收；训练中心会把基础模型、数据规模、关键指标、epoch 曲线、best checkpoint、运行告警和后续动作集中展示
 - 边缘执行链路：支持拉任务、拉模型、验签、解密、推理、回传、断网补传
 - 审计闭环：登录、上传、建任务、训练拉取、模型提交/审批/发布/下载、结果导出、边缘回传均有留痕
@@ -54,6 +61,11 @@ Vistral 把资产准备、供应商协作、模型治理、任务执行、结果
 - 训练中心可直接从候选模型发起“直接验证候选模型”，只需补 1-3 张单图/视频资产，不必先手动切到任务中心再录入 `model_id`
 - 结果中心会额外展示“验证结论卡”，汇总样本数、低置信度数、建议动作，方便判断是否继续审批/发布
 - 结果中心还支持“结果回灌工作台”：基于当前 `task_id` 一键导出训练/验证数据集版本，并自动预填训练中心，不必再手抄 `asset_id / dataset_version_id`
+- 智能引导工作台现在支持：
+  - `API 模式 / 本地模型模式`
+  - 精选 10 个开源本地模型目录
+  - 直接下载本地模型并查看下载任务
+  - 基于目标、资产、模型、任务类型给出主推荐动作与次推荐动作
 - 巡检 OCR 工作区摘要现在支持从 `manifest.csv` 重建，避免 `summary.json` 长期落后于真实复核状态：
 
 ```bash
@@ -115,6 +127,7 @@ python3 docker/scripts/refresh_inspection_workspace_summaries.py
 - 演示脚本：[docs/demo.md](docs/demo.md)
 - 研发路线图（ctxport方法）：[docs/roadmap_ctxport_based.md](docs/roadmap_ctxport_based.md)
 - 文档导航与模板：[docs/README.md](docs/README.md)
+- 智能引导 / LLM 工作台：[docs/product/intelligent_guide_llm_workbench_2026-03-14.md](docs/product/intelligent_guide_llm_workbench_2026-03-14.md)
 
 ## 快速开始
 
@@ -362,6 +375,28 @@ python3 docker/scripts/seed_inspection_ocr_from_car_number_truth.py
   - `仅看代理回灌`
   - `优先替换代理真值`
   - 工作区摘要显示 `manual_reviewed_rows / proxy_replacement_samples`
+  - inspection OCR 复核页现已把“训练阻断样本”独立出来：
+    - `仅看训练阻断样本`
+    - `优先处理训练阻断样本`
+    - 工作区摘要显示 `readiness_blocker_rows / readiness_blocker_samples`
+    - 现在还支持：
+      - `预检查阻断样本处理`
+      - `批量处理训练阻断样本`
+  - 可直接导出：
+    - `readiness_blocker_queue.csv`
+    - `readiness_blocker_pack.zip`
+  - 摘要区和训练中心卡片还会直接显示：
+    - `当前行动`
+    - `处理完阻断样本后是否可正常训练`
+    - `预计人工真值数量`
+  - 当前 inspection OCR 真实行动计划：
+    - `inspection_mark_ocr.readiness_action_plan.title = 先处理训练阻断样本`
+    - `inspection_mark_ocr.projected_status_after_blockers = ready`
+    - `inspection_mark_ocr.projected_manual_reviewed_rows = 9`
+  - live 验证：
+    - 前 2 条训练阻断样本预检查：`would_update_rows = 2`
+    - 正式处理后中间态：`proxy_seeded_rows 6 -> 4`、`manual_reviewed_rows 3 -> 5`
+    - 验证后已恢复工作区基线
 - inspection OCR 复核页现在还支持：
   - 同时查看 crop 和原图
   - 直接导出 `proxy_replacement_queue.csv`
@@ -394,6 +429,8 @@ python3 docker/scripts/seed_inspection_ocr_from_car_number_truth.py
     - `connector_defect_detect.row_count = 2`
     - 两类任务的 `training_readiness.status = ready`
     - 已各自产生首条真实训练作业与待验证模型
+    - `door_lock_state_detect` 作业：`train-bbab47f859`
+    - `connector_defect_detect` 作业：`train-80b794db2e`
   - 但状态复核页现在已经可以直接把平台里的真实图片资产导入工作区：
     - `POST /training/inspection-state/{task_type}/import-assets`
     - 不再需要线下手工改 `manifest.csv` 才能起步
