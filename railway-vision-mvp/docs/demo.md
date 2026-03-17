@@ -94,7 +94,7 @@ POSTGRES_IMAGE=docker.m.daocloud.io/library/postgres:16-alpine
 REDIS_IMAGE=docker.m.daocloud.io/library/redis:7-alpine
 PYTHON_BASE_IMAGE=docker.m.daocloud.io/library/python:3.11-slim
 EDGE_PYTHON_BASE_IMAGE=docker.m.daocloud.io/library/python:3.11-slim
-NGINX_BASE_IMAGE=docker.m.daocloud.io/library/nginx:1.27-alpine
+NGINX_BASE_IMAGE=nginx:1.27-alpine
 PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 ```
