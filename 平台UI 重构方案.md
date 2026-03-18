@@ -3,6 +3,8 @@
 你是资深 AI 产品架构师、前端架构师、全栈工程师。  
 请基于当前仓库 **ferrarif1/RVision** 的现状，执行一次 **“高效率、低推翻率、以 LLM 为入口的整体交互重构”**。
 
+最重要‼️：
+根据https://github.com/alibaba/page-agent去实现llm接入 重构项目交互
 ---
 
 ## 0. 执行原则
