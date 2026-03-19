@@ -2,6 +2,7 @@ import { createStore } from './core/store.js';
 import { createRouter } from './core/router.js';
 import { api, apiPost } from './core/api.js';
 import { buildDocumentTitle, migrateLegacyStorageKeys, STORAGE_KEYS } from './config/brand.js';
+import { persistAiWorkflowDraft, readAiWorkflowDraft } from './ai/runtime.js';
 import { renderShell, bindShellEvents } from './layout/AppShell.js';
 import { getPage } from './pages/index.js';
 
@@ -10,19 +11,26 @@ const root = document.getElementById('app');
 migrateLegacyStorageKeys();
 
 function applyVisualTheme(theme) {
-  const normalized = ['classic_dark', 'chatgpt_light', 'summer_cream'].includes(theme) ? theme : 'classic_dark';
+  const normalized = theme === 'chatgpt_light' ? 'chatgpt_light' : 'chatgpt_light';
   document.documentElement.setAttribute('data-ui-theme', normalized);
   localStorage.setItem(STORAGE_KEYS.visualTheme, normalized);
   return normalized;
 }
 
-const initialVisualTheme = applyVisualTheme(localStorage.getItem(STORAGE_KEYS.visualTheme) || 'classic_dark');
+const initialVisualTheme = applyVisualTheme('chatgpt_light');
 
 const routes = [
   { name: 'login', pattern: 'login', requiresAuth: false, label: '登录', navPage: null },
+  { name: 'ai', pattern: 'ai', requiresAuth: true, label: 'AI Workspace', navPage: 'ai' },
+  { name: 'assistant', pattern: 'assistant', requiresAuth: true, label: 'AI Workspace', navPage: 'ai' },
+  { name: 'aiChat', pattern: 'ai/chat/:sessionId', requiresAuth: true, label: 'AI 会话', navPage: 'ai', parentPath: 'ai' },
+  { name: 'aiWorkflowUpload', pattern: 'ai/workflow/upload', requiresAuth: true, label: '上传流程', navPage: 'aiWorkflowUpload', parentPath: 'ai' },
+  { name: 'aiWorkflowTrain', pattern: 'ai/workflow/train', requiresAuth: true, label: '训练流程', navPage: 'aiWorkflowTrain', parentPath: 'ai' },
+  { name: 'aiWorkflowDeploy', pattern: 'ai/workflow/deploy', requiresAuth: true, label: '发布流程', navPage: 'aiWorkflowDeploy', parentPath: 'ai' },
+  { name: 'aiWorkflowResults', pattern: 'ai/workflow/results', requiresAuth: true, label: '结果流程', navPage: 'aiWorkflowResults', parentPath: 'ai' },
+  { name: 'aiWorkflowTroubleshoot', pattern: 'ai/workflow/troubleshoot', requiresAuth: true, label: '排障流程', navPage: 'aiWorkflowTroubleshoot', parentPath: 'ai' },
   { name: 'dashboard', pattern: 'dashboard', requiresAuth: true, permission: 'dashboard.view', label: '工作台', navPage: 'dashboard' },
   { name: 'guide', pattern: 'guide', requiresAuth: true, permission: 'dashboard.view', label: '接入与使用指南', navPage: 'guide', parentPath: 'dashboard' },
-  { name: 'assistant', pattern: 'assistant', requiresAuth: true, permission: 'dashboard.view', label: '智能引导', navPage: 'assistant' },
   { name: 'assets', pattern: 'assets', requiresAuth: true, permission: 'asset.upload', label: '资产', navPage: 'assets' },
   { name: 'models', pattern: 'models', requiresAuth: true, permission: 'model.view', label: '模型', navPage: 'models' },
   { name: 'training', pattern: 'training', requiresAuth: true, permission: 'training.job.view', label: '训练', navPage: 'training' },
@@ -42,9 +50,14 @@ const routes = [
 ];
 
 const NAV_COMMANDS = [
+  { path: 'ai', title: 'AI Workspace', description: '从对话入口开始规划上传、训练、发布、结果和排障', keywords: 'ai workspace copilot 对话 入口 智能 工作流' },
+  { path: 'ai/workflow/upload', title: 'AI 上传流程', description: '先补齐输入资产，再进入训练或验证', keywords: 'ai workflow upload 上传 流程' },
+  { path: 'ai/workflow/train', title: 'AI 训练流程', description: '进入轻量训练流程，再跳转到训练专家页', keywords: 'ai workflow train 训练 流程' },
+  { path: 'ai/workflow/deploy', title: 'AI 发布流程', description: '进入模型发布与交付流程', keywords: 'ai workflow deploy 发布 流程 交付' },
+  { path: 'ai/workflow/results', title: 'AI 结果流程', description: '查看最近任务输出与结果闭环', keywords: 'ai workflow results 结果 流程' },
+  { path: 'ai/workflow/troubleshoot', title: 'AI 排障流程', description: '针对失败任务、训练阻塞和设备问题做排障', keywords: 'ai workflow troubleshoot 排障 故障 流程' },
   { path: 'dashboard', title: '工作台', description: '查看四条主线的整体状态', keywords: 'dashboard home 总览 主线' },
   { path: 'guide', title: '接入与使用指南', description: '查看平台接入步骤、角色上手和功能使用说明', keywords: 'guide docs onboarding 接入 文档 使用 指南' },
-  { path: 'assistant', title: '智能引导', description: '用可选大模型模式与平台规则一起规划下一步动作', keywords: 'assistant llm copilot 智能 引导 本地模型 api 模型下载' },
   { path: 'assets', title: '资产中心', description: '上传和筛选图片/视频资产', keywords: 'asset upload 资产 上传' },
   { path: 'models', title: '模型中心', description: '提交模型、审批、发布时间线', keywords: 'model release approve 模型 审批 发布' },
   { path: 'training', title: '训练管理', description: '训练作业与 worker 资源', keywords: 'training worker 训练 作业' },
@@ -80,6 +93,13 @@ function clearSession() {
   localStorage.removeItem(STORAGE_KEYS.user);
   localStorage.removeItem(STORAGE_KEYS.permissions);
   localStorage.removeItem(STORAGE_KEYS.lastRoute);
+  localStorage.removeItem(STORAGE_KEYS.lastExpertRoute);
+  localStorage.removeItem(STORAGE_KEYS.aiSessions);
+  localStorage.removeItem(STORAGE_KEYS.aiRecentActions);
+  localStorage.removeItem(STORAGE_KEYS.aiPendingConfirmations);
+  localStorage.removeItem(STORAGE_KEYS.aiLastPlan);
+  localStorage.removeItem(STORAGE_KEYS.aiWorkflowDraft);
+  localStorage.removeItem(STORAGE_KEYS.assistantApiKey);
 }
 
 async function hydrateSession() {
@@ -119,16 +139,116 @@ function toast(message, type = 'info') {
 }
 
 function routePathValue(route) {
-  return route.currentPath || route.pattern || route.name || 'dashboard';
+  if (route.name === 'assistant') return 'ai';
+  return route.currentPath || route.pattern || route.name || 'ai';
+}
+
+function primeAIContextFromExpertRoute(route) {
+  if (!route || isAIRouteName(route.name) || route.name === 'login') return;
+  const existing = readAiWorkflowDraft();
+  const fallbackGoal = `我正在 ${route.label || route.name}，请结合当前页面继续引导我下一步。`;
+  persistAiWorkflowDraft({
+    ...existing,
+    goal: existing?.goal || fallbackGoal,
+    source_path: route.pattern || route.name,
+    source_label: route.label || route.name,
+  });
+}
+
+function isAIRouteName(name) {
+  return ['ai', 'assistant', 'aiChat', 'aiWorkflowUpload', 'aiWorkflowTrain', 'aiWorkflowDeploy', 'aiWorkflowResults', 'aiWorkflowTroubleshoot'].includes(name);
+}
+
+function isExpertRouteName(name) {
+  return ['dashboard', 'guide', 'assets', 'models', 'training', 'carNumberLabeling', 'inspectionOcrLabeling', 'inspectionStateLabeling', 'pipelines', 'tasks', 'taskDetail', 'results', 'resultTask', 'audit', 'devices', 'settings'].includes(name);
 }
 
 function buildRouteView(route) {
+  if (route.name === 'ai' || route.name === 'assistant') {
+    return {
+      label: 'AI Workspace',
+      navPage: 'ai',
+      showBack: false,
+      backPath: 'ai',
+      mode: 'ai',
+      modeLabel: 'AI Workspace',
+      breadcrumb: [{ label: 'AI Workspace' }],
+    };
+  }
+  if (route.name === 'aiChat') {
+    return {
+      label: 'AI 会话',
+      navPage: 'ai',
+      showBack: true,
+      backPath: 'ai',
+      mode: 'ai',
+      modeLabel: 'AI Workspace',
+      breadcrumb: [{ label: 'AI Workspace', path: 'ai' }, { label: route.params?.sessionId || '会话' }],
+    };
+  }
+  if (route.name === 'aiWorkflowUpload') {
+    return {
+      label: '上传流程',
+      navPage: 'aiWorkflowUpload',
+      showBack: true,
+      backPath: 'ai',
+      mode: 'ai',
+      modeLabel: 'AI Workspace',
+      breadcrumb: [{ label: 'AI Workspace', path: 'ai' }, { label: '上传流程' }],
+    };
+  }
+  if (route.name === 'aiWorkflowTrain') {
+    return {
+      label: '训练流程',
+      navPage: 'aiWorkflowTrain',
+      showBack: true,
+      backPath: 'ai',
+      mode: 'ai',
+      modeLabel: 'AI Workspace',
+      breadcrumb: [{ label: 'AI Workspace', path: 'ai' }, { label: '训练流程' }],
+    };
+  }
+  if (route.name === 'aiWorkflowDeploy') {
+    return {
+      label: '发布流程',
+      navPage: 'aiWorkflowDeploy',
+      showBack: true,
+      backPath: 'ai',
+      mode: 'ai',
+      modeLabel: 'AI Workspace',
+      breadcrumb: [{ label: 'AI Workspace', path: 'ai' }, { label: '发布流程' }],
+    };
+  }
+  if (route.name === 'aiWorkflowResults') {
+    return {
+      label: '结果流程',
+      navPage: 'aiWorkflowResults',
+      showBack: true,
+      backPath: 'ai',
+      mode: 'ai',
+      modeLabel: 'AI Workspace',
+      breadcrumb: [{ label: 'AI Workspace', path: 'ai' }, { label: '结果流程' }],
+    };
+  }
+  if (route.name === 'aiWorkflowTroubleshoot') {
+    return {
+      label: '排障流程',
+      navPage: 'aiWorkflowTroubleshoot',
+      showBack: true,
+      backPath: 'ai',
+      mode: 'ai',
+      modeLabel: 'AI Workspace',
+      breadcrumb: [{ label: 'AI Workspace', path: 'ai' }, { label: '排障流程' }],
+    };
+  }
   if (route.name === 'taskDetail') {
     return {
       label: '任务详情',
       navPage: 'tasks',
       showBack: true,
       backPath: 'tasks',
+      mode: 'expert',
+      modeLabel: 'Expert Console',
       breadcrumb: [{ label: '任务', path: 'tasks' }, { label: route.params?.task_id || '详情' }],
     };
   }
@@ -138,6 +258,8 @@ function buildRouteView(route) {
       navPage: 'results',
       showBack: true,
       backPath: 'results',
+      mode: 'expert',
+      modeLabel: 'Expert Console',
       breadcrumb: [{ label: '结果', path: 'results' }, { label: route.params?.task_id || '详情' }],
     };
   }
@@ -147,6 +269,8 @@ function buildRouteView(route) {
       navPage: 'training',
       showBack: true,
       backPath: 'training',
+      mode: 'expert',
+      modeLabel: 'Expert Console',
       breadcrumb: [{ label: '训练', path: 'training' }, { label: '车号文本复核' }],
     };
   }
@@ -157,6 +281,8 @@ function buildRouteView(route) {
       navPage: 'training',
       showBack: true,
       backPath: 'training',
+      mode: 'expert',
+      modeLabel: 'Expert Console',
       breadcrumb: [{ label: '训练', path: 'training' }, { label: taskType }, { label: '巡检文字复核' }],
     };
   }
@@ -167,6 +293,8 @@ function buildRouteView(route) {
       navPage: 'training',
       showBack: true,
       backPath: 'training',
+      mode: 'expert',
+      modeLabel: 'Expert Console',
       breadcrumb: [{ label: '训练', path: 'training' }, { label: taskType }, { label: '巡检状态复核' }],
     };
   }
@@ -175,26 +303,32 @@ function buildRouteView(route) {
       label: '接入与使用指南',
       navPage: 'guide',
       showBack: true,
-      backPath: 'dashboard',
-      breadcrumb: [{ label: '工作台', path: 'dashboard' }, { label: '接入与使用指南' }],
+      backPath: 'ai',
+      mode: 'expert',
+      modeLabel: 'Expert Console',
+      breadcrumb: [{ label: 'Expert Console', path: 'dashboard' }, { label: '接入与使用指南' }],
     };
   }
   if (route.name === '403') {
     return {
       label: '无权限',
-      navPage: 'dashboard',
+      navPage: 'ai',
       showBack: true,
-      backPath: 'dashboard',
-      breadcrumb: [{ label: '工作台', path: 'dashboard' }, { label: '403' }],
+      backPath: 'ai',
+      mode: 'ai',
+      modeLabel: 'AI Workspace',
+      breadcrumb: [{ label: 'AI Workspace', path: 'ai' }, { label: '403' }],
     };
   }
   if (route.name === '404') {
     return {
       label: '页面不存在',
-      navPage: 'dashboard',
+      navPage: 'ai',
       showBack: true,
-      backPath: 'dashboard',
-      breadcrumb: [{ label: '工作台', path: 'dashboard' }, { label: '404' }],
+      backPath: 'ai',
+      mode: 'ai',
+      modeLabel: 'AI Workspace',
+      breadcrumb: [{ label: 'AI Workspace', path: 'ai' }, { label: '404' }],
     };
   }
   return {
@@ -202,6 +336,8 @@ function buildRouteView(route) {
     navPage: route.navPage || route.name,
     showBack: false,
     backPath: route.parentPath || 'dashboard',
+    mode: isAIRouteName(route.name) ? 'ai' : 'expert',
+    modeLabel: isAIRouteName(route.name) ? 'AI Workspace' : 'Expert Console',
     breadcrumb: [{ label: route.label || route.name }],
   };
 }
@@ -214,6 +350,13 @@ function canAccessPath(path, permissions) {
   const route = routeConfigByPath(path);
   if (!route?.permission) return true;
   return permissions.has(route.permission);
+}
+
+function expertEntryPath(permissions = new Set()) {
+  const candidates = ['dashboard', 'assets', 'tasks', 'results', 'models', 'pipelines', 'devices', 'audit', 'settings'];
+  const remembered = localStorage.getItem(STORAGE_KEYS.lastExpertRoute);
+  if (remembered && canAccessPath(remembered, permissions)) return remembered;
+  return candidates.find((path) => canAccessPath(path, permissions)) || 'dashboard';
 }
 
 function isTypingTarget(target) {
@@ -274,6 +417,22 @@ function buildCommandItems(state, routeView) {
     },
     {
       type: 'action',
+      value: 'open_ai_workspace',
+      title: '打开 AI Workspace',
+      description: '回到 AI 对话入口和工作流首页',
+      shortcut: '',
+      keywords: 'ai workspace home 对话 智能 入口',
+    },
+    {
+      type: 'action',
+      value: 'open_expert_console',
+      title: '打开 Expert Console',
+      description: '进入你上次停留的专家页',
+      shortcut: '',
+      keywords: 'expert console 控制台 专家 页面',
+    },
+    {
+      type: 'action',
       value: 'logout',
       title: '退出登录',
       description: '安全退出当前账号',
@@ -313,7 +472,7 @@ async function login(username, password) {
   const permissions = new Set(me.permissions || resp.permissions || []);
   store.setState({ token: resp.access_token, user: me, permissions });
   saveSession(store.getState());
-  router.navigate(localStorage.getItem(STORAGE_KEYS.lastRoute) || 'dashboard');
+  router.navigate(localStorage.getItem(STORAGE_KEYS.lastRoute) || 'ai');
   return { ok: true };
 }
 
@@ -398,6 +557,14 @@ function executeCommandItem(item, routeView) {
   if (item.value === 'new_asset') {
     router.navigate('assets');
     window.setTimeout(() => toast('已打开资产页，可直接上传文件'), 50);
+    return;
+  }
+  if (item.value === 'open_ai_workspace') {
+    router.navigate('ai');
+    return;
+  }
+  if (item.value === 'open_expert_console') {
+    router.navigate(expertEntryPath(store.getState().permissions || new Set()));
     return;
   }
   if (item.value === 'logout') {
@@ -500,7 +667,7 @@ function render() {
   }
 
   if (hasUser && route.name === 'login') {
-    router.navigate(localStorage.getItem(STORAGE_KEYS.lastRoute) || 'dashboard');
+    router.navigate(localStorage.getItem(STORAGE_KEYS.lastRoute) || 'ai');
     return;
   }
 
@@ -513,6 +680,9 @@ function render() {
 
   if (route.requiresAuth && !['403', '404', 'login'].includes(route.name)) {
     localStorage.setItem(STORAGE_KEYS.lastRoute, routePathValue(route));
+    if (isExpertRouteName(route.name)) {
+      localStorage.setItem(STORAGE_KEYS.lastExpertRoute, routePathValue(route));
+    }
   }
 
   document.title = buildDocumentTitle(route.label || route.name);
@@ -549,6 +719,11 @@ function render() {
     onNavigate: (path) => router.navigate(path),
     onLogout: logout,
     onBack: () => router.back(routeView.backPath || 'dashboard'),
+    onOpenAiWorkspace: () => {
+      primeAIContextFromExpertRoute(route);
+      router.navigate('ai');
+    },
+    onOpenExpertConsole: () => router.navigate(expertEntryPath(state.permissions || new Set())),
     onThemeChange: (theme) => {
       const nextTheme = applyVisualTheme(theme);
       store.setState({ visualTheme: nextTheme });
@@ -589,7 +764,7 @@ const router = createRouter({
 async function bootstrap() {
   await hydrateSession();
   if (store.getState().user) {
-    const start = localStorage.getItem(STORAGE_KEYS.lastRoute) || 'dashboard';
+    const start = localStorage.getItem(STORAGE_KEYS.lastRoute) || 'ai';
     window.location.hash = `#/${start}`;
   } else {
     window.location.hash = '#/login';

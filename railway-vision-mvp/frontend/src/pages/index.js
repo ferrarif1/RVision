@@ -1,5 +1,26 @@
-import { api, apiForm, apiPost, formatDateTime, normalizeUiErrorMessage, toQuery } from '../core/api.js';
-import { BRAND_NAME, BRAND_TAGLINE, STORAGE_KEYS } from '../config/brand.js';
+import { api, apiDelete, apiForm, apiPost, formatDateTime, normalizeUiErrorMessage, toQuery } from '../core/api.js';
+import { BRAND_NAME, STORAGE_KEYS } from '../config/brand.js';
+import {
+  aiTaskLabel,
+  assistantModeLabel,
+  buildTrainingExpertPath,
+  persistAiLastPlan,
+  persistAiPendingConfirmations,
+  persistAiRecentActions,
+  persistAiSessions,
+  persistAiWorkflowDraft,
+  persistAssistantLocalSettings,
+  readAiLastPlan,
+  readAiPendingConfirmations,
+  readAiRecentActions,
+  readAiSessions,
+  readAiWorkflowDraft,
+  readAssistantLocalSettings,
+  safeStorageJson,
+  workflowRouteForAction,
+  writeStorageJson,
+} from '../ai/runtime.js';
+import { buildPlannerRuntime, inferPlannerScopeHint, loadAISettingsBundle, resolveEffectiveProvider } from '../ai/settings.js';
 
 function esc(value) {
   return String(value ?? '')
@@ -78,13 +99,92 @@ function renderWorkbenchOverview({ title = '', summary = '', status = '', metric
   `;
 }
 
-function bindPageNavButtons(root, ctx) {
+function bindPageNavButtons(root, ctx, options = {}) {
   root.querySelectorAll('[data-page-nav]').forEach((button) => {
     button.addEventListener('click', () => {
       const path = button.getAttribute('data-page-nav');
+      if (typeof options.beforeNavigate === 'function') {
+        options.beforeNavigate(path, button);
+      }
       if (path) ctx.navigate(path);
     });
   });
+}
+
+function normalizeRoutePrefix(path) {
+  return String(path || '')
+    .trim()
+    .replace(/^#\/?/, '')
+    .replace(/^\//, '')
+    .split(/[/?#]/)[0];
+}
+
+function persistAssistantNavigationPrefill(targetPath, {
+  draft = readAiWorkflowDraft(),
+  plan = readAiLastPlan(),
+  action = null,
+  actionTitle = '',
+  actionSummary = '',
+} = {}) {
+  const routePrefix = normalizeRoutePrefix(targetPath);
+  if (!routePrefix) return;
+  const assetIds = Array.isArray(draft?.asset_ids) ? draft.asset_ids.map((item) => String(item || '').trim()).filter(Boolean) : [];
+  const firstAssetId = assetIds[0] || '';
+  const taskType = String(action?.prefill?.taskType || draft?.task_type || plan?.inferred_task_type || '').trim();
+  const goal = String(action?.prefill?.taskHint || draft?.goal || plan?.goal || '').trim();
+  const modelId = String(
+    action?.prefill?.taskModelId
+    || draft?.current_model_id
+    || plan?.current_state?.released_model?.model_id
+    || ''
+  ).trim();
+  const trainingAssetIds = String(action?.prefill?.trainingAssetIds || assetIds.join(', ')).trim();
+  const trainingValidationAssetIds = String(action?.prefill?.trainingValidationAssetIds || '').trim();
+  const trainingTargetModelCode = String(
+    action?.prefill?.trainingTargetModelCode
+    || plan?.current_state?.released_model?.model_code
+    || ''
+  ).trim();
+  const sourceMeta = JSON.stringify({
+    source: 'assistant',
+    action_title: actionTitle || action?.title || '',
+    action_summary: actionSummary || action?.summary || '',
+    generated_at: new Date().toISOString(),
+    editable: true,
+  });
+
+  if (routePrefix === 'assets' && firstAssetId) {
+    localStorage.setItem(STORAGE_KEYS.prefillAssetId, firstAssetId);
+    return;
+  }
+
+  if (routePrefix === 'tasks') {
+    if (firstAssetId) {
+      localStorage.setItem(STORAGE_KEYS.prefillAssetId, firstAssetId);
+      localStorage.setItem(STORAGE_KEYS.prefillTaskAssetId, firstAssetId);
+      localStorage.setItem(STORAGE_KEYS.quickDetectAssetId, firstAssetId);
+    }
+    if (taskType) localStorage.setItem(STORAGE_KEYS.prefillTaskType, taskType);
+    if (goal) localStorage.setItem(STORAGE_KEYS.prefillTaskHint, goal);
+    if (modelId) localStorage.setItem(STORAGE_KEYS.prefillTaskModelId, modelId);
+    if (firstAssetId || taskType || goal || modelId) {
+      localStorage.setItem(STORAGE_KEYS.prefillTaskMeta, sourceMeta);
+    }
+    return;
+  }
+
+  if (routePrefix === 'training' || routePrefix === 'results') {
+    if (trainingAssetIds) localStorage.setItem(STORAGE_KEYS.prefillTrainingAssetIds, trainingAssetIds);
+    if (trainingValidationAssetIds) localStorage.setItem(STORAGE_KEYS.prefillTrainingValidationAssetIds, trainingValidationAssetIds);
+    if (trainingTargetModelCode) localStorage.setItem(STORAGE_KEYS.prefillTrainingTargetModelCode, trainingTargetModelCode);
+    if (trainingAssetIds || trainingValidationAssetIds || trainingTargetModelCode) {
+      localStorage.setItem(STORAGE_KEYS.prefillTrainingMeta, sourceMeta);
+    }
+    if (routePrefix === 'results' && firstAssetId) {
+      localStorage.setItem(STORAGE_KEYS.prefillAssetId, firstAssetId);
+      localStorage.setItem(STORAGE_KEYS.quickDetectAssetId, firstAssetId);
+    }
+  }
 }
 
 function safeJson(value) {
@@ -1337,32 +1437,237 @@ function makeContext(route, ctx) {
   };
 }
 
-function readAssistantLocalSettings() {
+function intentFromGoal(goal = '') {
+  const text = String(goal || '').trim().toLowerCase();
+  if (!text) return 'upload';
+  if (/(为什么|失败|没开始|卡住|阻塞|排障|故障|异常|troubleshoot|stuck)/.test(text)) return 'troubleshoot';
+  if (/(发布|部署|buyer|设备|release|deploy|审批通过)/.test(text)) return 'deploy';
+  if (/(结果|最近任务|查看任务|跑一下|验证|推理|results|infer|run)/.test(text)) return 'results';
+  if (/(训练|微调|标注|复核|dataset|train|fine.?tune)/.test(text)) return 'train';
+  if (/(上传|图片|资产|数据集|asset|upload)/.test(text)) return 'upload';
+  return 'upload';
+}
+
+function buildLocalIntentPlan({ goal = '', assetIds = [], currentTaskType = '', currentModelId = '' } = {}) {
+  const intent = intentFromGoal(goal);
+  const taskType = String(currentTaskType || '').trim();
+  const taskLabel = aiTaskLabel(taskType);
+  const primaryAction = intent === 'train'
+    ? {
+      action_id: 'prepare_training_data',
+      title: '先进入训练准备流程',
+      summary: '先确认数据来源、任务类型和训练入口，再跳转到训练专家页。',
+      reason: '当前输入更像训练或微调诉求，先把数据和目标收齐最稳妥。',
+      path: buildTrainingExpertPath(taskType),
+      prefill: { taskType },
+    }
+    : intent === 'deploy'
+      ? {
+        action_id: 'open_release_workbench',
+        title: '先核对发布准备',
+        summary: '确认待发布模型、目标租户和设备范围，再进入模型发布工作台。',
+        reason: '发布动作需要先核对审批状态和交付范围，避免误发。',
+        path: 'models',
+        prefill: { focusModelId: currentModelId || '' },
+      }
+      : intent === 'results'
+        ? {
+          action_id: 'validate_existing_model',
+          title: '先发起验证并看结果',
+          summary: '带着模型和资产进入任务中心，跑一轮验证并回到结果页闭环。',
+          reason: '当前最短路径是先得到一轮真实输出，再决定是否训练或发布。',
+          path: 'tasks',
+          prefill: { taskAssetId: assetIds[0] || '', taskModelId: currentModelId || '', taskType, taskHint: goal },
+        }
+        : intent === 'troubleshoot'
+          ? {
+            action_id: 'open_troubleshoot_lane',
+            title: '先进入排障流程',
+            summary: '从最近失败任务、训练状态和设备状态三处收口排查。',
+            reason: '你现在需要先定位阻塞点，而不是继续推进后续动作。',
+            path: 'audit',
+            prefill: { taskHint: goal, taskType },
+          }
+          : {
+            action_id: 'upload_or_select_assets',
+            title: '先补齐输入资产',
+            summary: '先上传图片或选择已有资产，再继续训练、验证或发布。',
+            reason: '缺少稳定输入时，后续推荐会一直不准。',
+            path: 'assets',
+            prefill: { taskType, taskHint: goal },
+          };
+
+  const secondaryActions = [
+    {
+      action_id: 'fallback_results',
+      title: '去结果流程看最近闭环',
+      summary: '查看最近任务输出和是否已有可复用模型。',
+      reason: '适合先判断是否已有结果可复用。',
+      path: 'results',
+      prefill: { taskType },
+    },
+    {
+      action_id: 'fallback_training',
+      title: '去训练流程补数据',
+      summary: '整理训练/验证样本，然后进入训练控制面。',
+      reason: '如果现有模型不够用，就需要回到数据和训练入口。',
+      path: buildTrainingExpertPath(taskType),
+      prefill: { taskType },
+    },
+  ];
+
   return {
-    llmMode: localStorage.getItem(STORAGE_KEYS.assistantLlmMode) || 'disabled',
-    executionMode: localStorage.getItem(STORAGE_KEYS.assistantExecutionMode) || 'guide_only',
-    localRepoId: localStorage.getItem(STORAGE_KEYS.assistantLocalModelRepoId) || '',
-    apiProvider: localStorage.getItem(STORAGE_KEYS.assistantApiProvider) || 'openai_compatible',
-    apiBaseUrl: localStorage.getItem(STORAGE_KEYS.assistantApiBaseUrl) || '',
-    apiModelName: localStorage.getItem(STORAGE_KEYS.assistantApiModelName) || '',
-    apiKey: localStorage.getItem(STORAGE_KEYS.assistantApiKey) || '',
+    generated_at: new Date().toISOString(),
+    goal,
+    inferred_task_type: taskType || '',
+    inferred_task_label: taskType ? taskLabel : '通用任务',
+    llm_mode: 'disabled',
+    llm_selection: {},
+    signals: [
+      '当前使用浏览器内规则引擎进行意图识别。',
+      assetIds.length ? `已带入 ${assetIds.length} 个资产编号。` : '还没有带入资产编号。',
+    ],
+    asset_summary: assetIds.map((assetId) => ({
+      asset_id: assetId,
+      file_name: assetId,
+      purpose: 'inference',
+      asset_type: 'image',
+    })),
+    recommendation: null,
+    current_state: {
+      released_model: currentModelId ? { model_id: currentModelId, model_code: currentModelId, version: '' } : null,
+      submitted_model: null,
+      approved_model: null,
+    },
+    primary_action: primaryAction,
+    secondary_actions: secondaryActions,
+    llm_advice: {
+      summary: '当前没有调用外部 LLM，页面已回退到本地规则规划。',
+      risks: ['这是一条稳妥的兜底路径，复杂语义可能不如真实 LLM 准确。'],
+    },
+    guidance_summary: primaryAction.summary,
   };
 }
 
-function persistAssistantLocalSettings(next) {
-  localStorage.setItem(STORAGE_KEYS.assistantLlmMode, next.llmMode || 'disabled');
-  localStorage.setItem(STORAGE_KEYS.assistantExecutionMode, next.executionMode || 'guide_only');
-  localStorage.setItem(STORAGE_KEYS.assistantLocalModelRepoId, next.localRepoId || '');
-  localStorage.setItem(STORAGE_KEYS.assistantApiProvider, next.apiProvider || 'openai_compatible');
-  localStorage.setItem(STORAGE_KEYS.assistantApiBaseUrl, next.apiBaseUrl || '');
-  localStorage.setItem(STORAGE_KEYS.assistantApiModelName, next.apiModelName || '');
-  localStorage.setItem(STORAGE_KEYS.assistantApiKey, next.apiKey || '');
+function buildWorkflowSteps(kind, plan) {
+  const taskLabel = aiTaskLabel(plan?.inferred_task_type);
+  const common = {
+    upload: [
+      { label: '说明目标', note: '确认要处理的图片、视频或 ZIP 数据集', status: 'done' },
+      { label: '准备输入', note: '上传资产并标记用途', status: 'current' },
+      { label: '进入下一步', note: '去训练或任务中心继续', status: 'upcoming' },
+    ],
+    train: [
+      { label: '确认任务类型', note: taskLabel, status: 'done' },
+      { label: '补数据与复核', note: '进入训练工作区准备样本', status: 'current' },
+      { label: '创建训练作业', note: '在专家页填写高级参数', status: 'upcoming' },
+    ],
+    deploy: [
+      { label: '确认候选模型', note: '核对审批与版本状态', status: 'done' },
+      { label: '设置交付范围', note: '选择租户、设备与流水线', status: 'current' },
+      { label: '发布与回传', note: '进入模型中心完成发布', status: 'upcoming' },
+    ],
+    results: [
+      { label: '带入模型与资产', note: '用 AI 建议预填任务参数', status: 'done' },
+      { label: '发起验证', note: '在任务中心执行并跟踪', status: 'current' },
+      { label: '查看输出', note: '去结果中心闭环判断', status: 'upcoming' },
+    ],
+    troubleshoot: [
+      { label: '定位阻塞点', note: '任务、训练、设备三线并看', status: 'done' },
+      { label: '核对日志与状态', note: '优先确认失败或等待中的对象', status: 'current' },
+      { label: '回到主流程', note: '排障完成后再继续训练或发布', status: 'upcoming' },
+    ],
+  };
+  return common[kind] || common.upload;
 }
 
-function assistantModeLabel(mode) {
-  if (mode === 'api') return 'API 模式';
-  if (mode === 'local') return '本地模型模式';
-  return '平台规则引擎';
+function renderWorkflowStepper(steps = []) {
+  return `
+    <div class="workflow-stepper">
+      ${steps.map((step, index) => `
+        <article class="workflow-step ${esc(step.status || 'upcoming')}">
+          <div class="workflow-step-index">${index + 1}</div>
+          <div>
+            <strong>${esc(step.label || '-')}</strong>
+            <span>${esc(step.note || '')}</span>
+          </div>
+        </article>
+      `).join('')}
+    </div>
+  `;
+}
+
+function rememberAiSession({ sessionId, goal, plan, assetIds = [], taskType = '' }) {
+  const rows = readAiSessions();
+  const primaryAction = plan?.primary_action || null;
+  const next = [
+    {
+      session_id: sessionId,
+      title: String(goal || '').trim() || '未命名 AI 会话',
+      created_at: new Date().toISOString(),
+      task_type: taskType || plan?.inferred_task_type || '',
+      summary: plan?.guidance_summary || plan?.primary_action?.summary || '等待生成下一步动作',
+      asset_ids: assetIds,
+      workflow_path: workflowRouteForAction(primaryAction || {}),
+      expert_path: primaryAction?.expert_path || primaryAction?.path || '',
+      primary_action: primaryAction ? {
+        action_id: primaryAction.action_id || '',
+        title: primaryAction.title || '',
+        summary: primaryAction.summary || '',
+        reason: primaryAction.reason || '',
+        path: primaryAction.path || '',
+        expert_path: primaryAction.expert_path || primaryAction.path || '',
+        workflow_path: primaryAction.workflow_path || workflowRouteForAction(primaryAction),
+      } : null,
+    },
+    ...rows.filter((item) => item.session_id !== sessionId),
+  ];
+  persistAiSessions(next);
+}
+
+function rememberAiRecentAction(entry) {
+  const rows = readAiRecentActions();
+  const next = [
+    {
+      id: makeLocalId('ai-action'),
+      created_at: new Date().toISOString(),
+      ...entry,
+    },
+    ...rows,
+  ];
+  persistAiRecentActions(next);
+}
+
+function rememberAiNavigationAndPrefill({ targetPath, title = '', draft, plan, action = null } = {}) {
+  if (!targetPath) return;
+  persistAssistantNavigationPrefill(targetPath, {
+    draft,
+    plan,
+    action,
+    actionTitle: title,
+    actionSummary: action?.summary || '',
+  });
+  rememberAiRecentAction({
+    title: title || action?.title || 'AI 动作',
+    workflow_path: action?.workflow_path || (String(targetPath) === 'ai' || String(targetPath).startsWith('ai/') ? targetPath : workflowRouteForAction(action || { path: targetPath })),
+    target_path: action?.expert_path || action?.path || targetPath,
+  });
+}
+
+function syncAiPendingConfirmations(plan, sessionId) {
+  const pending = [];
+  if (plan?.primary_action) {
+    pending.push({
+      id: `${sessionId}-primary`,
+      session_id: sessionId,
+      title: plan.primary_action.title || '推荐动作',
+      summary: plan.primary_action.summary || '',
+      workflow_path: workflowRouteForAction(plan.primary_action),
+      target_path: plan.primary_action.path || '',
+      created_at: new Date().toISOString(),
+    });
+  }
+  persistAiPendingConfirmations(pending);
 }
 
 async function fetchAuthorizedBlobUrl(path, token) {
@@ -1387,31 +1692,311 @@ function pickQuickDetectResult(rows) {
 
 function page404() {
   return {
-    html: `<section class="card"><h2>404</h2><p>页面不存在。</p><button class="primary" data-nav="dashboard">回到工作台</button></section>`,
+    html: `<section class="card"><h2>404</h2><p>页面不存在。</p><button class="primary" data-nav="ai">回到 AI Workspace</button></section>`,
     mount(root, ctx) {
-      root.querySelector('[data-nav]')?.addEventListener('click', () => ctx.navigate('dashboard'));
+      root.querySelector('[data-nav]')?.addEventListener('click', () => ctx.navigate('ai'));
     },
   };
 }
 
 function page403() {
   return {
-    html: `<section class="card"><h2>403</h2><p>你没有访问该页面的权限。</p><button class="primary" data-nav="dashboard">回到工作台</button></section>`,
+    html: `<section class="card"><h2>403</h2><p>你没有访问该页面的权限。</p><button class="primary" data-nav="ai">回到 AI Workspace</button></section>`,
     mount(root, ctx) {
-      root.querySelector('[data-nav]')?.addEventListener('click', () => ctx.navigate('dashboard'));
+      root.querySelector('[data-nav]')?.addEventListener('click', () => ctx.navigate('ai'));
     },
   };
 }
+
+function pageAIChat(route, rawCtx) {
+  const ctx = makeContext(route, rawCtx);
+  const sessionId = String(route.params?.sessionId || '').trim();
+  const session = readAiSessions().find((item) => item.session_id === sessionId);
+  const latestPlan = readAiLastPlan();
+  const sessionAction = session?.primary_action || null;
+  const workflowPath = String(session?.workflow_path || workflowRouteForAction(sessionAction || latestPlan?.primary_action || {})).trim() || 'ai';
+  const recent = readAiRecentActions().slice(0, 4);
+  const pending = readAiPendingConfirmations().filter((item) => !sessionId || item.session_id === sessionId).slice(0, 3);
+  const sessionTaskLabel = session?.task_type ? aiTaskLabel(session.task_type) : (latestPlan?.inferred_task_label || '让系统判断');
+  const sessionGoal = session?.title || latestPlan?.goal || '还没有为这个会话记录明确目标';
+  return {
+    html: `
+      <section class="ai-flow-layout">
+        <div class="ai-flow-main">
+          <header class="ai-flow-hero">
+            <span class="ai-side-label">AI 会话</span>
+            <h1>${esc(session?.title || '未找到该会话')}</h1>
+            <p>${esc(session
+              ? '这里收口最近一次规划结果。要改目标，回到 AI 首页重新描述即可。'
+              : '这个会话可能已被清理。你仍然可以回到 AI 首页重新生成下一步。')}</p>
+            <div class="ai-flow-hero-actions">
+              <button class="primary" type="button" data-page-nav="${esc(workflowPath)}">继续推荐路径</button>
+              <button class="ghost" type="button" data-page-nav="ai">回到 AI Workspace</button>
+              ${sessionAction?.expert_path || sessionAction?.path ? `<button class="ghost" type="button" data-page-nav="${esc(sessionAction?.expert_path || sessionAction?.path || 'dashboard')}">打开专家页</button>` : ''}
+            </div>
+          </header>
+
+          <article class="ai-suggestion-card">
+            <div class="ai-suggestion-head">
+              <div>
+                <span class="ai-side-label">当前判断</span>
+                <h2>${esc(sessionAction?.title || '等待新的建议')}</h2>
+              </div>
+              <span class="badge">${esc(sessionTaskLabel)}</span>
+            </div>
+            <p class="ai-suggestion-summary">${esc(session?.summary || latestPlan?.guidance_summary || '当前没有可显示的规划摘要。')}</p>
+            <div class="ai-suggestion-meta">
+              <span>当前目标：${esc(sessionGoal)}</span>
+              <span>推荐 workflow：${esc(workflowPath)}</span>
+              <span>推荐专家入口：${esc(sessionAction?.expert_path || sessionAction?.path || '未指定')}</span>
+              <span>会话时间：${esc(session?.created_at ? formatDateTime(session.created_at) : '无时间戳')}</span>
+            </div>
+            <div class="ai-suggestion-actions">
+              <button class="primary" type="button" data-page-nav="${esc(workflowPath)}">按这个建议继续</button>
+              <button class="ghost" type="button" data-page-nav="ai">重新描述目标</button>
+            </div>
+          </article>
+
+          <article class="ai-secondary-card">
+            <div class="selection-card-head">
+              <strong>最近 AI 动作</strong>
+              <button class="ghost" type="button" data-page-nav="ai">回到首页继续</button>
+            </div>
+            <div class="ai-flow-list">
+              ${recent.length
+                ? recent.map((item) => `
+                  <button class="ai-session-list-item" type="button" data-page-nav="${esc(item.workflow_path || item.target_path || 'ai')}">
+                    <strong>${esc(item.title || 'AI 动作')}</strong>
+                    <span>${esc(item.workflow_path || item.target_path || 'ai')}</span>
+                  </button>
+                `).join('')
+                : '<div class="selection-summary"><span>还没有最近动作。</span></div>'}
+            </div>
+          </article>
+        </div>
+
+        <aside class="ai-flow-sidebar">
+          <article class="ai-side-card">
+            <span class="ai-side-label">当前目标</span>
+            <strong>${esc(truncateMiddle(sessionGoal, 36, 0))}</strong>
+            <p>${esc(sessionTaskLabel)}</p>
+          </article>
+          <article class="ai-side-card">
+            <span class="ai-side-label">已上传资源</span>
+            <strong>${esc(session?.asset_ids?.length ? `${session.asset_ids.length} 个资源` : '还没有资源')}</strong>
+            <p>${esc(session?.asset_ids?.length ? `首个资源：${truncateMiddle(session.asset_ids[0], 18, 0)}` : '上传样例后会在这里出现摘要。')}</p>
+          </article>
+          <article class="ai-side-card">
+            <span class="ai-side-label">待确认</span>
+            <strong>${esc(pending.length ? `${pending.length} 项待确认` : '当前无待确认')}</strong>
+            <p>${esc(pending[0]?.title || '当前没有需要人工确认的动作。')}</p>
+          </article>
+        </aside>
+      </section>
+    `,
+    async mount(root) {
+      bindPageNavButtons(root, ctx, {
+        beforeNavigate(path, button) {
+          rememberAiNavigationAndPrefill({
+            targetPath: path || 'ai',
+            title: button.textContent?.trim() || 'AI 会话导航',
+            draft: {
+              goal: sessionGoal,
+              task_type: session?.task_type || latestPlan?.inferred_task_type || '',
+              current_model_id: '',
+              asset_ids: Array.isArray(session?.asset_ids) ? session.asset_ids : [],
+            },
+            plan: latestPlan,
+            action: sessionAction ? {
+              ...sessionAction,
+              workflow_path: workflowPath,
+            } : null,
+          });
+        },
+      });
+    },
+  };
+}
+
+function createAIWorkflowPage({ kind, title, summary, expertPath, actionLabel, helperLines = [] }) {
+  return function aiWorkflowPage(route, rawCtx) {
+    const ctx = makeContext(route, rawCtx);
+    const plan = readAiLastPlan();
+    const draft = readAiWorkflowDraft();
+    const recent = readAiRecentActions().slice(0, 3);
+    const pending = readAiPendingConfirmations().slice(0, 3);
+    const steps = buildWorkflowSteps(kind, plan);
+    const recommendedWorkflow = workflowRouteForAction(plan?.primary_action || {});
+    const currentGoal = draft?.goal || plan?.goal || '尚未填写';
+    const currentTask = plan?.inferred_task_label || aiTaskLabel(draft?.task_type);
+    return {
+      html: `
+        <section class="ai-flow-layout">
+          <div class="ai-flow-main">
+            <header class="ai-flow-hero">
+              <span class="ai-side-label">AI Workflow</span>
+              <h1>${esc(title)}</h1>
+              <p>${esc(summary)}</p>
+              <div class="ai-flow-hero-actions">
+                <button class="primary" type="button" data-page-nav="${esc(expertPath)}">${esc(actionLabel)}</button>
+                <button class="ghost" type="button" data-page-nav="ai">回到 AI Workspace</button>
+              </div>
+            </header>
+
+            <article class="ai-suggestion-card">
+              <div class="ai-suggestion-head">
+                <div>
+                  <span class="ai-side-label">下一步行动</span>
+                  <h2>${esc(plan?.primary_action?.title || '先回到 AI 首页生成建议')}</h2>
+                </div>
+                <span class="badge">${esc(currentTask)}</span>
+              </div>
+              <p class="ai-suggestion-summary">${esc(plan?.guidance_summary || plan?.primary_action?.summary || summary)}</p>
+              <div class="ai-suggestion-meta">
+                <span>当前目标：${esc(currentGoal)}</span>
+                <span>推荐 workflow：${esc(recommendedWorkflow || `ai/workflow/${kind}`)}</span>
+                <span>已带资产：${esc(draft?.asset_ids?.length ? `${draft.asset_ids.length} 个` : '暂无')}</span>
+                ${(helperLines || []).map((line) => `<span>${esc(line)}</span>`).join('')}
+              </div>
+              <div class="ai-suggestion-actions">
+                <button class="primary" type="button" data-page-nav="${esc(expertPath)}">${esc(actionLabel)}</button>
+                <button class="ghost" type="button" data-page-nav="ai">换个目标重来</button>
+              </div>
+            </article>
+
+            <article class="ai-secondary-card ai-workflow-steps-card">
+              <div class="selection-card-head">
+                <strong>推荐步骤</strong>
+                <span class="ai-side-label">按顺序执行</span>
+              </div>
+              ${renderWorkflowStepper(steps)}
+            </article>
+
+            <article class="ai-secondary-card">
+              <div class="selection-card-head">
+                <strong>待确认与最近动作</strong>
+              </div>
+              <div class="ai-flow-list">
+                ${pending.length
+                  ? pending.map((item) => `
+                    <button class="ai-session-list-item" type="button" data-page-nav="${esc(item.workflow_path || item.target_path || 'ai')}">
+                      <strong>待确认：${esc(item.title || '-')}</strong>
+                      <span>${esc(item.workflow_path || item.target_path || 'ai')}</span>
+                    </button>
+                  `).join('')
+                  : ''}
+                ${recent.length
+                  ? recent.map((item) => `
+                    <button class="ai-session-list-item" type="button" data-page-nav="${esc(item.workflow_path || item.target_path || 'ai')}">
+                      <strong>最近动作：${esc(item.title || '-')}</strong>
+                      <span>${esc(item.workflow_path || item.target_path || 'ai')}</span>
+                    </button>
+                  `).join('')
+                  : (!pending.length ? '<div class="selection-summary"><span>当前没有待确认动作，也没有最近动作。</span></div>' : '')}
+              </div>
+            </article>
+          </div>
+
+          <aside class="ai-flow-sidebar">
+            <article class="ai-side-card">
+              <span class="ai-side-label">当前目标</span>
+              <strong>${esc(truncateMiddle(currentGoal, 36, 0))}</strong>
+              <p>${esc(currentTask)}</p>
+            </article>
+            <article class="ai-side-card">
+              <span class="ai-side-label">资源摘要</span>
+              <strong>${esc(draft?.asset_ids?.length ? `${draft.asset_ids.length} 个资源` : '还没有资源')}</strong>
+              <p>${esc(draft?.asset_ids?.length ? `首个资源：${truncateMiddle(draft.asset_ids[0], 18, 0)}` : '这个 workflow 会根据目标决定是否先去上传。')}</p>
+            </article>
+            <article class="ai-side-card">
+              <span class="ai-side-label">专家页</span>
+              <strong>${esc(actionLabel)}</strong>
+              <p>需要高级参数时，再进入专家页继续。</p>
+            </article>
+          </aside>
+        </section>
+      `,
+      async mount(root) {
+        bindPageNavButtons(root, ctx, {
+          beforeNavigate(path, button) {
+            rememberAiNavigationAndPrefill({
+              targetPath: path || 'ai',
+              title: button.textContent?.trim() || title,
+              draft,
+              plan,
+              action: {
+                ...(plan?.primary_action || {}),
+                path: expertPath,
+                expert_path: expertPath,
+              },
+            });
+          },
+        });
+      },
+    };
+  };
+}
+
+const pageAIWorkflowUpload = createAIWorkflowPage({
+  kind: 'upload',
+  title: '上传流程',
+  summary: '先把图片、视频或 ZIP 数据集补齐，再决定是直接验证还是进入训练。',
+  expertPath: 'assets',
+  actionLabel: '进入资产专家页',
+  helperLines: ['训练数据优先上传 ZIP 数据集包，在线验证优先上传单图或视频。'],
+});
+
+const pageAIWorkflowTrain = createAIWorkflowPage({
+  kind: 'train',
+  title: '训练流程',
+  summary: '先确认任务类型、样本来源和复核入口，再进入训练控制面填写高级参数。',
+  expertPath: 'training',
+  actionLabel: '进入训练专家页',
+  helperLines: ['如果是 OCR / 巡检类任务，优先确认复核工作区是否已有可导出数据集。'],
+});
+
+const pageAIWorkflowDeploy = createAIWorkflowPage({
+  kind: 'deploy',
+  title: '发布流程',
+  summary: '先核对待发布模型与目标范围，再进入模型中心或流水线中心继续。',
+  expertPath: 'models',
+  actionLabel: '进入模型专家页',
+  helperLines: ['发布前先确认审批、设备范围和买家租户，避免把候选模型误发到生产范围。'],
+});
+
+const pageAIWorkflowResults = createAIWorkflowPage({
+  kind: 'results',
+  title: '结果流程',
+  summary: '把建议模型和资产带到任务中心跑一轮，再回到结果中心确认是否进入下个阶段。',
+  expertPath: 'tasks',
+  actionLabel: '进入任务专家页',
+  helperLines: ['如果最近已有任务编号，结果页会自动收口到对应输出。'],
+});
+
+const pageAIWorkflowTroubleshoot = createAIWorkflowPage({
+  kind: 'troubleshoot',
+  title: '排障流程',
+  summary: '围绕失败任务、训练作业和设备状态做三线排查，确认阻塞点后再继续主流程。',
+  expertPath: 'audit',
+  actionLabel: '进入审计专家页',
+  helperLines: ['训练没开始时优先看 worker、训练作业状态和基础模型授权；任务失败时优先看任务详情与结果回传。'],
+});
 
 function pageLogin(route, rawCtx) {
   const ctx = makeContext(route, rawCtx);
   return {
     html: `
       <section class="login-shell">
-        <div class="login-brand"><span class="brand-mark"></span><span>${BRAND_NAME}</span></div>
+        <div class="login-brand">
+          <span class="brand-mark"></span>
+          <span class="login-brand-copy">
+            <strong>${BRAND_NAME}</strong>
+            <span>AI 工作入口</span>
+          </span>
+        </div>
         <section class="login-card">
           <h2>进入 ${BRAND_NAME}</h2>
-          <p class="login-subtitle">${BRAND_TAGLINE}</p>
+          <p class="login-subtitle">登录后从 AI 任务入口开始，再按需进入专家工作台。</p>
           <div class="login-value-grid">
             <span class="login-value-chip">模型主权</span>
             <span class="login-value-chip">数据主权</span>
@@ -1496,33 +2081,26 @@ function pageDashboard(route, rawCtx) {
           <div class="role-chip-row">
             <span class="role-chip">${esc(roleLabel(userRole))}</span>
             ${roleBadges.slice(1).map((item) => `<span class="role-chip muted">${esc(item)}</span>`).join('')}
-          </div>
-        </div>
-        <div class="hero-side">
-          <div class="hero-stat">
-            <span>默认路径</span>
-            <strong>${esc(preset.pathHint)}</strong>
-          </div>
-          <div class="hero-stat">
-            <span>当前租户</span>
-            <strong>${esc(ctx.state.user?.tenant_code || ctx.state.user?.tenant_id || '-')}</strong>
+            <span class="role-chip muted">默认路径 · ${esc(preset.pathHint)}</span>
+            <span class="role-chip muted">当前租户 · ${esc(ctx.state.user?.tenant_code || ctx.state.user?.tenant_id || '-')}</span>
           </div>
         </div>
       </section>
-      <section class="grid-two dashboard-brief-grid">
-        <div class="card">
-          <h3>推荐动作</h3>
-          <div class="quick-action-grid">
-            ${availableActions.length
-              ? availableActions.map((item) => `<button class="primary quick-action-btn" data-dashboard-nav="${esc(item.path)}">${esc(item.label)}</button>`).join('')
-              : '<div class="state empty">当前角色暂无推荐动作</div>'}
+      <section class="card dashboard-entry-card">
+        <div class="dashboard-entry-head">
+          <div>
+            <h3>推荐动作</h3>
+            <p class="hint">先选一条最短路径，再按需切到下方标签查看资产、模型或任务，不再同时铺开所有区域。</p>
+          </div>
+          <div class="selection-summary dashboard-focus-summary">
+            <strong>当前角色重点</strong>
+            ${preset.focus.map((item) => `<span>${esc(item)}</span>`).join('')}
           </div>
         </div>
-        <div class="card">
-          <h3>当前角色重点</h3>
-          <ul class="focus-list">
-            ${preset.focus.map((item) => `<li>${esc(item)}</li>`).join('')}
-          </ul>
+        <div class="quick-action-grid">
+          ${availableActions.length
+            ? availableActions.map((item, index) => `<button class="${index === 0 ? 'primary' : 'ghost'} quick-action-btn" data-dashboard-nav="${esc(item.path)}">${esc(item.label)}</button>`).join('')
+            : '<div class="state empty">当前角色暂无推荐动作</div>'}
         </div>
       </section>
       <section class="card">
@@ -2059,174 +2637,104 @@ function pageGuide(route, rawCtx) {
 
 function pageAssistant(route, rawCtx) {
   const ctx = makeContext(route, rawCtx);
-  const TASK_OPTIONS = [
-    ['', '让系统判断'],
-    ['car_number_ocr', '车号 / 编号'],
-    ['inspection_mark_ocr', '定检标记'],
-    ['performance_mark_ocr', '性能标记'],
-    ['door_lock_state_detect', '门锁状态'],
-    ['connector_defect_detect', '连接件缺陷'],
-    ['bolt_missing_detect', '螺栓缺失'],
-    ['object_detect', '通用目标检测'],
+  const QUICK_ACTIONS = [
+    {
+      id: 'upload_sample',
+      label: '上传样例',
+      goal: '我先上传一批样例，请帮我判断下一步。',
+      uploadFirst: true,
+    },
+    {
+      id: 'validate_model',
+      label: '直接验证现有模型',
+      goal: '我想直接验证现有模型，请帮我选择最短路径。',
+      uploadFirst: false,
+    },
+    {
+      id: 'decide_train_or_infer',
+      label: '让我判断该训练还是推理',
+      goal: '我有一批样例和一个目标，请判断现在该直接验证、继续训练还是先补数据。',
+      uploadFirst: false,
+    },
   ];
   return {
     html: `
-      <section class="assistant-chat-shell" id="assistantChatShell">
-        <aside class="assistant-chat-rail">
-          <button class="assistant-chat-rail-logo" type="button" data-assistant-nav="dashboard" aria-label="返回工作台">V</button>
-          <div class="assistant-chat-rail-stack">
-            <button class="assistant-chat-rail-btn" type="button" data-assistant-panel-tab="context">上下文</button>
-            <button class="assistant-chat-rail-btn" type="button" data-assistant-panel-tab="plan">行动计划</button>
-            <button class="assistant-chat-rail-btn" type="button" data-assistant-panel-tab="api">API</button>
-            <button class="assistant-chat-rail-btn" type="button" data-assistant-panel-tab="local">本地模型</button>
-            <button class="assistant-chat-rail-btn" type="button" data-assistant-panel-tab="downloads">下载</button>
-          </div>
-          <div class="assistant-chat-rail-footer">
-            <button class="assistant-chat-avatar-btn" type="button" data-assistant-nav="guide" aria-label="查看使用指南">?</button>
-          </div>
-        </aside>
-        <div class="assistant-chat-main">
-          <header class="assistant-chat-header">
-            <div class="assistant-chat-header-copy">
-              <div class="assistant-chat-kicker">智能规划入口</div>
-              <h1>我们先从哪里开始呢？</h1>
-              <p>把图片、目标、模型偏好和训练意图交给我，我会给出下一步动作。默认只导航，不擅自改任何模型、代码或参数。</p>
-            </div>
-            <div class="assistant-chat-header-tools">
-              <button class="ghost" type="button" data-assistant-nav="dashboard">返回工作台</button>
-              <button class="ghost" type="button" data-assistant-nav="guide">使用指南</button>
-            </div>
+      <section class="ai-home-layout ai-home-layout-compact">
+        <div class="ai-home-main ai-home-main-compact">
+          <header class="ai-home-hero ai-home-hero-compact">
+            <h1>我们先做什么？</h1>
+            <p>输入目标，上传样例，系统会自动判断下一步应进入验证、训练还是推理。</p>
           </header>
-          <div id="assistantConversationWrap" class="assistant-chat-conversation"></div>
-          <section class="assistant-chat-composer">
-            <div class="assistant-chat-mode-strip">
-              <div class="assistant-chat-chip-group" id="assistantThemeWrap">
-                <button class="ghost" type="button" data-assistant-theme="chatgpt_light">ChatGPT 清透白</button>
-                <button class="ghost" type="button" data-assistant-theme="summer_cream">夏日奶油色</button>
-              </div>
-              <div class="assistant-chat-chip-group" id="assistantExecutionModeWrap">
-                <button class="ghost" type="button" data-assistant-execution-mode="guide_only">仅导航，不改字段</button>
-                <button class="ghost" type="button" data-assistant-execution-mode="prefill_navigate">跳转并带建议过去</button>
-              </div>
-              <div class="assistant-chat-status" id="assistantExecutionModeHint">当前只给建议并导航，不会自动改任何字段。</div>
-            </div>
-            <label class="assistant-chat-prompt">
-              <textarea id="assistantGoalInput" rows="3" placeholder="例如：我上传了一张铁路货车侧拍图片，想先识别定检标记。如果已有合适模型就直接验证，没有的话告诉我该去哪里补真值和训练。"></textarea>
-            </label>
-            <div class="assistant-chat-quick-intents">
-              <button class="ghost" type="button" data-assistant-quick-intent="帮我识别铁路货车车号，并判断该直接验证还是继续训练。">车号识别</button>
-              <button class="ghost" type="button" data-assistant-quick-intent="帮我识别铁路货车上的定检标记，并告诉我下一步是直接验证还是补真值训练。">定检标记</button>
-              <button class="ghost" type="button" data-assistant-quick-intent="帮我判断库内巡检图片里的门锁状态，优先给出最短路径。">门锁状态</button>
-            </div>
-            <div class="assistant-chat-inline-fields">
-              <label>
-                识别目标
-                <select id="assistantTaskTypeInput">
-                  ${TASK_OPTIONS.map(([value, label]) => `<option value="${esc(value)}">${esc(label)}</option>`).join('')}
-                </select>
-              </label>
-              <label>
-                已有资产编号
-                <input id="assistantAssetIdsInput" placeholder="例如：asset-id-1, asset-id-2" />
-              </label>
-            </div>
-            <details class="assistant-chat-advanced">
-              <summary>补充模型与资源上下文</summary>
-              <div class="assistant-chat-advanced-grid">
-                <label>
-                  显式模型编号（可选）
-                  <input id="assistantCurrentModelInput" placeholder="例如：04f3f0eb-f76f-4cee-b16e-c92ae1eafcc0" />
-                </label>
-                <div class="assistant-chat-upload-block">
-                  <span>上传新图片并加入当前引导</span>
-                  <div class="page-hero-actions">
-                    <button class="ghost" type="button" id="assistantUploadToggleBtn">打开上传区</button>
-                    <button class="ghost" type="button" data-assistant-panel-tab="api">API 模式</button>
-                    <button class="ghost" type="button" data-assistant-panel-tab="local">本地模型</button>
+
+          <section class="ai-home-composer ai-home-composer-compact" id="aiHomeComposer">
+            <div class="ai-home-input ai-home-input-compact ai-home-input-chatgpt" id="aiDropzone">
+              <textarea id="assistantGoalInput" rows="6" placeholder="描述目标，或粘贴需求、上传样例"></textarea>
+              <input id="assistantUploadFileInput" type="file" accept="image/*,.zip,video/*" hidden />
+              <div class="ai-home-composer-bar">
+                <div class="ai-home-composer-left">
+                  <div class="ai-upload-anchor">
+                    <button class="ai-composer-icon-btn" type="button" id="assistantUploadMenuBtn" aria-haspopup="menu" aria-expanded="false" title="上传样例">+</button>
+                    <div class="ai-upload-menu" id="assistantUploadMenu" role="menu" hidden>
+                      <button class="ai-upload-menu-item" type="button" id="assistantPickFileBtn">上传照片和文件</button>
+                    </div>
                   </div>
+                  <button class="ai-composer-chip" type="button" id="assistantValidateExistingBtn">直接验证现有模型</button>
+                  <span class="ai-composer-status" id="assistantUploadMeta" hidden></span>
                 </div>
+                <button class="primary ai-composer-submit" type="button" id="assistantGeneratePlanBtn">开始分析</button>
               </div>
-            </details>
-            <div id="assistantAssetHint" class="assistant-chat-footnote">如果你已经有资产编号，直接填写；没有的话，可以上传一张图片，系统会自动生成资产编号并加入当前上下文。</div>
-            <div class="assistant-chat-composer-actions">
-              <button class="ghost" type="button" id="assistantUploadToggleBtnMirror">上传图片</button>
-              <button class="primary" type="button" id="assistantGeneratePlanBtn">生成下一步引导</button>
             </div>
-            <section id="assistantInlineUploadWrap" class="assistant-chat-upload-panel" hidden>
-              <label>
-                上传图片
-                <input id="assistantUploadFileInput" type="file" accept="image/*" />
-              </label>
-              <div class="page-hero-actions">
-                <button class="primary" type="button" id="assistantUploadFileBtn">上传并加入当前引导</button>
-                <button class="ghost" type="button" id="assistantCloseUploadBtn">收起上传区</button>
-              </div>
-            </section>
           </section>
+
+          <section id="assistantSupportStrip" class="ai-home-support-strip"></section>
+          <section id="assistantSuggestionWrap" class="ai-home-suggestion" hidden></section>
         </div>
-        <aside class="assistant-chat-dock">
-          <div class="assistant-chat-dock-head">
-            <strong>上下文抽屉</strong>
-            <span id="assistantPanelMeta">默认只展开一组能力，避免把输入、模型库、下载任务同时摊在一个页面里。</span>
-          </div>
-          <div class="workspace-switcher assistant-chat-dock-tabs">
-            <button class="ghost" type="button" data-assistant-panel-tab="context">当前上下文</button>
-            <button class="ghost" type="button" data-assistant-panel-tab="plan">行动计划</button>
-            <button class="ghost" type="button" data-assistant-panel-tab="api">API 模式</button>
-            <button class="ghost" type="button" data-assistant-panel-tab="local">本地模型库</button>
-            <button class="ghost" type="button" data-assistant-panel-tab="downloads">下载任务</button>
-          </div>
-          <section class="assistant-chat-dock-panel" data-assistant-panel="context">
-            <div id="assistantContextWrap">${renderLoading('整理当前上下文...')}</div>
-          </section>
-          <section class="assistant-chat-dock-panel" data-assistant-panel="plan" hidden>
-            <div id="assistantPlanWrap">${renderEmpty('先在下方输入目标，然后生成下一步引导。')}</div>
-          </section>
-          <section class="assistant-chat-dock-panel" data-assistant-panel="api" hidden>
-            <div id="assistantApiWrap">${renderLoading('加载 API 模式配置...')}</div>
-          </section>
-          <section class="assistant-chat-dock-panel" data-assistant-panel="local" hidden>
-            <div id="assistantLocalWrap">${renderLoading('加载本地模型库...')}</div>
-          </section>
-          <section class="assistant-chat-dock-panel" data-assistant-panel="downloads" hidden>
-            <div id="assistantDownloadsWrap">${renderLoading('加载下载任务...')}</div>
-          </section>
+
+        <aside class="ai-home-sidebar ai-home-sidebar-compact">
+          <article class="ai-side-card ai-side-card-status" id="assistantStatusCard">
+            <span class="ai-side-label">当前状态</span>
+            <div class="ai-status-list">
+              <div class="ai-status-row">
+                <span>当前模式</span>
+                <strong id="assistantModeSummary">平台规则引擎</strong>
+              </div>
+              <div class="ai-status-row">
+                <span>当前目标</span>
+                <strong id="assistantGoalSummary">还没有输入目标</strong>
+              </div>
+              <div class="ai-status-row">
+                <span>已上传资源数</span>
+                <strong id="assistantAssetSummary">0</strong>
+              </div>
+            </div>
+          </article>
         </aside>
       </section>
     `,
     async mount(root) {
-      const panelMeta = root.querySelector('#assistantPanelMeta');
-      const shell = root.querySelector('#assistantChatShell');
-      const panelTabs = [...root.querySelectorAll('[data-assistant-panel-tab]')];
-      const panels = [...root.querySelectorAll('[data-assistant-panel]')];
-      const conversationWrap = root.querySelector('#assistantConversationWrap');
-      const contextWrap = root.querySelector('#assistantContextWrap');
+      const suggestionWrap = root.querySelector('#assistantSuggestionWrap');
+      const supportStrip = root.querySelector('#assistantSupportStrip');
       const goalInput = root.querySelector('#assistantGoalInput');
-      const taskTypeInput = root.querySelector('#assistantTaskTypeInput');
-      const currentModelInput = root.querySelector('#assistantCurrentModelInput');
-      const assetIdsInput = root.querySelector('#assistantAssetIdsInput');
-      const uploadToggleBtn = root.querySelector('#assistantUploadToggleBtn');
-      const uploadWrap = root.querySelector('#assistantInlineUploadWrap');
+      const taskTypeInput = document.createElement('select');
+      const currentModelInput = document.createElement('input');
+      const assetIdsInput = document.createElement('input');
+      const dropzone = root.querySelector('#aiDropzone');
       const uploadFileInput = root.querySelector('#assistantUploadFileInput');
-      const uploadFileBtn = root.querySelector('#assistantUploadFileBtn');
-      const closeUploadBtn = root.querySelector('#assistantCloseUploadBtn');
-      const uploadToggleBtnMirror = root.querySelector('#assistantUploadToggleBtnMirror');
+      const uploadMenuBtn = root.querySelector('#assistantUploadMenuBtn');
+      const uploadMenu = root.querySelector('#assistantUploadMenu');
+      const uploadMeta = root.querySelector('#assistantUploadMeta');
+      const pickFileBtn = root.querySelector('#assistantPickFileBtn');
+      const validateExistingBtn = root.querySelector('#assistantValidateExistingBtn');
       const generatePlanBtn = root.querySelector('#assistantGeneratePlanBtn');
-      const themeWrap = root.querySelector('#assistantThemeWrap');
-      const executionModeWrap = root.querySelector('#assistantExecutionModeWrap');
-      const executionModeHint = root.querySelector('#assistantExecutionModeHint');
-      const planWrap = root.querySelector('#assistantPlanWrap');
-      const apiWrap = root.querySelector('#assistantApiWrap');
-      const localWrap = root.querySelector('#assistantLocalWrap');
-      const downloadsWrap = root.querySelector('#assistantDownloadsWrap');
-      let activePanel = 'context';
-      let providerModes = null;
-      let localCatalog = null;
-      let downloadJobs = [];
+      const modeSummary = root.querySelector('#assistantModeSummary');
+      const goalSummary = root.querySelector('#assistantGoalSummary');
+      const assetSummary = root.querySelector('#assistantAssetSummary');
       let latestPlan = null;
+      let activeSessionId = makeLocalId('ai-session');
+      let planInFlight = false;
+      let aiSettingsBundle = null;
       let assistantMode = localStorage.getItem(STORAGE_KEYS.assistantLlmMode) || 'disabled';
       let assistantExecutionMode = localStorage.getItem(STORAGE_KEYS.assistantExecutionMode) || 'guide_only';
-      let assistantVisualTheme = localStorage.getItem(STORAGE_KEYS.visualTheme) || localStorage.getItem(STORAGE_KEYS.assistantVisualTheme) || 'summer_cream';
       let selectedLocalRepoId = localStorage.getItem(STORAGE_KEYS.assistantLocalModelRepoId) || '';
       let selectedApiProvider = localStorage.getItem(STORAGE_KEYS.assistantApiProvider) || 'openai_compatible';
       let selectedApiBaseUrl = localStorage.getItem(STORAGE_KEYS.assistantApiBaseUrl) || '';
@@ -2240,731 +2748,413 @@ function pageAssistant(route, rawCtx) {
           .filter(Boolean);
       }
 
-      function persistAssistantState() {
-        localStorage.setItem(STORAGE_KEYS.assistantLlmMode, assistantMode);
-        localStorage.setItem(STORAGE_KEYS.assistantExecutionMode, assistantExecutionMode);
-        localStorage.setItem(STORAGE_KEYS.assistantVisualTheme, assistantVisualTheme);
-        localStorage.setItem(STORAGE_KEYS.visualTheme, assistantVisualTheme);
-        localStorage.setItem(STORAGE_KEYS.assistantLocalModelRepoId, selectedLocalRepoId);
-        localStorage.setItem(STORAGE_KEYS.assistantApiProvider, selectedApiProvider);
-        localStorage.setItem(STORAGE_KEYS.assistantApiBaseUrl, selectedApiBaseUrl);
-        localStorage.setItem(STORAGE_KEYS.assistantApiModelName, selectedApiModelName);
-        localStorage.setItem(STORAGE_KEYS.assistantApiKey, selectedApiKey);
+      function currentDraft() {
+        return {
+          goal: String(goalInput?.value || '').trim(),
+          asset_ids: parseAssetIds(),
+          task_type: String(taskTypeInput?.value || '').trim(),
+          current_model_id: String(currentModelInput?.value || '').trim(),
+        };
       }
 
-      function setAssistantPanel(panel) {
-        activePanel = ['context', 'plan', 'api', 'local', 'downloads'].includes(panel) ? panel : 'context';
-        panels.forEach((section) => {
-          section.hidden = section.getAttribute('data-assistant-panel') !== activePanel;
-        });
-        panelTabs.forEach((button) => {
-          const active = button.getAttribute('data-assistant-panel-tab') === activePanel;
-          button.classList.toggle('primary', active);
-          button.classList.toggle('ghost', !active);
-          button.classList.toggle('assistant-chat-rail-btn-active', active);
-          button.setAttribute('aria-pressed', active ? 'true' : 'false');
-        });
-        if (panelMeta) {
-          panelMeta.textContent = activePanel === 'context'
-            ? '这里收口查看当前识别目标、执行方式和资源上下文，默认只展开这一层。'
-            : activePanel === 'plan'
-              ? '这里会显示当前最该做的一步，以及可选的备选路径。'
-              : activePanel === 'api'
-                ? 'API 模式只在本次引导里使用，不会默认长期保存到后端。'
-                : activePanel === 'local'
-                  ? '本地模型库提供平台精选 10 个开源模型，并直接发起下载，不跳第三方页面。'
-                  : '这里查看本地模型下载任务的运行状态。';
-        }
+      function persistWorkspaceDraft() {
+        persistAiWorkflowDraft(currentDraft());
       }
 
-      function renderContext() {
-        const providerLabel = selectedApiProvider === 'openai_compatible'
-          ? 'OpenAI 兼容接口'
-          : selectedApiProvider === 'siliconflow_compatible'
-            ? 'SiliconFlow 兼容接口'
-            : selectedApiProvider === 'dashscope_compatible'
-              ? 'DashScope 兼容接口'
-              : 'API 接口';
-        const localModel = (localCatalog?.models || []).find((item) => item.repo_id === selectedLocalRepoId);
-        const assetSummary = parseAssetIds();
-        contextWrap.innerHTML = `
-          <div class="assistant-chat-dock-stack">
-            <article class="assistant-chat-dock-card">
-              <div class="assistant-chat-dock-card-head">
-                <strong>当前会话</strong>
-                <span class="badge">${esc(assistantMode === 'api' ? 'API 模式' : assistantMode === 'local' ? '本地模型模式' : '平台规则引擎')}</span>
-              </div>
-              <div class="selection-summary">
-                <span>执行方式：${esc(assistantExecutionMode === 'prefill_navigate' ? '跳转并带建议过去' : '仅导航，不改字段')}</span>
-                <span>识别目标：${esc((TASK_OPTIONS.find(([value]) => value === (taskTypeInput?.value || '')) || [null, '让系统判断'])[1])}</span>
-                <span>已有资产：${esc(assetSummary.length ? `${assetSummary.length} 个编号` : '暂未提供')}</span>
-              </div>
-            </article>
-            <article class="assistant-chat-dock-card">
-              <div class="assistant-chat-dock-card-head">
-                <strong>模式说明</strong>
-              </div>
-              <div class="selection-summary">
-                ${assistantMode === 'api'
-                  ? `<span>当前使用 API 模式。</span><span>提供方：${esc(providerLabel)}</span><span>模型名：${esc(selectedApiModelName || '未填写')}</span>`
-                  : assistantMode === 'local'
-                    ? `<span>当前使用本地模型模式。</span><span>已选模型：${esc(localModel?.display_name || selectedLocalRepoId || '未选择')}</span><span>可直接在本平台发起下载与跟踪。</span>`
-                    : `<span>当前使用平台规则引擎。</span><span>如果你想让外部大模型参与理解目标，可切到 API 模式；如果想提前准备本地大模型环境，可切到本地模型模式。</span>`
-                }
-              </div>
-              <div class="page-hero-actions">
-                <button class="ghost" type="button" data-assistant-open-tab="api">配置 API 模式</button>
-                <button class="ghost" type="button" data-assistant-open-tab="local">选择本地模型</button>
-              </div>
-            </article>
-            <article class="assistant-chat-dock-card assistant-prefill-banner">
-              <div class="assistant-chat-dock-card-head">
-                <strong>人工控制优先</strong>
-              </div>
-              <div class="selection-summary">
-                <span>智能引导负责建议、预填、导航，可选自动调整。</span>
-                <span>模型、参数、代码和训练规格仍然保留显式人工编辑入口。</span>
-              </div>
-            </article>
-          </div>
-        `;
+      function setUploadMeta(text = '') {
+        if (!uploadMeta) return;
+        const value = String(text || '').trim();
+        uploadMeta.textContent = value;
+        uploadMeta.hidden = !value;
       }
 
-      function renderExecutionMode() {
-        executionModeWrap?.querySelectorAll('[data-assistant-execution-mode]').forEach((button) => {
-          const active = button.getAttribute('data-assistant-execution-mode') === assistantExecutionMode;
-          button.classList.toggle('primary', active);
-          button.classList.toggle('ghost', !active);
-          button.setAttribute('aria-pressed', active ? 'true' : 'false');
-        });
-        if (executionModeHint) {
-          executionModeHint.textContent = assistantExecutionMode === 'prefill_navigate'
-            ? '当前会把建议作为可编辑预填带到下一页；你仍可以手动改模型、参数和代码配置。'
-            : '当前只给出建议并导航，不会自动改任何字段。需要时你可以在这里切到“跳转并带建议过去”。';
-        }
-        renderContext();
+      function closeUploadMenu() {
+        if (uploadMenu) uploadMenu.hidden = true;
+        if (uploadMenuBtn) uploadMenuBtn.setAttribute('aria-expanded', 'false');
       }
 
-      function renderVisualTheme() {
-        shell?.setAttribute('data-assistant-theme', assistantVisualTheme);
-        document.documentElement.setAttribute('data-ui-theme', assistantVisualTheme);
-        themeWrap?.querySelectorAll('[data-assistant-theme]').forEach((button) => {
-          const active = button.getAttribute('data-assistant-theme') === assistantVisualTheme;
-          button.classList.toggle('primary', active);
-          button.classList.toggle('ghost', !active);
-          button.setAttribute('aria-pressed', active ? 'true' : 'false');
-        });
+      function toggleUploadMenu() {
+        if (!uploadMenu || !uploadMenuBtn) return;
+        const nextHidden = !uploadMenu.hidden;
+        uploadMenu.hidden = nextHidden;
+        uploadMenuBtn.setAttribute('aria-expanded', nextHidden ? 'false' : 'true');
       }
 
-      function renderPlanAction(action, options = {}) {
-        if (!action) return '';
-        const buttonLabel = assistantExecutionMode === 'prefill_navigate'
-          ? (options.primary ? '带建议过去并继续' : '按建议走这条备选路径')
-          : (options.primary ? '只跳转去查看' : '只跳转到这条备选路径');
-        return `
-          <article class="selection-card ${options.primary ? 'selection-card-active' : ''}">
-            <div class="selection-card-head selection-card-head--stack">
-              <div class="selection-card-title">
-                <strong>${esc(action.title || '下一步')}</strong>
-                <span class="selection-card-subtitle">${esc(action.summary || '')}</span>
-              </div>
-              <span class="badge">${esc(options.primary ? '推荐动作' : '备选动作')}</span>
+      function renderSidebarSummary() {
+        const goalText = String(goalInput?.value || '').trim();
+        const assets = parseAssetIds();
+        const effectiveProvider = resolveEffectiveProvider(aiSettingsBundle, inferPlannerScopeHint({
+          goal: goalText,
+          assetIds: assets,
+          currentModelId: String(currentModelInput?.value || '').trim(),
+          taskType: String(taskTypeInput?.value || '').trim(),
+          sourcePath: readAiWorkflowDraft()?.source_path || '',
+        }));
+        if (modeSummary) modeSummary.textContent = effectiveProvider?.enabled ? (effectiveProvider.name || assistantModeLabel(assistantMode)) : (assistantMode === 'api' ? 'API 模式' : assistantMode === 'local' ? '本地模型模式' : '平台规则引擎');
+        if (goalSummary) goalSummary.textContent = goalText ? truncateMiddle(goalText, 34, 0) : '还没有输入目标';
+        if (assetSummary) assetSummary.textContent = String(assets.length || 0);
+      }
+
+      function renderSupportStrip() {
+        if (!supportStrip) return;
+        const pendingRows = readAiPendingConfirmations().slice(0, 2);
+        const recentRows = readAiRecentActions().slice(0, 3);
+        supportStrip.innerHTML = `
+          <div class="ai-support-block">
+            <span class="ai-side-label">Prompt chips</span>
+            <div class="ai-home-prompt-chips">
+              ${QUICK_ACTIONS.map((item) => `<button class="ghost chip-btn" type="button" data-ai-prompt-chip="${esc(item.id)}">${esc(item.label)}</button>`).join('')}
             </div>
-            <div class="selection-summary">
-              <span>${esc(action.reason || '')}</span>
-              ${action.path ? `<span>目标页面：${esc(action.path)}</span>` : ''}
-              <span>${esc(assistantExecutionMode === 'prefill_navigate' ? '当前会附带可编辑建议。' : '当前只导航，不自动预填。')}</span>
-            </div>
-            <div class="page-hero-actions">
-              <button class="${options.primary ? 'primary' : 'ghost'}" type="button" data-assistant-run-action="${esc(action.action_id || '')}">${esc(buttonLabel)}</button>
-            </div>
-          </article>
-        `;
-      }
-
-      function renderConversation() {
-        const assetIds = parseAssetIds();
-        const taskLabel = (TASK_OPTIONS.find(([value]) => value === (taskTypeInput?.value || '')) || [null, '让系统判断'])[1];
-        const chips = [
-          assistantMode === 'api' ? 'API 模式' : assistantMode === 'local' ? '本地模型模式' : '平台规则引擎',
-          assistantExecutionMode === 'prefill_navigate' ? '带建议过去' : '仅导航',
-          taskLabel,
-          assetIds.length ? `${assetIds.length} 个资产` : '未带资产',
-        ];
-        conversationWrap.innerHTML = `
-          <article class="assistant-message assistant-message-assistant">
-            <div class="assistant-message-avatar">AI</div>
-            <div class="assistant-message-bubble">
-              <strong>你好，我会先帮你理顺路径。</strong>
-              <p>你只需要描述目标、给出图片或资产，再决定是否让建议自动带到后续页面。默认我只给建议，不直接改字段。</p>
-              <div class="assistant-chip-row">
-                ${chips.map((item) => `<span class="assistant-inline-chip">${esc(item)}</span>`).join('')}
-              </div>
-            </div>
-          </article>
-          ${String(goalInput?.value || '').trim() ? `
-            <article class="assistant-message assistant-message-user">
-              <div class="assistant-message-bubble">
-                <strong>我的目标</strong>
-                <p>${esc(goalInput.value.trim())}</p>
-                <div class="assistant-chip-row">
-                  <span class="assistant-inline-chip">${esc(taskLabel)}</span>
-                  ${assetIds.map((assetId) => `<span class="assistant-inline-chip">${esc(assetId)}</span>`).join('')}
-                  ${currentModelInput?.value ? `<span class="assistant-inline-chip">模型 ${esc(currentModelInput.value)}</span>` : ''}
-                </div>
-              </div>
-            </article>
-          ` : ''}
-          ${latestPlan ? `
-            <article class="assistant-message assistant-message-assistant">
-              <div class="assistant-message-avatar">AI</div>
-              <div class="assistant-message-bubble assistant-plan-bubble">
-                <strong>${esc(latestPlan.guidance_summary || '已经生成下一步引导。')}</strong>
-                <p>${esc(latestPlan.primary_action?.summary || latestPlan.primary_action?.title || '建议先处理最重要的一步。')}</p>
-                <div class="assistant-chip-row">
-                  <span class="assistant-inline-chip">${esc(latestPlan.inferred_task_label || '通用任务')}</span>
-                  ${latestPlan.current_state?.released_model?.model_code ? `<span class="assistant-inline-chip">已发布 ${esc(latestPlan.current_state.released_model.model_code)}</span>` : ''}
-                  ${latestPlan.current_state?.submitted_model?.model_code ? `<span class="assistant-inline-chip">待验证 ${esc(latestPlan.current_state.submitted_model.model_code)}</span>` : ''}
-                </div>
-                <div class="assistant-message-actions">
-                  ${latestPlan.primary_action ? `<button class="primary" type="button" data-assistant-run-action="${esc(latestPlan.primary_action.action_id || '')}">${esc(assistantExecutionMode === 'prefill_navigate' ? '按建议继续' : '跳到推荐页面')}</button>` : ''}
-                  <button class="ghost" type="button" data-assistant-panel-tab="plan">查看完整行动计划</button>
-                </div>
-              </div>
-            </article>
-          ` : `
-            <article class="assistant-message assistant-message-assistant assistant-message-assistant-muted">
-              <div class="assistant-message-avatar">AI</div>
-              <div class="assistant-message-bubble">
-                <strong>可以从这些方向开始：</strong>
-                <div class="assistant-suggestion-list">
-                  <button class="ghost" type="button" data-assistant-quick-intent="我有一张图片，想先确认有没有现成模型可以直接识别。">先找能直接验证的现有模型</button>
-                  <button class="ghost" type="button" data-assistant-quick-intent="我想知道这张图应该进入任务验证、训练还是审批发布。">先判断该去任务、训练还是审批</button>
-                  <button class="ghost" type="button" data-assistant-panel-tab="local">先看看本地模型库</button>
-                </div>
-              </div>
-            </article>
-          `}
-        `;
-        conversationWrap.querySelectorAll('[data-assistant-quick-intent]').forEach((button) => {
-          button.addEventListener('click', () => {
-            goalInput.value = button.getAttribute('data-assistant-quick-intent') || '';
-            renderConversation();
-          });
-        });
-        conversationWrap.querySelectorAll('[data-assistant-panel-tab]').forEach((button) => {
-          button.addEventListener('click', () => setAssistantPanel(button.getAttribute('data-assistant-panel-tab') || 'plan'));
-        });
-        if (latestPlan?.primary_action) {
-          const action = latestPlan.primary_action;
-          conversationWrap.querySelector('[data-assistant-run-action]')?.addEventListener('click', () => {
-            const sourceMeta = JSON.stringify({
-              source: 'assistant',
-              mode: assistantMode,
-              execution_mode: assistantExecutionMode,
-              action_title: action.title || '',
-              action_summary: action.summary || '',
-              generated_at: new Date().toISOString(),
-              editable: true,
-            });
-            const prefill = action.prefill || {};
-            if (assistantExecutionMode === 'prefill_navigate') {
-              if (prefill.taskModelId !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTaskModelId, String(prefill.taskModelId || ''));
-              if (prefill.taskAssetId !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTaskAssetId, String(prefill.taskAssetId || ''));
-              if (prefill.taskType !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTaskType, String(prefill.taskType || ''));
-              if (prefill.taskHint !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTaskHint, String(prefill.taskHint || ''));
-              if (prefill.taskModelId !== undefined || prefill.taskAssetId !== undefined || prefill.taskType !== undefined || prefill.taskHint !== undefined) {
-                localStorage.setItem(STORAGE_KEYS.prefillTaskMeta, sourceMeta);
-              }
-              if (prefill.trainingAssetIds !== undefined || prefill.trainingValidationAssetIds !== undefined || prefill.trainingDatasetLabel !== undefined || prefill.trainingDatasetVersionId !== undefined || prefill.trainingTargetModelCode !== undefined) {
-                if (prefill.trainingAssetIds !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingAssetIds, String(prefill.trainingAssetIds || ''));
-                if (prefill.trainingValidationAssetIds !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingValidationAssetIds, String(prefill.trainingValidationAssetIds || ''));
-                if (prefill.trainingDatasetLabel !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetLabel, String(prefill.trainingDatasetLabel || ''));
-                if (prefill.trainingDatasetVersionId !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetVersionId, String(prefill.trainingDatasetVersionId || ''));
-                if (prefill.trainingTargetModelCode !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingTargetModelCode, String(prefill.trainingTargetModelCode || ''));
-                localStorage.setItem(STORAGE_KEYS.prefillTrainingMeta, sourceMeta);
-              }
-              if (prefill.focusModelId !== undefined) {
-                localStorage.setItem(STORAGE_KEYS.focusModelId, String(prefill.focusModelId || ''));
-                localStorage.setItem(STORAGE_KEYS.focusModelMeta, sourceMeta);
-              }
-            }
-            ctx.navigate(action.path || 'dashboard');
-          });
-        }
-      }
-
-      function renderPlan() {
-        if (!latestPlan) {
-          planWrap.innerHTML = renderEmpty('先在“目标与资源”里填写目标，然后生成下一步引导。');
-          renderConversation();
-          return;
-        }
-        const assetSummary = Array.isArray(latestPlan.asset_summary) ? latestPlan.asset_summary : [];
-        const secondaryActions = Array.isArray(latestPlan.secondary_actions) ? latestPlan.secondary_actions : [];
-        const llmAdvice = latestPlan.llm_advice && typeof latestPlan.llm_advice === 'object' ? latestPlan.llm_advice : null;
-        planWrap.innerHTML = `
-          ${renderWorkbenchOverview({
-            title: '智能下一步引导',
-            summary: latestPlan.guidance_summary || '系统已经根据你的目标和现有资源生成推荐路径。',
-            status: latestPlan.inferred_task_label || '通用任务',
-            metrics: [
-                { label: '大模型模式', value: latestPlan.llm_mode || 'disabled', note: '当前引导上下文' },
-                { label: '已带资产', value: assetSummary.length, note: assetSummary[0]?.file_name || '还没带资产' },
-                { label: '推荐主线', value: latestPlan.primary_action?.title || '-', note: '当前最建议先做的动作' },
-            ],
-            actions: [
-              { id: 'assistant-back-input', label: '返回修改输入', primary: true },
-              { id: 'assistant-open-downloads', label: '查看本地模型下载任务' },
-            ],
-          })}
-          <div class="selection-grid">
-            ${renderPlanAction(latestPlan.primary_action, { primary: true })}
-            ${secondaryActions.map((action) => renderPlanAction(action)).join('')}
           </div>
-          <div class="grid-two">
-            <article class="selection-card">
-              <div class="selection-card-head"><strong>系统判断依据</strong></div>
-              <div class="selection-summary">
-                ${(latestPlan.signals || []).map((item) => `<span>${esc(item)}</span>`).join('') || '<span>暂无额外判断依据。</span>'}
+          <div class="ai-support-block">
+            <span class="ai-side-label">Pending confirmations</span>
+            ${pendingRows.length ? `
+              <div class="ai-support-list">
+                ${pendingRows.map((item) => `<button class="ghost ai-support-item" type="button" data-ai-open-pending="${esc(item.session_id || '')}"><strong>${esc(item.title || '待确认')}</strong><span>${esc(item.summary || '')}</span></button>`).join('')}
               </div>
-            </article>
-            <article class="selection-card">
-              <div class="selection-card-head"><strong>当前模型状态</strong></div>
-              <div class="selection-summary">
-                <span>已发布模型：${esc(latestPlan.current_state?.released_model?.model_code || '暂无')}</span>
-                <span>待验证模型：${esc(latestPlan.current_state?.submitted_model?.model_code || '暂无')}</span>
-                <span>已审批未发布：${esc(latestPlan.current_state?.approved_model?.model_code || '暂无')}</span>
-              </div>
-            </article>
+            ` : '<div class="hint">当前没有待确认项。</div>'}
           </div>
-          ${llmAdvice ? `
-            <details class="inline-details">
-              <summary>查看大模型补充建议</summary>
-              <div class="details-panel">
-                <div class="selection-summary">
-                  ${llmAdvice.summary ? `<span>${esc(llmAdvice.summary)}</span>` : ''}
-                  ${Array.isArray(llmAdvice.risks) ? llmAdvice.risks.map((item) => `<span>${esc(item)}</span>`).join('') : ''}
-                  ${llmAdvice.suggested_path ? `<span>建议路径：${esc(llmAdvice.suggested_path)}</span>` : ''}
-                </div>
+          <div class="ai-support-block">
+            <span class="ai-side-label">Recent actions</span>
+            ${recentRows.length ? `
+              <div class="ai-support-list">
+                ${recentRows.map((item) => `<button class="ghost ai-support-item" type="button" data-ai-open-recent="${esc(item.workflow_path || item.target_path || 'ai')}"><strong>${esc(item.title || '最近动作')}</strong><span>${esc(item.workflow_path || item.target_path || '')}</span></button>`).join('')}
               </div>
-            </details>
-          ` : ''}
-        `;
-        planWrap.querySelector('[data-workbench-action="assistant-back-input"]')?.addEventListener('click', () => setAssistantPanel('context'));
-        planWrap.querySelector('[data-workbench-action="assistant-open-downloads"]')?.addEventListener('click', () => setAssistantPanel('downloads'));
-        const actionMap = [latestPlan.primary_action, ...secondaryActions].filter(Boolean).reduce((acc, item) => {
-          acc[item.action_id] = item;
-          return acc;
-        }, {});
-        planWrap.querySelectorAll('[data-assistant-run-action]').forEach((button) => {
-          button.addEventListener('click', () => {
-            const action = actionMap[button.getAttribute('data-assistant-run-action')];
-            if (!action) return;
-            const prefill = action.prefill || {};
-            if (assistantExecutionMode === 'prefill_navigate') {
-              const sourceMeta = JSON.stringify({
-                source: 'assistant',
-                mode: assistantMode,
-                execution_mode: assistantExecutionMode,
-                action_title: action.title || '',
-                action_summary: action.summary || '',
-                generated_at: new Date().toISOString(),
-                editable: true,
-              });
-              if (prefill.taskModelId !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTaskModelId, String(prefill.taskModelId || ''));
-              if (prefill.taskAssetId !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTaskAssetId, String(prefill.taskAssetId || ''));
-              if (prefill.taskType !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTaskType, String(prefill.taskType || ''));
-              if (prefill.taskHint !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTaskHint, String(prefill.taskHint || ''));
-              if (
-                prefill.taskModelId !== undefined
-                || prefill.taskAssetId !== undefined
-                || prefill.taskType !== undefined
-                || prefill.taskHint !== undefined
-              ) {
-                localStorage.setItem(STORAGE_KEYS.prefillTaskMeta, sourceMeta);
-              }
-              if (
-                prefill.trainingAssetIds !== undefined
-                || prefill.trainingValidationAssetIds !== undefined
-                || prefill.trainingDatasetLabel !== undefined
-                || prefill.trainingDatasetVersionId !== undefined
-                || prefill.trainingTargetModelCode !== undefined
-              ) {
-                if (prefill.trainingAssetIds !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingAssetIds, String(prefill.trainingAssetIds || ''));
-                if (prefill.trainingValidationAssetIds !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingValidationAssetIds, String(prefill.trainingValidationAssetIds || ''));
-                if (prefill.trainingDatasetLabel !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetLabel, String(prefill.trainingDatasetLabel || ''));
-                if (prefill.trainingDatasetVersionId !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetVersionId, String(prefill.trainingDatasetVersionId || ''));
-                if (prefill.trainingTargetModelCode !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingTargetModelCode, String(prefill.trainingTargetModelCode || ''));
-                localStorage.setItem(STORAGE_KEYS.prefillTrainingMeta, sourceMeta);
-              }
-              if (prefill.focusModelId !== undefined) {
-                localStorage.setItem(STORAGE_KEYS.focusModelId, String(prefill.focusModelId || ''));
-                localStorage.setItem(STORAGE_KEYS.focusModelMeta, sourceMeta);
-              }
-            }
-            ctx.navigate(action.path || 'dashboard');
-          });
-        });
-        renderConversation();
-      }
-
-      function renderApiModes() {
-        if (!providerModes) {
-          apiWrap.innerHTML = renderLoading('加载 API 模式配置...');
-          return;
-        }
-        const apiMode = (providerModes.modes || []).find((item) => item.mode === 'api');
-        const providers = Array.isArray(apiMode?.providers) ? apiMode.providers : [];
-        apiWrap.innerHTML = `
-          ${renderWorkbenchOverview({
-            title: 'API 模式',
-            summary: apiMode?.summary || '把外部大模型接进当前引导，但不改变平台主流程。',
-            status: assistantMode === 'api' ? '当前启用' : '可选增强',
-            metrics: [
-              { label: '接口类型', value: 'OpenAI 兼容', note: '当前版本统一按兼容模式接入' },
-              { label: '当前提供方', value: selectedApiProvider || '未选择', note: selectedApiModelName || '未填写模型名' },
-            ],
-            actions: [
-              { id: 'assistant-enable-api-mode', label: '切换到 API 模式', primary: true },
-              { id: 'assistant-back-input-from-api', label: '回到目标输入' },
-            ],
-          })}
-          <div class="selection-grid">
-            ${providers.map((provider) => `
-              <article class="selection-card ${selectedApiProvider === provider.provider_id ? 'selection-card-active' : ''}">
-                <div class="selection-card-head selection-card-head--stack">
-                  <div class="selection-card-title">
-                    <strong>${esc(provider.label)}</strong>
-                    <span class="selection-card-subtitle">${esc(provider.hint || '')}</span>
-                  </div>
-                  <span class="badge">${esc(selectedApiProvider === provider.provider_id ? '当前选择' : '可选择')}</span>
-                </div>
-                <div class="page-hero-actions">
-                  <button class="${selectedApiProvider === provider.provider_id ? 'primary' : 'ghost'}" type="button" data-assistant-provider="${esc(provider.provider_id)}">${esc(selectedApiProvider === provider.provider_id ? '正在使用这类接口' : '选这类接口')}</button>
-                </div>
-              </article>
-            `).join('')}
-          </div>
-          <div class="selection-summary">
-            <label>接口 Base URL<input id="assistantApiBaseUrlInput" placeholder="https://api.openai.com/v1" value="${esc(selectedApiBaseUrl)}" /></label>
-            <label>模型名<input id="assistantApiModelNameInput" placeholder="例如：gpt-4.1-mini 或企业内部模型名" value="${esc(selectedApiModelName)}" /></label>
-            <label>API Key<input id="assistantApiKeyInput" type="password" placeholder="只保存在当前浏览器，用于本次智能引导" value="${esc(selectedApiKey)}" /></label>
+            ` : '<div class="hint">还没有最近动作。</div>'}
           </div>
         `;
-        apiWrap.querySelector('[data-workbench-action="assistant-enable-api-mode"]')?.addEventListener('click', () => {
-          assistantMode = 'api';
-          persistAssistantState();
-          renderContext();
-          renderConversation();
-          renderApiModes();
-        });
-        apiWrap.querySelector('[data-workbench-action="assistant-back-input-from-api"]')?.addEventListener('click', () => setAssistantPanel('context'));
-        apiWrap.querySelectorAll('[data-assistant-provider]').forEach((button) => {
-          button.addEventListener('click', () => {
-            const provider = providers.find((item) => item.provider_id === button.getAttribute('data-assistant-provider'));
-            selectedApiProvider = provider?.provider_id || selectedApiProvider;
-            selectedApiBaseUrl = provider?.default_base_url || selectedApiBaseUrl;
-            assistantMode = 'api';
-            persistAssistantState();
-            renderContext();
-            renderConversation();
-            renderApiModes();
-          });
-        });
-        apiWrap.querySelector('#assistantApiBaseUrlInput')?.addEventListener('input', (event) => {
-          selectedApiBaseUrl = event.target.value;
-          persistAssistantState();
-          renderContext();
-        });
-        apiWrap.querySelector('#assistantApiModelNameInput')?.addEventListener('input', (event) => {
-          selectedApiModelName = event.target.value;
-          persistAssistantState();
-          renderContext();
-          renderConversation();
-        });
-        apiWrap.querySelector('#assistantApiKeyInput')?.addEventListener('input', (event) => {
-          selectedApiKey = event.target.value;
-          persistAssistantState();
-        });
-      }
-
-      function renderLocalCatalog() {
-        if (!localCatalog) {
-          localWrap.innerHTML = renderLoading('加载本地模型库...');
-          return;
-        }
-        const models = Array.isArray(localCatalog.models) ? localCatalog.models : [];
-        localWrap.innerHTML = `
-          ${renderWorkbenchOverview({
-            title: '本地模型库',
-            summary: '平台精选当前最值得本地部署的 10 个开源模型，并直接在这里发起下载和跟踪任务。',
-            status: assistantMode === 'local' ? '当前启用本地模式' : '可选增强',
-            metrics: [
-              { label: '精选模型', value: models.length, note: localCatalog.refreshed_at ? `元数据刷新 ${formatDateTime(localCatalog.refreshed_at)}` : '未刷新' },
-              { label: '当前选择', value: selectedLocalRepoId || '未选择', note: '后续会作为智能引导的大模型上下文' },
-            ],
-            actions: [
-              { id: 'assistant-refresh-local-catalog', label: '刷新模型元数据', primary: true },
-              { id: 'assistant-open-downloads-from-local', label: '查看下载任务' },
-            ],
-          })}
-          <div class="assistant-local-grid">
-            ${models.map((model) => `
-              <article class="selection-card ${selectedLocalRepoId === model.repo_id ? 'selection-card-active' : ''}">
-                <div class="selection-card-head selection-card-head--stack">
-                  <div class="selection-card-title">
-                    <strong>${esc(model.display_name)}</strong>
-                    <span class="selection-card-subtitle">${esc(model.vendor || '')} · ${esc(model.parameter_label || '')}</span>
-                  </div>
-                  <span class="badge">${esc(`#${model.rank}`)}</span>
-                </div>
-                <div class="selection-summary">
-                  <span>${esc(model.recommended_for || '')}</span>
-                  <span>长处：${esc((model.strengths || []).join(' / ') || '通用')}</span>
-                  <span>下载量：${esc(String(model.runtime_metadata?.downloads || 0))}</span>
-                  <span>点赞：${esc(String(model.runtime_metadata?.likes || 0))}</span>
-                  <span>${esc(model.runtime_metadata?.gated ? '需要访问授权' : '可直接访问')}</span>
-                </div>
-                <div class="page-hero-actions">
-                  <button class="${selectedLocalRepoId === model.repo_id ? 'primary' : 'ghost'}" type="button" data-assistant-local-select="${esc(model.repo_id)}">${esc(selectedLocalRepoId === model.repo_id ? '当前用于智能引导' : '选作当前本地模型')}</button>
-                  <button class="ghost" type="button" data-assistant-local-download="${esc(model.repo_id)}">直接下载</button>
-                </div>
-              </article>
-            `).join('')}
-          </div>
-        `;
-        localWrap.querySelector('[data-workbench-action="assistant-refresh-local-catalog"]')?.addEventListener('click', async () => {
-          localWrap.innerHTML = renderLoading('刷新本地模型元数据...');
-          try {
-          localCatalog = await ctx.get('/assistant/local-models?force_refresh=true');
-          renderLocalCatalog();
-          renderContext();
-        } catch (error) {
-          localWrap.innerHTML = renderError(error.message);
-        }
-        });
-        localWrap.querySelector('[data-workbench-action="assistant-open-downloads-from-local"]')?.addEventListener('click', async () => {
-          await loadDownloadJobs();
-          setAssistantPanel('downloads');
-        });
-        localWrap.querySelectorAll('[data-assistant-local-select]').forEach((button) => {
-          button.addEventListener('click', () => {
-            selectedLocalRepoId = button.getAttribute('data-assistant-local-select') || '';
-            assistantMode = 'local';
-            persistAssistantState();
-            renderContext();
-            renderLocalCatalog();
-            renderConversation();
-          });
-        });
-        localWrap.querySelectorAll('[data-assistant-local-download]').forEach((button) => {
+        supportStrip.querySelectorAll('[data-ai-prompt-chip]').forEach((button) => {
           button.addEventListener('click', async () => {
-            const repoId = button.getAttribute('data-assistant-local-download') || '';
-            const model = models.find((item) => item.repo_id === repoId);
-            try {
-              await ctx.post('/assistant/local-models/download', { repo_id: repoId, display_name: model?.display_name || repoId });
-              await loadDownloadJobs();
-              setAssistantPanel('downloads');
-            } catch (error) {
-              alert(error.message);
-            }
+            const action = QUICK_ACTIONS.find((item) => item.id === button.getAttribute('data-ai-prompt-chip'));
+            if (!action) return;
+            goalInput.value = action.goal;
+            persistWorkspaceDraft();
+            refreshAiWorkspaceMeta();
+            if (!action.uploadFirst) await generatePlan();
+          });
+        });
+        supportStrip.querySelectorAll('[data-ai-open-pending]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const sessionId = button.getAttribute('data-ai-open-pending');
+            if (sessionId) ctx.navigate(`ai/chat/${encodeURIComponent(sessionId)}`);
+          });
+        });
+        supportStrip.querySelectorAll('[data-ai-open-recent]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const path = button.getAttribute('data-ai-open-recent');
+            if (path) ctx.navigate(path);
           });
         });
       }
 
-      async function loadDownloadJobs() {
-        downloadsWrap.innerHTML = renderLoading('加载下载任务...');
-        try {
-          const payload = await ctx.get('/assistant/local-models/download-jobs');
-          downloadJobs = Array.isArray(payload.jobs) ? payload.jobs : [];
-          downloadsWrap.innerHTML = `
-            ${renderWorkbenchOverview({
-              title: '下载任务',
-              summary: '本地模型下载在后台执行，可以随时回来看状态。',
-              status: downloadJobs.some((item) => item.status === 'running' || item.status === 'starting') ? '有任务正在下载' : '当前没有运行中的下载',
-              metrics: [
-                { label: '任务总数', value: downloadJobs.length, note: '历史与当前任务' },
-                { label: '运行中', value: downloadJobs.filter((item) => ['starting', 'running'].includes(item.status)).length, note: '后台任务' },
-              ],
-              actions: [
-                { id: 'assistant-refresh-download-jobs', label: '刷新下载任务', primary: true },
-                { id: 'assistant-open-local-catalog', label: '回到本地模型库' },
-              ],
-            })}
-            <div class="selection-grid">
-              ${downloadJobs.length ? downloadJobs.map((job) => `
-                <article class="selection-card">
-                  <div class="selection-card-head selection-card-head--stack">
-                    <div class="selection-card-title">
-                      <strong>${esc(job.display_name || job.repo_id || job.job_id)}</strong>
-                      <span class="selection-card-subtitle">${esc(job.repo_id || '')}</span>
-                    </div>
-                    <span class="badge">${esc(job.status || 'unknown')}</span>
-                  </div>
-                  <div class="selection-summary">
-                    <span>目标目录：${esc(job.target_dir || '-')}</span>
-                    <span>开始时间：${esc(job.started_at ? formatDateTime(job.started_at) : '-')}</span>
-                    <span>日志文件：${esc(job.log_file || '-')}</span>
-                  </div>
-                  <div class="page-hero-actions">
-                    ${(job.status === 'running' || job.status === 'starting' || job.status === 'cancel_requested') ? `<button class="ghost" type="button" data-assistant-cancel-download="${esc(job.job_id || '')}">取消下载</button>` : ''}
-                  </div>
-                </article>
-              `).join('') : renderEmpty('当前还没有本地模型下载任务。')}
-            </div>
-          `;
-          downloadsWrap.querySelector('[data-workbench-action="assistant-refresh-download-jobs"]')?.addEventListener('click', () => loadDownloadJobs());
-          downloadsWrap.querySelector('[data-workbench-action="assistant-open-local-catalog"]')?.addEventListener('click', () => setAssistantPanel('local'));
-          downloadsWrap.querySelectorAll('[data-assistant-cancel-download]').forEach((button) => {
-            button.addEventListener('click', async () => {
-              const jobId = button.getAttribute('data-assistant-cancel-download');
-              try {
-                await ctx.post(`/assistant/local-models/download-jobs/${encodeURIComponent(jobId)}/cancel`, {});
-                await loadDownloadJobs();
-              } catch (error) {
-                alert(error.message);
-              }
-            });
-          });
-        } catch (error) {
-          downloadsWrap.innerHTML = renderError(error.message);
+      function workflowPathForLatestPlan() {
+        return workflowRouteForAction(latestPlan?.primary_action || {});
+      }
+
+      function renderSuggestion() {
+        if (!latestPlan?.primary_action) {
+          suggestionWrap.hidden = true;
+          return;
         }
-      }
-
-      async function loadProviderModes() {
-        providerModes = await ctx.get('/assistant/provider-modes');
-        renderApiModes();
-      }
-
-      async function loadLocalCatalog() {
-        localCatalog = await ctx.get('/assistant/local-models');
-        renderLocalCatalog();
-        renderContext();
-      }
-
-      async function generatePlan() {
-        generatePlanBtn.disabled = true;
-        planWrap.innerHTML = renderLoading('生成下一步引导...');
-        try {
-          const llmSelection = assistantMode === 'local'
-            ? { repo_id: selectedLocalRepoId }
-            : assistantMode === 'api'
-              ? { provider_id: selectedApiProvider, model_name: selectedApiModelName }
-              : {};
-          latestPlan = await ctx.post('/assistant/plan', {
-            goal: goalInput?.value || '',
-            asset_ids: parseAssetIds(),
-            current_task_type: taskTypeInput?.value || '',
-            current_model_id: currentModelInput?.value || '',
-            llm_mode: assistantMode,
-            llm_selection: llmSelection,
-            api_config: assistantMode === 'api' ? {
-              provider_id: selectedApiProvider,
-              base_url: selectedApiBaseUrl,
-              api_key: selectedApiKey,
-              model_name: selectedApiModelName,
-            } : {},
+        const secondaryActions = Array.isArray(latestPlan.secondary_actions) ? latestPlan.secondary_actions.slice(0, 2) : [];
+        suggestionWrap.hidden = false;
+        suggestionWrap.innerHTML = `
+          <article class="ai-suggestion-card ai-suggestion-card-compact">
+            <div class="ai-suggestion-head">
+              <div>
+                <span class="ai-side-label">下一步建议</span>
+                <h2>${esc(latestPlan.primary_action.title || '推荐动作')}</h2>
+              </div>
+              <span class="badge">${esc(latestPlan.inferred_task_label || '通用任务')}</span>
+            </div>
+            <p class="ai-suggestion-summary">${esc(latestPlan.guidance_summary || latestPlan.primary_action.summary || '')}</p>
+            <div class="ai-suggestion-meta">
+              ${latestPlan.primary_action.reason ? `<span>${esc(latestPlan.primary_action.reason)}</span>` : ''}
+              <span>推荐路径：${esc(workflowPathForLatestPlan())}</span>
+              ${latestPlan.provider_used?.name ? `<span>当前 Provider：${esc(latestPlan.provider_used.name)}</span>` : ''}
+              ${Array.isArray(latestPlan.context_documents) && latestPlan.context_documents.length ? `<span>已注入文档：${latestPlan.context_documents.length}</span>` : ''}
+            </div>
+            <div class="ai-suggestion-actions">
+              <button class="primary" type="button" data-assistant-run-action="${esc(latestPlan.primary_action.action_id || '')}">继续这一步</button>
+              <button class="ghost" type="button" data-ai-open-workflow="${esc(workflowPathForLatestPlan())}">查看流程</button>
+            </div>
+            ${secondaryActions.length ? `
+              <div class="ai-suggestion-secondary">
+                ${secondaryActions.map((action) => `
+                  <button class="ghost" type="button" data-assistant-run-action="${esc(action.action_id || '')}">${esc(action.title || '备选路径')}</button>
+                `).join('')}
+              </div>
+            ` : ''}
+          </article>
+        `;
+        suggestionWrap.querySelector('.ai-suggestion-actions [data-assistant-run-action]')?.addEventListener('click', () => {
+          runPlannedAction(latestPlan.primary_action);
+        });
+        suggestionWrap.querySelector('[data-ai-open-workflow]')?.addEventListener('click', () => {
+          const workflowPath = suggestionWrap.querySelector('[data-ai-open-workflow]')?.getAttribute('data-ai-open-workflow');
+          if (!workflowPath) return;
+          rememberAiRecentAction({
+            title: latestPlan.primary_action.title || '打开 workflow',
+            workflow_path: workflowPath,
+            target_path: latestPlan.primary_action.expert_path || latestPlan.primary_action.path || '',
           });
-          renderPlan();
-          setAssistantPanel('plan');
+          ctx.navigate(workflowPath);
+        });
+        suggestionWrap.querySelectorAll('.ai-suggestion-secondary [data-assistant-run-action]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const actionId = button.getAttribute('data-assistant-run-action');
+            const action = [latestPlan.primary_action, ...(latestPlan.secondary_actions || [])].find((item) => item?.action_id === actionId);
+            if (action) runPlannedAction(action);
+          });
+        });
+      }
+
+      function refreshAiWorkspaceMeta() {
+        renderSidebarSummary();
+        renderSupportStrip();
+        renderSuggestion();
+        const assetCount = parseAssetIds().length;
+        setUploadMeta(assetCount ? `已上传 ${assetCount} 个样例` : '');
+      }
+
+      function runPlannedAction(action, { preferWorkflow = false } = {}) {
+        if (!action) return;
+        const prefill = action.prefill || {};
+        const workflowPath = workflowRouteForAction(action);
+        const draft = readAiWorkflowDraft();
+        const plan = readAiLastPlan();
+        if (assistantExecutionMode === 'prefill_navigate') {
+          const sourceMeta = JSON.stringify({
+            source: 'assistant',
+            mode: assistantMode,
+            execution_mode: assistantExecutionMode,
+            action_title: action.title || '',
+            action_summary: action.summary || '',
+            generated_at: new Date().toISOString(),
+            editable: true,
+          });
+          if (prefill.taskModelId !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTaskModelId, String(prefill.taskModelId || ''));
+          if (prefill.taskAssetId !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTaskAssetId, String(prefill.taskAssetId || ''));
+          if (prefill.taskType !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTaskType, String(prefill.taskType || ''));
+          if (prefill.taskHint !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTaskHint, String(prefill.taskHint || ''));
+          if (prefill.taskModelId !== undefined || prefill.taskAssetId !== undefined || prefill.taskType !== undefined || prefill.taskHint !== undefined) {
+            localStorage.setItem(STORAGE_KEYS.prefillTaskMeta, sourceMeta);
+          }
+          if (prefill.trainingAssetIds !== undefined || prefill.trainingValidationAssetIds !== undefined || prefill.trainingDatasetLabel !== undefined || prefill.trainingDatasetVersionId !== undefined || prefill.trainingTargetModelCode !== undefined) {
+            if (prefill.trainingAssetIds !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingAssetIds, String(prefill.trainingAssetIds || ''));
+            if (prefill.trainingValidationAssetIds !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingValidationAssetIds, String(prefill.trainingValidationAssetIds || ''));
+            if (prefill.trainingDatasetLabel !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetLabel, String(prefill.trainingDatasetLabel || ''));
+            if (prefill.trainingDatasetVersionId !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetVersionId, String(prefill.trainingDatasetVersionId || ''));
+            if (prefill.trainingTargetModelCode !== undefined) localStorage.setItem(STORAGE_KEYS.prefillTrainingTargetModelCode, String(prefill.trainingTargetModelCode || ''));
+            localStorage.setItem(STORAGE_KEYS.prefillTrainingMeta, sourceMeta);
+          }
+          if (prefill.focusModelId !== undefined) {
+            localStorage.setItem(STORAGE_KEYS.focusModelId, String(prefill.focusModelId || ''));
+            localStorage.setItem(STORAGE_KEYS.focusModelMeta, sourceMeta);
+          }
+        }
+        rememberAiNavigationAndPrefill({
+          targetPath: preferWorkflow ? workflowPath : (action.expert_path || action.path || 'dashboard'),
+          title: action.title || 'AI 动作',
+          draft,
+          plan,
+          action: {
+            ...action,
+            workflow_path: workflowPath,
+          },
+        });
+        persistAiPendingConfirmations([]);
+        refreshAiWorkspaceMeta();
+        ctx.navigate(preferWorkflow ? workflowPath : (action.expert_path || action.path || 'dashboard'));
+      }
+
+      async function generatePlan({ openSuggestion = true } = {}) {
+        if (planInFlight) return;
+        const draft = currentDraft();
+        if (!draft.goal && !draft.asset_ids.length) return;
+        planInFlight = true;
+        generatePlanBtn.disabled = true;
+        persistWorkspaceDraft();
+        activeSessionId = makeLocalId('ai-session');
+        try {
+          const preferredScope = inferPlannerScopeHint({
+            goal: draft.goal,
+            assetIds: draft.asset_ids,
+            currentModelId: draft.current_model_id,
+            taskType: draft.task_type,
+            sourcePath: readAiWorkflowDraft()?.source_path || '',
+          });
+          const runtimeConfig = buildPlannerRuntime(aiSettingsBundle, preferredScope);
+          assistantMode = runtimeConfig.llmMode;
+          const llmSelection = runtimeConfig.llmSelection;
+          latestPlan = await ctx.post('/assistant/plan', {
+            goal: draft.goal,
+            asset_ids: draft.asset_ids,
+            current_task_type: draft.task_type,
+            current_model_id: draft.current_model_id,
+            llm_mode: runtimeConfig.llmMode,
+            llm_selection: llmSelection,
+            api_config: runtimeConfig.apiConfig,
+          });
+          persistAiLastPlan(latestPlan);
+          rememberAiSession({
+            sessionId: activeSessionId,
+            goal: draft.goal,
+            plan: latestPlan,
+            assetIds: draft.asset_ids,
+            taskType: draft.task_type,
+          });
+          syncAiPendingConfirmations(latestPlan, activeSessionId);
+          refreshAiWorkspaceMeta();
+          if (openSuggestion) suggestionWrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
         } catch (error) {
-          latestPlan = null;
-          planWrap.innerHTML = renderError(error.message);
-          renderConversation();
-          setAssistantPanel('plan');
+          latestPlan = buildLocalIntentPlan({
+            goal: draft.goal,
+            assetIds: draft.asset_ids,
+            currentTaskType: draft.task_type,
+            currentModelId: draft.current_model_id,
+          });
+          persistAiLastPlan(latestPlan);
+          rememberAiSession({
+            sessionId: activeSessionId,
+            goal: draft.goal,
+            plan: latestPlan,
+            assetIds: draft.asset_ids,
+            taskType: draft.task_type,
+          });
+          syncAiPendingConfirmations(latestPlan, activeSessionId);
+          toast(`智能规划服务不可用，已回退到本地规则引擎：${error.message}`, 'error');
+          refreshAiWorkspaceMeta();
         } finally {
+          planInFlight = false;
           generatePlanBtn.disabled = false;
         }
       }
 
-      async function uploadInlineAsset() {
-        const file = uploadFileInput?.files?.[0];
+      async function uploadInlineAsset(file) {
         if (!file) {
-          alert('请先选择一张图片。');
+          toast('请先选择一个样例文件。', 'error');
           return;
         }
-        uploadFileBtn.disabled = true;
+        pickFileBtn.disabled = true;
+        setUploadMeta(`正在上传 ${file.name}...`);
         try {
           const formData = new FormData();
           formData.append('file', file);
-          formData.append('purpose', 'inference');
+          formData.append('asset_purpose', 'inference');
           formData.append('sensitivity_level', 'L2');
           formData.append('use_case', 'assistant_planning');
           const result = await ctx.postForm('/assets/upload', formData);
           const current = parseAssetIds();
-          current.push(result.asset_id);
+          const uploadedAssetId = String(result?.asset_id || result?.id || '').trim();
+          if (!uploadedAssetId) {
+            throw new Error('上传已完成，但接口没有返回可用的资产编号。');
+          }
+          current.push(uploadedAssetId);
           assetIdsInput.value = [...new Set(current)].join(', ');
           uploadFileInput.value = '';
-          renderConversation();
-          renderContext();
-          setAssistantPanel('context');
+          persistWorkspaceDraft();
+          rememberAiRecentAction({
+            title: '上传图片并加入 AI 上下文',
+            workflow_path: 'ai/workflow/upload',
+            target_path: 'assets',
+          });
+          if (!String(goalInput?.value || '').trim()) {
+            goalInput.value = '我刚上传了样例，请帮我判断下一步。';
+          }
+          refreshAiWorkspaceMeta();
+          await generatePlan({ openSuggestion: false });
         } catch (error) {
           alert(error.message);
+          setUploadMeta(parseAssetIds().length ? `已上传 ${parseAssetIds().length} 个样例` : '');
         } finally {
-          uploadFileBtn.disabled = false;
+          pickFileBtn.disabled = false;
+          closeUploadMenu();
         }
       }
 
-      root.querySelectorAll('[data-assistant-open-tab]').forEach((button) => {
-        button.addEventListener('click', () => setAssistantPanel(button.getAttribute('data-assistant-open-tab') || 'context'));
-      });
-      executionModeWrap?.querySelectorAll('[data-assistant-execution-mode]').forEach((button) => {
-        button.addEventListener('click', () => {
-          assistantExecutionMode = button.getAttribute('data-assistant-execution-mode') || 'guide_only';
-          persistAssistantState();
-          renderExecutionMode();
-          renderPlan();
-          renderConversation();
-        });
-      });
-      themeWrap?.querySelectorAll('[data-assistant-theme]').forEach((button) => {
-        button.addEventListener('click', () => {
-          assistantVisualTheme = button.getAttribute('data-assistant-theme') || 'summer_cream';
-          persistAssistantState();
-          renderVisualTheme();
-        });
-      });
-      panelTabs.forEach((button) => {
-        button.addEventListener('click', () => setAssistantPanel(button.getAttribute('data-assistant-panel-tab') || 'context'));
-      });
-      root.querySelectorAll('[data-assistant-nav]').forEach((button) => {
-        button.addEventListener('click', () => ctx.navigate(button.getAttribute('data-assistant-nav') || 'dashboard'));
-      });
-      root.querySelectorAll('[data-assistant-quick-intent]').forEach((button) => {
-        button.addEventListener('click', () => {
-          goalInput.value = button.getAttribute('data-assistant-quick-intent') || '';
-          renderConversation();
-        });
-      });
-      [goalInput, taskTypeInput, currentModelInput, assetIdsInput].forEach((element) => {
-        element?.addEventListener('input', () => {
-          renderConversation();
-          renderContext();
-        });
-      });
-      uploadToggleBtn?.addEventListener('click', () => {
-        uploadWrap.hidden = !uploadWrap.hidden;
-      });
-      uploadToggleBtnMirror?.addEventListener('click', () => {
-        uploadWrap.hidden = !uploadWrap.hidden;
-      });
-      closeUploadBtn?.addEventListener('click', () => {
-        uploadWrap.hidden = true;
-      });
-      uploadFileBtn?.addEventListener('click', uploadInlineAsset);
-      generatePlanBtn?.addEventListener('click', generatePlan);
+      const savedDraft = readAiWorkflowDraft();
+      activeSessionId = readAiSessions()[0]?.session_id || activeSessionId;
+      latestPlan = readAiLastPlan();
+      if (savedDraft?.goal) goalInput.value = savedDraft.goal;
+      if (savedDraft?.task_type) taskTypeInput.value = savedDraft.task_type;
+      if (savedDraft?.current_model_id) currentModelInput.value = savedDraft.current_model_id;
+      if (Array.isArray(savedDraft?.asset_ids) && savedDraft.asset_ids.length) {
+        assetIdsInput.value = savedDraft.asset_ids.join(', ');
+      }
 
-      setAssistantPanel('context');
-      renderVisualTheme();
-      renderExecutionMode();
-      renderConversation();
-      renderContext();
-      await Promise.all([
-        loadProviderModes().catch((error) => { apiWrap.innerHTML = renderError(error.message); }),
-        loadLocalCatalog().catch((error) => { localWrap.innerHTML = renderError(error.message); }),
-        loadDownloadJobs().catch(() => {}),
-      ]);
+      try {
+        aiSettingsBundle = await loadAISettingsBundle(ctx);
+        const runtimeConfig = buildPlannerRuntime(aiSettingsBundle, inferPlannerScopeHint({
+          goal: String(goalInput?.value || '').trim(),
+          assetIds: parseAssetIds(),
+          currentModelId: String(currentModelInput?.value || '').trim(),
+          taskType: String(taskTypeInput?.value || '').trim(),
+          sourcePath: savedDraft?.source_path || '',
+        }));
+        assistantMode = runtimeConfig.llmMode;
+        selectedApiProvider = runtimeConfig.llmSelection.provider_id || selectedApiProvider;
+        selectedApiModelName = runtimeConfig.llmSelection.model_name || selectedApiModelName;
+      } catch {
+        aiSettingsBundle = null;
+      }
+
+      uploadMenuBtn?.addEventListener('click', (event) => {
+        event.stopPropagation();
+        toggleUploadMenu();
+      });
+      pickFileBtn?.addEventListener('click', () => {
+        closeUploadMenu();
+        uploadFileInput?.click();
+      });
+      uploadFileInput?.addEventListener('change', async () => {
+        const file = uploadFileInput?.files?.[0];
+        if (file) await uploadInlineAsset(file);
+      });
+      validateExistingBtn?.addEventListener('click', async () => {
+        const quickAction = QUICK_ACTIONS.find((item) => item.id === 'validate_model');
+        if (!quickAction) return;
+        goalInput.value = quickAction.goal;
+        persistWorkspaceDraft();
+        refreshAiWorkspaceMeta();
+        await generatePlan();
+      });
+      generatePlanBtn?.addEventListener('click', () => generatePlan());
+      goalInput?.addEventListener('input', () => {
+        persistWorkspaceDraft();
+        renderSidebarSummary();
+      });
+      goalInput?.addEventListener('keydown', async (event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+          event.preventDefault();
+          await generatePlan();
+        }
+      });
+      dropzone?.addEventListener('dragover', (event) => {
+        event.preventDefault();
+        dropzone.classList.add('dragging');
+      });
+      dropzone?.addEventListener('dragleave', () => {
+        dropzone.classList.remove('dragging');
+      });
+      dropzone?.addEventListener('drop', async (event) => {
+        event.preventDefault();
+        dropzone.classList.remove('dragging');
+        const file = event.dataTransfer?.files?.[0];
+        if (file) await uploadInlineAsset(file);
+      });
+      document.addEventListener('click', (event) => {
+        if (!uploadMenu || !uploadMenuBtn) return;
+        const target = event.target;
+        if (!(target instanceof Node)) return;
+        if (uploadMenu.contains(target) || uploadMenuBtn.contains(target)) return;
+        closeUploadMenu();
+      });
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') closeUploadMenu();
+      });
+
+      refreshAiWorkspaceMeta();
     },
   };
 }
@@ -3697,7 +3887,7 @@ function pageModels(route, rawCtx) {
           setModelPanel(activeModelPanel);
           loadModels();
         });
-        modelAssistantFocusNotice.querySelector('#backToAssistantFromModelBtn')?.addEventListener('click', () => ctx.navigate('assistant'));
+        modelAssistantFocusNotice.querySelector('#backToAssistantFromModelBtn')?.addEventListener('click', () => ctx.navigate('ai'));
       }
 
       function selectedModelRecord() {
@@ -5367,7 +5557,7 @@ function pageTraining(route, rawCtx) {
             if (createMsg) createMsg.textContent = '已清空来自智能引导的建议，接下来完全按你手动选择的训练数据、算法、参数和训练机器继续。';
             trainingAssistantPrefillNotice.innerHTML = '';
           });
-          trainingAssistantPrefillNotice.querySelector('#backToAssistantFromTrainingBtn')?.addEventListener('click', () => ctx.navigate('assistant'));
+          trainingAssistantPrefillNotice.querySelector('#backToAssistantFromTrainingBtn')?.addEventListener('click', () => ctx.navigate('ai'));
         }
         localStorage.removeItem(STORAGE_KEYS.prefillTrainingAssetIds);
         localStorage.removeItem(STORAGE_KEYS.prefillTrainingValidationAssetIds);
@@ -11045,7 +11235,7 @@ function pageTasks(route, rawCtx) {
             if (createMsg) createMsg.textContent = '已清空来自智能引导的建议，接下来完全按你手动填写的内容创建任务。';
             taskAssistantPrefillNotice.innerHTML = '';
           });
-          taskAssistantPrefillNotice.querySelector('#backToAssistantBtn')?.addEventListener('click', () => ctx.navigate('assistant'));
+          taskAssistantPrefillNotice.querySelector('#backToAssistantBtn')?.addEventListener('click', () => ctx.navigate('ai'));
         }
         localStorage.removeItem(STORAGE_KEYS.prefillTaskModelId);
         localStorage.removeItem(STORAGE_KEYS.prefillTaskAssetId);
@@ -13638,10 +13828,10 @@ function pageSettings(route, rawCtx) {
   return {
     html: `
       ${renderPageHero({
-        eyebrow: '身份与权限',
+        eyebrow: '系统与 AI 设置',
         title: '设置',
-        summary: '核对当前登录身份、租户边界、权限能力和默认角色路径。',
-        highlights: ['账号信息', '角色权限', '默认操作路径'],
+        summary: '统一管理账号边界、AI provider、系统知识文档和 AI 行为策略。',
+        highlights: ['账号信息', 'AI Provider', 'AI Knowledge', 'AI Behavior'],
         actions: [
           { path: 'dashboard', label: '返回工作台', primary: true },
           { path: 'guide', label: '查看使用指南' },
@@ -13650,14 +13840,26 @@ function pageSettings(route, rawCtx) {
       <section class="card">
         <div class="workspace-switcher">
           <button class="ghost" type="button" data-settings-panel-tab="overview">账号总览</button>
+          <button class="ghost" type="button" data-settings-panel-tab="aiProviders">AI Provider</button>
+          <button class="ghost" type="button" data-settings-panel-tab="aiKnowledge">AI Knowledge</button>
+          <button class="ghost" type="button" data-settings-panel-tab="aiBehavior">AI Behavior</button>
           <button class="ghost" type="button" data-settings-panel-tab="access">权限范围</button>
           <button class="ghost" type="button" data-settings-panel-tab="governance">数据治理</button>
           <button class="ghost" type="button" data-settings-panel-tab="tech">技术详情</button>
         </div>
-        <div id="settingsPanelMeta" class="hint">默认先看账号总览；权限、数据治理和技术细节按工作区展开。</div>
+        <div id="settingsPanelMeta" class="hint">默认先看账号和默认工作路径；AI provider、知识文档和行为策略按工作区展开。</div>
       </section>
       <section class="card" data-settings-panel="overview">
         <div id="settingsOverviewWrap">${renderLoading('加载账号总览...')}</div>
+      </section>
+      <section class="card" data-settings-panel="aiProviders" hidden>
+        <div id="settingsAIProvidersWrap">${renderLoading('加载 AI Provider 配置...')}</div>
+      </section>
+      <section class="card" data-settings-panel="aiKnowledge" hidden>
+        <div id="settingsAIKnowledgeWrap">${renderLoading('加载 AI Knowledge 配置...')}</div>
+      </section>
+      <section class="card" data-settings-panel="aiBehavior" hidden>
+        <div id="settingsAIBehaviorWrap">${renderLoading('加载 AI Behavior 配置...')}</div>
       </section>
       <section class="card" data-settings-panel="access" hidden>
         <div id="settingsAccessWrap">${renderLoading('加载权限范围...')}</div>
@@ -13675,6 +13877,9 @@ function pageSettings(route, rawCtx) {
       const panelTabs = [...root.querySelectorAll('[data-settings-panel-tab]')];
       const panels = [...root.querySelectorAll('[data-settings-panel]')];
       const overviewWrap = root.querySelector('#settingsOverviewWrap');
+      const aiProvidersWrap = root.querySelector('#settingsAIProvidersWrap');
+      const aiKnowledgeWrap = root.querySelector('#settingsAIKnowledgeWrap');
+      const aiBehaviorWrap = root.querySelector('#settingsAIBehaviorWrap');
       const accessWrap = root.querySelector('#settingsAccessWrap');
       const governanceWrap = root.querySelector('#settingsGovernanceWrap');
       const techWrap = root.querySelector('#settingsTechWrap');
@@ -13683,6 +13888,12 @@ function pageSettings(route, rawCtx) {
       let governanceData = null;
       let governanceBusyAction = '';
       let governanceLastResult = '';
+      let aiProvidersData = null;
+      let aiKnowledgeData = null;
+      let aiBehaviorData = null;
+      let aiProviderModes = null;
+      let aiLocalModels = null;
+      let aiDownloadJobs = null;
 
       function normalizeGovernanceAction(action) {
         return String(action || '').trim();
@@ -13847,8 +14058,539 @@ function pageSettings(route, rawCtx) {
         }
       }
 
+      function renderAIProvidersPanel() {
+        if (!aiProvidersWrap) return;
+        if (!aiProvidersData || !aiProviderModes || !aiLocalModels || !aiDownloadJobs) {
+          aiProvidersWrap.innerHTML = renderLoading('加载 AI Provider 配置...');
+          return;
+        }
+        const providers = Array.isArray(aiProvidersData.providers) ? aiProvidersData.providers : [];
+        const defaultProvider = aiProvidersData.default_provider || providers.find((item) => item.is_default) || null;
+        const modes = Array.isArray(aiProviderModes.modes) ? aiProviderModes.modes : [];
+        const localModels = Array.isArray(aiLocalModels.models) ? aiLocalModels.models.slice(0, 4) : [];
+        const downloadJobs = Array.isArray(aiDownloadJobs.jobs) ? aiDownloadJobs.jobs.slice(0, 4) : [];
+        const latestTest = providers
+          .map((item) => ({ provider: item, result: item.last_test_result || null }))
+          .filter((item) => item.result?.tested_at)
+          .sort((a, b) => String(b.result.tested_at || '').localeCompare(String(a.result.tested_at || '')))[0] || null;
+        aiProvidersWrap.innerHTML = `
+          ${renderWorkbenchOverview({
+            title: 'AI Provider Settings',
+            summary: '配置本地模型服务或第三方 API。默认 provider 会直接被 AI Workspace 用来做规划和解释。',
+            status: defaultProvider?.name || '当前未启用',
+            metrics: [
+              { label: 'Provider 数量', value: providers.length, note: '可共存配置' },
+              { label: '默认 Provider', value: defaultProvider?.name || '未设置', note: defaultProvider?.mode || 'disabled' },
+              { label: '本地模型快照', value: localModels.filter((item) => item.installed).length, note: `目录内共 ${localModels.length} 条精选模型` },
+              { label: '最近下载任务', value: downloadJobs.length, note: '本地模型下载状态' },
+              { label: '最近测试', value: latestTest ? (latestTest.result.ok ? '成功' : '失败') : '暂无', note: latestTest ? `${latestTest.provider.name} · ${formatDateTime(latestTest.result.tested_at)}` : '尚未执行连接测试' },
+            ],
+            actions: [
+              { id: 'ai-provider-refresh', label: '刷新配置', primary: true },
+            ],
+          })}
+          <div class="selection-grid">
+            ${providers.map((item) => `
+              <article class="selection-card">
+                <div class="selection-card-head selection-card-head--stack">
+                  <div class="selection-card-title">
+                    <strong>${esc(item.name || item.id || 'Provider')}</strong>
+                    <span class="selection-card-subtitle">${esc(item.provider || item.mode || '')}</span>
+                  </div>
+                  <span class="badge">${esc(item.is_default ? '默认' : (item.enabled ? '已启用' : '已停用'))}</span>
+                </div>
+                <div class="selection-card-meta selection-card-meta--compact">
+                  <span>模式</span><strong>${esc(item.mode || '-')}</strong>
+                  <span>请求格式</span><strong>${esc(item.format_type || 'openai_compatible')}</strong>
+                  <span>模型</span><strong>${esc(item.model_name || '-')}</strong>
+                  <span>地址</span><strong>${esc(truncateMiddle(item.base_url || '-', 32, 0))}</strong>
+                  <span>API Key</span><strong>${esc(item.api_key_mask || (item.has_api_key ? '已配置' : '未配置'))}</strong>
+                  <span>作用范围</span><strong>${esc((item.scope || []).join(', ') || 'global')}</strong>
+                </div>
+                ${item.last_test_result ? `
+                  <div class="hint">
+                    最近测试：${esc(item.last_test_result.ok ? '成功' : '失败')} · ${esc(formatDateTime(item.last_test_result.tested_at || ''))}
+                    ${item.last_test_result.message ? ` · ${esc(item.last_test_result.message)}` : ''}
+                  </div>
+                ` : '<div class="hint">还没有连接测试记录。</div>'}
+                <div class="page-hero-actions">
+                  <button class="ghost" type="button" data-ai-provider-edit="${esc(item.id)}">编辑</button>
+                  <button class="ghost" type="button" data-ai-provider-default="${esc(item.id)}">设为默认</button>
+                  <button class="ghost" type="button" data-ai-provider-delete="${esc(item.id)}">删除</button>
+                </div>
+              </article>
+            `).join('')}
+          </div>
+          <form id="aiProviderForm" class="form-grid settings-ai-form">
+            <h3>新增或编辑 Provider</h3>
+            <input type="hidden" name="id" />
+            <label>名称</label>
+            <input name="name" placeholder="例如：内网 vLLM / OpenAI API / Ollama 网关" required />
+            <label>模式</label>
+            <select name="mode">
+              ${modes.map((item) => `<option value="${esc(item.mode || '')}">${esc(item.label || item.mode || '')}</option>`).join('')}
+            </select>
+            <label>Provider 类型</label>
+            <input name="provider" value="openai_compatible" placeholder="openai_compatible / local_openai_compatible" />
+            <label>请求格式类型</label>
+            <select name="format_type">
+              <option value="openai_compatible">OpenAI-compatible</option>
+              <option value="custom">Custom</option>
+            </select>
+            <label>Base URL</label>
+            <input name="base_url" placeholder="http://127.0.0.1:11434 或 https://your-gateway.example.com" />
+            <label>API Path</label>
+            <input name="api_path" value="/v1" placeholder="/v1" />
+            <label>Model Name</label>
+            <input name="model_name" placeholder="gpt-4.1-mini / qwen2.5 / llama3.1" />
+            <label>API Key</label>
+            <input name="api_key" placeholder="留空则不更新已有 Key" />
+            <label>Organization</label>
+            <input name="organization" placeholder="可选，用于 OpenAI-compatible 网关" />
+            <label>Project</label>
+            <input name="project" placeholder="可选，用于项目级隔离" />
+            <label>作用范围</label>
+            <input name="scope" value="global" placeholder="global 或 train,results 这类逗号分隔范围" />
+            <label>Timeout</label>
+            <input name="timeout" type="number" min="5" max="300" value="45" />
+            <label>Temperature</label>
+            <input name="temperature" type="number" min="0" max="2" step="0.1" value="0.2" />
+            <label>Max Tokens</label>
+            <input name="max_tokens" type="number" min="64" max="8192" step="64" value="900" />
+            <div class="row-actions">
+              <label class="checkbox-row"><input type="checkbox" name="enabled" checked /> 启用该 Provider</label>
+              <label class="checkbox-row"><input type="checkbox" name="is_default" /> 设为默认</label>
+              <label class="checkbox-row"><input type="checkbox" name="enable_stream" /> 启用流式输出</label>
+            </div>
+            <div class="row-actions">
+              <button class="primary" type="submit">保存 Provider</button>
+              <button class="ghost" type="button" id="aiProviderTestBtn">测试连接</button>
+              <button class="ghost" type="button" id="aiProviderResetBtn">清空表单</button>
+            </div>
+            <div id="aiProviderMsg" class="hint"></div>
+          </form>
+          <details class="inline-details" open>
+            <summary>本地模型库与下载任务</summary>
+            <div class="details-panel">
+              <div class="selection-grid">
+                ${localModels.map((item) => `
+                  <article class="selection-card">
+                    <div class="selection-card-head selection-card-head--stack">
+                      <div class="selection-card-title">
+                        <strong>${esc(item.display_name || item.repo_id || '-')}</strong>
+                        <span class="selection-card-subtitle">${esc(item.repo_id || '')}</span>
+                      </div>
+                      <span class="badge">${esc(item.installed ? '已下载' : '未下载')}</span>
+                    </div>
+                    <div class="page-hero-actions">
+                      <button class="ghost" type="button" data-ai-local-download="${esc(item.repo_id || '')}">下载</button>
+                      ${item.installed ? `<button class="ghost" type="button" data-ai-local-delete="${esc(item.repo_id || '')}">删除快照</button>` : ''}
+                    </div>
+                  </article>
+                `).join('')}
+              </div>
+              ${downloadJobs.length ? `
+                <div class="selection-grid">
+                  ${downloadJobs.map((item) => `
+                    <article class="selection-card">
+                      <div class="selection-card-head"><strong>${esc(item.display_name || item.repo_id || item.job_id || '-')}</strong><span class="badge">${esc(item.progress_label || item.status || '-')}</span></div>
+                      <div class="selection-card-meta selection-card-meta--compact">
+                        <span>状态</span><strong>${esc(item.status || '-')}</strong>
+                        <span>下载量</span><strong>${esc(formatMetricValue(item.downloaded_bytes || 0))}</strong>
+                      </div>
+                      ${['starting', 'running'].includes(String(item.status || '')) ? `<div class="page-hero-actions"><button class="ghost" type="button" data-ai-download-cancel="${esc(item.job_id || '')}">取消</button></div>` : ''}
+                    </article>
+                  `).join('')}
+                </div>
+              ` : '<div class="hint">当前没有下载任务。</div>'}
+            </div>
+          </details>
+        `;
+        aiProvidersWrap.querySelector('[data-workbench-action="ai-provider-refresh"]')?.addEventListener('click', () => loadAISettingsData());
+        const providerForm = aiProvidersWrap.querySelector('#aiProviderForm');
+        const providerMsg = aiProvidersWrap.querySelector('#aiProviderMsg');
+        const resetProviderForm = () => {
+            providerForm?.reset();
+          if (providerForm) {
+            providerForm.querySelector('[name="id"]').value = '';
+            providerForm.querySelector('[name="provider"]').value = 'openai_compatible';
+            providerForm.querySelector('[name="format_type"]').value = 'openai_compatible';
+            providerForm.querySelector('[name="api_path"]').value = '/v1';
+            providerForm.querySelector('[name="organization"]').value = '';
+            providerForm.querySelector('[name="project"]').value = '';
+            providerForm.querySelector('[name="scope"]').value = 'global';
+            providerForm.querySelector('[name="timeout"]').value = '45';
+            providerForm.querySelector('[name="temperature"]').value = '0.2';
+            providerForm.querySelector('[name="max_tokens"]').value = '900';
+            providerForm.querySelector('[name="enabled"]').checked = true;
+            providerForm.querySelector('[name="is_default"]').checked = false;
+          }
+        };
+        resetProviderForm();
+        const fillProviderForm = (row) => {
+          if (!providerForm || !row) return;
+          providerForm.querySelector('[name="id"]').value = row.id || '';
+          providerForm.querySelector('[name="name"]').value = row.name || '';
+          providerForm.querySelector('[name="mode"]').value = row.mode || 'api';
+          providerForm.querySelector('[name="provider"]').value = row.provider || 'openai_compatible';
+          providerForm.querySelector('[name="format_type"]').value = row.format_type || 'openai_compatible';
+          providerForm.querySelector('[name="base_url"]').value = row.base_url || '';
+          providerForm.querySelector('[name="api_path"]').value = row.api_path || '/v1';
+          providerForm.querySelector('[name="model_name"]').value = row.model_name || '';
+          providerForm.querySelector('[name="organization"]').value = row.organization || '';
+          providerForm.querySelector('[name="project"]').value = row.project || '';
+          providerForm.querySelector('[name="scope"]').value = Array.isArray(row.scope) ? row.scope.join(', ') : 'global';
+          providerForm.querySelector('[name="timeout"]').value = row.timeout || 45;
+          providerForm.querySelector('[name="temperature"]').value = row.temperature ?? 0.2;
+          providerForm.querySelector('[name="max_tokens"]').value = row.max_tokens || 900;
+          providerForm.querySelector('[name="enabled"]').checked = Boolean(row.enabled);
+          providerForm.querySelector('[name="is_default"]').checked = Boolean(row.is_default);
+          providerForm.querySelector('[name="enable_stream"]').checked = Boolean(row.enable_stream);
+        };
+        providerForm?.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          const form = new FormData(providerForm);
+          const payload = {
+            id: form.get('id') || undefined,
+            name: String(form.get('name') || '').trim(),
+            mode: String(form.get('mode') || 'api').trim(),
+            provider: String(form.get('provider') || 'openai_compatible').trim(),
+            format_type: String(form.get('format_type') || 'openai_compatible').trim(),
+            base_url: String(form.get('base_url') || '').trim(),
+            api_path: String(form.get('api_path') || '/v1').trim(),
+            model_name: String(form.get('model_name') || '').trim(),
+            api_key: String(form.get('api_key') || '').trim(),
+            organization: String(form.get('organization') || '').trim(),
+            project: String(form.get('project') || '').trim(),
+            scope: String(form.get('scope') || 'global').split(',').map((item) => item.trim()).filter(Boolean),
+            timeout: Number(form.get('timeout') || 45),
+            temperature: Number(form.get('temperature') || 0.2),
+            max_tokens: Number(form.get('max_tokens') || 900),
+            enabled: providerForm.querySelector('[name="enabled"]').checked,
+            is_default: providerForm.querySelector('[name="is_default"]').checked,
+            enable_stream: providerForm.querySelector('[name="enable_stream"]').checked,
+          };
+          providerMsg.textContent = '正在保存 Provider...';
+          try {
+            if (payload.id) {
+              await api(`/settings/ai/providers/${encodeURIComponent(payload.id)}`, { method: 'PUT', body: JSON.stringify(payload) }, ctx.state.token);
+            } else {
+              await ctx.post('/settings/ai/providers', payload);
+            }
+            providerMsg.textContent = 'Provider 已保存。';
+            await loadAISettingsData();
+          } catch (error) {
+            providerMsg.textContent = error.message;
+          }
+        });
+        aiProvidersWrap.querySelector('#aiProviderTestBtn')?.addEventListener('click', async () => {
+          if (!providerForm || !providerMsg) return;
+          const form = new FormData(providerForm);
+          providerMsg.textContent = '正在测试连接...';
+          try {
+            const result = await ctx.post('/settings/ai/providers/test', {
+              id: form.get('id') || undefined,
+              name: String(form.get('name') || '').trim() || 'Provider Test',
+              mode: String(form.get('mode') || 'api').trim(),
+              provider: String(form.get('provider') || 'openai_compatible').trim(),
+              format_type: String(form.get('format_type') || 'openai_compatible').trim(),
+              base_url: String(form.get('base_url') || '').trim(),
+              api_path: String(form.get('api_path') || '/v1').trim(),
+              model_name: String(form.get('model_name') || '').trim(),
+              api_key: String(form.get('api_key') || '').trim(),
+              organization: String(form.get('organization') || '').trim(),
+              project: String(form.get('project') || '').trim(),
+              scope: String(form.get('scope') || 'global').split(',').map((item) => item.trim()).filter(Boolean),
+              timeout: Number(form.get('timeout') || 45),
+              temperature: Number(form.get('temperature') || 0.2),
+              max_tokens: Number(form.get('max_tokens') || 900),
+            });
+            providerMsg.textContent = result.message || '连接测试完成。';
+            await loadAISettingsData();
+          } catch (error) {
+            providerMsg.textContent = error.message;
+          }
+        });
+        aiProvidersWrap.querySelector('#aiProviderResetBtn')?.addEventListener('click', () => {
+          resetProviderForm();
+          if (providerMsg) providerMsg.textContent = '';
+        });
+        aiProvidersWrap.querySelectorAll('[data-ai-provider-edit]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const row = providers.find((item) => item.id === button.getAttribute('data-ai-provider-edit'));
+            fillProviderForm(row);
+          });
+        });
+        aiProvidersWrap.querySelectorAll('[data-ai-provider-default]').forEach((button) => {
+          button.addEventListener('click', async () => {
+            const id = button.getAttribute('data-ai-provider-default');
+            if (!id) return;
+            await ctx.post(`/settings/ai/providers/${encodeURIComponent(id)}/default`, {});
+            await loadAISettingsData();
+          });
+        });
+        aiProvidersWrap.querySelectorAll('[data-ai-provider-delete]').forEach((button) => {
+          button.addEventListener('click', async () => {
+            const id = button.getAttribute('data-ai-provider-delete');
+            if (!id) return;
+            await apiDelete(`/settings/ai/providers/${encodeURIComponent(id)}`, ctx.state.token);
+            await loadAISettingsData();
+          });
+        });
+        aiProvidersWrap.querySelectorAll('[data-ai-local-download]').forEach((button) => {
+          button.addEventListener('click', async () => {
+            const repoId = button.getAttribute('data-ai-local-download');
+            if (!repoId) return;
+            await ctx.post('/settings/llm/download', { repo_id: repoId });
+            await loadAISettingsData();
+          });
+        });
+        aiProvidersWrap.querySelectorAll('[data-ai-local-delete]').forEach((button) => {
+          button.addEventListener('click', async () => {
+            const repoId = button.getAttribute('data-ai-local-delete');
+            if (!repoId) return;
+            await apiDelete(`/settings/llm/local-models/${encodeURIComponent(repoId)}`, ctx.state.token);
+            await loadAISettingsData();
+          });
+        });
+        aiProvidersWrap.querySelectorAll('[data-ai-download-cancel]').forEach((button) => {
+          button.addEventListener('click', async () => {
+            const jobId = button.getAttribute('data-ai-download-cancel');
+            if (!jobId) return;
+            await ctx.post(`/settings/llm/download-jobs/${encodeURIComponent(jobId)}/cancel`, {});
+            await loadAISettingsData();
+          });
+        });
+      }
+
+      function renderAIKnowledgePanel() {
+        if (!aiKnowledgeWrap) return;
+        if (!aiKnowledgeData) {
+          aiKnowledgeWrap.innerHTML = renderLoading('加载 AI Knowledge 配置...');
+          return;
+        }
+        const documents = Array.isArray(aiKnowledgeData.documents) ? aiKnowledgeData.documents : [];
+        aiKnowledgeWrap.innerHTML = `
+          ${renderWorkbenchOverview({
+            title: 'AI Knowledge Settings',
+            summary: '管理注入给 AI 的系统文档。内置文档定义系统边界，自定义文档可补充 FAQ、指引和约束。',
+            status: `${documents.filter((item) => item.enabled).length} 份已启用`,
+            metrics: [
+              { label: '总文档数', value: documents.length, note: '内置 + 自定义' },
+              { label: '内置文档', value: documents.filter((item) => item.source_type === 'builtin').length, note: '由开发者维护' },
+              { label: '自定义文档', value: documents.filter((item) => item.source_type === 'custom').length, note: '管理员上传 / 录入' },
+            ],
+            actions: [
+              { id: 'ai-knowledge-refresh', label: '刷新文档', primary: true },
+            ],
+          })}
+          <div class="selection-grid">
+            ${documents.map((item) => `
+              <article class="selection-card">
+                <div class="selection-card-head selection-card-head--stack">
+                  <div class="selection-card-title">
+                    <strong>${esc(item.title || item.id || '文档')}</strong>
+                    <span class="selection-card-subtitle">${esc(item.description || '')}</span>
+                  </div>
+                  <span class="badge">${esc(item.enabled ? (item.source_type === 'builtin' ? '内置启用' : '自定义启用') : '已停用')}</span>
+                </div>
+                <div class="selection-card-meta selection-card-meta--compact">
+                  <span>作用范围</span><strong>${esc((item.scope || []).join(', ') || 'global')}</strong>
+                  <span>更新时间</span><strong>${esc(formatDateTime(item.updated_at || ''))}</strong>
+                  <span>预览长度</span><strong>${esc(item.content_length || 0)}</strong>
+                </div>
+                <details class="inline-details">
+                  <summary>文档预览</summary>
+                  <div class="details-panel"><pre>${esc(item.content_preview || '')}</pre></div>
+                </details>
+                <div class="page-hero-actions">
+                  <button class="ghost" type="button" data-ai-doc-edit="${esc(item.id)}">编辑</button>
+                  ${item.source_type === 'custom' ? `<button class="ghost" type="button" data-ai-doc-delete="${esc(item.id)}">删除</button>` : ''}
+                </div>
+              </article>
+            `).join('')}
+          </div>
+          <form id="aiKnowledgeForm" class="form-grid settings-ai-form">
+            <h3>新增或编辑文档</h3>
+            <input type="hidden" name="id" />
+            <label>标题</label>
+            <input name="title" placeholder="例如：模型审批补充说明 / OCR FAQ" required />
+            <label>说明</label>
+            <input name="description" placeholder="告诉 AI 这份文档解决什么问题" />
+            <label>作用范围</label>
+            <input name="scope" value="global" placeholder="global 或 train,results 这类逗号分隔范围" />
+            <label>文档内容</label>
+            <textarea name="content" rows="10" placeholder="粘贴 markdown、FAQ 或产品约束说明"></textarea>
+            <div class="row-actions">
+              <label class="checkbox-row"><input type="checkbox" name="enabled" checked /> 启用该文档</label>
+              <input id="aiKnowledgeFileInput" type="file" accept=".md,.txt" />
+            </div>
+            <div class="row-actions">
+              <button class="primary" type="submit">保存文档</button>
+              <button class="ghost" type="button" id="aiKnowledgeResetBtn">清空表单</button>
+            </div>
+            <div id="aiKnowledgeMsg" class="hint"></div>
+          </form>
+        `;
+        aiKnowledgeWrap.querySelector('[data-workbench-action="ai-knowledge-refresh"]')?.addEventListener('click', () => loadAISettingsData());
+        const knowledgeForm = aiKnowledgeWrap.querySelector('#aiKnowledgeForm');
+        const knowledgeMsg = aiKnowledgeWrap.querySelector('#aiKnowledgeMsg');
+        const resetKnowledgeForm = () => {
+          knowledgeForm?.reset();
+          if (knowledgeForm) {
+            knowledgeForm.querySelector('[name="id"]').value = '';
+            knowledgeForm.querySelector('[name="scope"]').value = 'global';
+            knowledgeForm.querySelector('[name="enabled"]').checked = true;
+            knowledgeForm.querySelector('[name="content"]').disabled = false;
+          }
+        };
+        resetKnowledgeForm();
+        aiKnowledgeWrap.querySelector('#aiKnowledgeFileInput')?.addEventListener('change', async (event) => {
+          const file = event.target.files?.[0];
+          if (!file || !knowledgeForm) return;
+          knowledgeForm.querySelector('[name="content"]').value = await file.text();
+          if (!knowledgeForm.querySelector('[name="title"]').value) {
+            knowledgeForm.querySelector('[name="title"]').value = file.name.replace(/\.(md|txt)$/i, '');
+          }
+        });
+        const fillKnowledgeForm = async (docId) => {
+          const row = await ctx.get(`/settings/ai/knowledge/${encodeURIComponent(docId)}`);
+          if (!knowledgeForm) return;
+          knowledgeForm.querySelector('[name="id"]').value = row.id || '';
+          knowledgeForm.querySelector('[name="title"]').value = row.title || '';
+          knowledgeForm.querySelector('[name="description"]').value = row.description || '';
+          knowledgeForm.querySelector('[name="scope"]').value = Array.isArray(row.scope) ? row.scope.join(', ') : 'global';
+          knowledgeForm.querySelector('[name="content"]').value = row.content || '';
+          knowledgeForm.querySelector('[name="enabled"]').checked = Boolean(row.enabled);
+          knowledgeForm.querySelector('[name="content"]').disabled = row.source_type === 'builtin';
+        };
+        knowledgeForm?.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          const form = new FormData(knowledgeForm);
+          const payload = {
+            id: form.get('id') || undefined,
+            title: String(form.get('title') || '').trim(),
+            description: String(form.get('description') || '').trim(),
+            scope: String(form.get('scope') || 'global').split(',').map((item) => item.trim()).filter(Boolean),
+            content: String(form.get('content') || ''),
+            enabled: knowledgeForm.querySelector('[name="enabled"]').checked,
+          };
+          knowledgeMsg.textContent = '正在保存文档...';
+          try {
+            if (payload.id) {
+              await api(`/settings/ai/knowledge/${encodeURIComponent(payload.id)}`, { method: 'PUT', body: JSON.stringify(payload) }, ctx.state.token);
+            } else {
+              await ctx.post('/settings/ai/knowledge', payload);
+            }
+            knowledgeMsg.textContent = '文档已保存。';
+            await loadAISettingsData();
+          } catch (error) {
+            knowledgeMsg.textContent = error.message;
+          }
+        });
+        aiKnowledgeWrap.querySelector('#aiKnowledgeResetBtn')?.addEventListener('click', () => {
+          resetKnowledgeForm();
+          if (knowledgeMsg) knowledgeMsg.textContent = '';
+        });
+        aiKnowledgeWrap.querySelectorAll('[data-ai-doc-edit]').forEach((button) => {
+          button.addEventListener('click', async () => {
+            const docId = button.getAttribute('data-ai-doc-edit');
+            if (docId) await fillKnowledgeForm(docId);
+          });
+        });
+        aiKnowledgeWrap.querySelectorAll('[data-ai-doc-delete]').forEach((button) => {
+          button.addEventListener('click', async () => {
+            const docId = button.getAttribute('data-ai-doc-delete');
+            if (!docId) return;
+            await apiDelete(`/settings/ai/knowledge/${encodeURIComponent(docId)}`, ctx.state.token);
+            await loadAISettingsData();
+          });
+        });
+      }
+
+      function renderAIBehaviorPanel() {
+        if (!aiBehaviorWrap) return;
+        if (!aiBehaviorData) {
+          aiBehaviorWrap.innerHTML = renderLoading('加载 AI Behavior 配置...');
+          return;
+        }
+        aiBehaviorWrap.innerHTML = `
+          ${renderWorkbenchOverview({
+            title: 'AI Behavior Settings',
+            summary: '控制系统 prompt、文档约束、workflow 优先级和是否允许自动预填。',
+            status: aiBehaviorData.strict_document_mode ? '严格按文档' : '可自由建议',
+            metrics: [
+              { label: 'Workflow 优先', value: aiBehaviorData.prefer_workflow_jump ? '是' : '否', note: '优先跳转流程页' },
+              { label: '自动预填', value: aiBehaviorData.allow_auto_prefill ? '开启' : '关闭', note: 'AI 可否带建议参数' },
+              { label: '推理说明', value: aiBehaviorData.show_reasoning_summary ? '显示' : '隐藏', note: '是否展示 AI 摘要' },
+            ],
+          })}
+          <form id="aiBehaviorForm" class="form-grid settings-ai-form">
+            <h3>行为策略</h3>
+            <label>默认 System Prompt</label>
+            <textarea name="system_prompt" rows="8" placeholder="告诉 AI 你的默认角色、边界和回答风格">${esc(aiBehaviorData.system_prompt || '')}</textarea>
+            <div class="selection-grid">
+              <label class="checkbox-row"><input type="checkbox" name="strict_document_mode" ${aiBehaviorData.strict_document_mode ? 'checked' : ''} /> 严格按系统文档回答</label>
+              <label class="checkbox-row"><input type="checkbox" name="allow_freeform_suggestions" ${aiBehaviorData.allow_freeform_suggestions ? 'checked' : ''} /> 允许自由生成建议</label>
+              <label class="checkbox-row"><input type="checkbox" name="prefer_workflow_jump" ${aiBehaviorData.prefer_workflow_jump ? 'checked' : ''} /> 优先跳 workflow 而非纯文本</label>
+              <label class="checkbox-row"><input type="checkbox" name="show_reasoning_summary" ${aiBehaviorData.show_reasoning_summary ? 'checked' : ''} /> 显示 AI 推理说明摘要</label>
+              <label class="checkbox-row"><input type="checkbox" name="allow_auto_prefill" ${aiBehaviorData.allow_auto_prefill ? 'checked' : ''} /> 允许 AI 自动预填参数</label>
+            </div>
+            <div class="row-actions">
+              <button class="primary" type="submit">保存行为策略</button>
+            </div>
+            <div id="aiBehaviorMsg" class="hint">${esc(aiBehaviorData.updated_at ? `最近更新：${formatDateTime(aiBehaviorData.updated_at)}` : '')}</div>
+          </form>
+        `;
+        aiBehaviorWrap.querySelector('#aiBehaviorForm')?.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          const formEl = event.currentTarget;
+          const form = new FormData(formEl);
+          const msg = aiBehaviorWrap.querySelector('#aiBehaviorMsg');
+          if (msg) msg.textContent = '正在保存行为策略...';
+          try {
+            aiBehaviorData = await api('/settings/ai/behavior', {
+              method: 'PUT',
+              body: JSON.stringify({
+                system_prompt: String(form.get('system_prompt') || ''),
+                strict_document_mode: formEl.querySelector('[name="strict_document_mode"]').checked,
+                allow_freeform_suggestions: formEl.querySelector('[name="allow_freeform_suggestions"]').checked,
+                prefer_workflow_jump: formEl.querySelector('[name="prefer_workflow_jump"]').checked,
+                show_reasoning_summary: formEl.querySelector('[name="show_reasoning_summary"]').checked,
+                allow_auto_prefill: formEl.querySelector('[name="allow_auto_prefill"]').checked,
+              }),
+            }, ctx.state.token);
+            if (msg) msg.textContent = `行为策略已保存。最近更新：${formatDateTime(aiBehaviorData.updated_at || '')}`;
+          } catch (error) {
+            if (msg) msg.textContent = error.message;
+          }
+        });
+      }
+
+      async function loadAISettingsData() {
+        if (aiProvidersWrap) aiProvidersWrap.innerHTML = renderLoading('加载 AI Provider 配置...');
+        if (aiKnowledgeWrap) aiKnowledgeWrap.innerHTML = renderLoading('加载 AI Knowledge 配置...');
+        if (aiBehaviorWrap) aiBehaviorWrap.innerHTML = renderLoading('加载 AI Behavior 配置...');
+        try {
+          const bundle = await loadAISettingsBundle(ctx);
+          aiProvidersData = bundle.providers;
+          aiKnowledgeData = bundle.knowledge;
+          aiBehaviorData = bundle.behavior;
+          aiProviderModes = bundle.providerModes;
+          aiLocalModels = bundle.localModels;
+          aiDownloadJobs = bundle.downloadJobs;
+          renderAIProvidersPanel();
+          renderAIKnowledgePanel();
+          renderAIBehaviorPanel();
+        } catch (error) {
+          if (aiProvidersWrap) aiProvidersWrap.innerHTML = renderError(error.message);
+          if (aiKnowledgeWrap) aiKnowledgeWrap.innerHTML = renderError(error.message);
+          if (aiBehaviorWrap) aiBehaviorWrap.innerHTML = renderError(error.message);
+        }
+      }
+
       function setSettingsPanel(panel) {
-        activePanel = ['overview', 'access', 'governance', 'tech'].includes(panel) ? panel : 'overview';
+        activePanel = ['overview', 'aiProviders', 'aiKnowledge', 'aiBehavior', 'access', 'governance', 'tech'].includes(panel) ? panel : 'overview';
         panels.forEach((section) => {
           section.hidden = section.getAttribute('data-settings-panel') !== activePanel;
         });
@@ -13861,6 +14603,12 @@ function pageSettings(route, rawCtx) {
         if (panelMeta) {
           panelMeta.textContent = activePanel === 'overview'
             ? '先看当前账号、租户边界和默认工作路径。'
+            : activePanel === 'aiProviders'
+              ? '配置本地模型服务或第三方 API，并设置默认 provider。'
+              : activePanel === 'aiKnowledge'
+                ? '管理注入给 AI 的系统文档、FAQ 和约束说明。'
+                : activePanel === 'aiBehavior'
+                  ? '控制 system prompt、文档约束和 AI 是否优先跳 workflow。'
             : activePanel === 'access'
               ? '查看当前角色可执行范围和能力标签。'
               : activePanel === 'governance'
@@ -13986,10 +14734,14 @@ function pageSettings(route, rawCtx) {
             </div>
           </details>
         `;
+        await loadAISettingsData();
         await loadGovernancePreview();
-        setSettingsPanel('overview');
+        setSettingsPanel(activePanel);
       } catch (error) {
         overviewWrap.innerHTML = renderError(error.message);
+        if (aiProvidersWrap) aiProvidersWrap.innerHTML = renderError(error.message);
+        if (aiKnowledgeWrap) aiKnowledgeWrap.innerHTML = renderError(error.message);
+        if (aiBehaviorWrap) aiBehaviorWrap.innerHTML = renderError(error.message);
         accessWrap.innerHTML = renderError(error.message);
         if (governanceWrap) governanceWrap.innerHTML = renderError(error.message);
         techWrap.innerHTML = renderError(error.message);
@@ -14000,6 +14752,13 @@ function pageSettings(route, rawCtx) {
 
 const factories = {
   login: pageLogin,
+  ai: pageAssistant,
+  aiChat: pageAIChat,
+  aiWorkflowUpload: pageAIWorkflowUpload,
+  aiWorkflowTrain: pageAIWorkflowTrain,
+  aiWorkflowDeploy: pageAIWorkflowDeploy,
+  aiWorkflowResults: pageAIWorkflowResults,
+  aiWorkflowTroubleshoot: pageAIWorkflowTroubleshoot,
   dashboard: pageDashboard,
   guide: pageGuide,
   assistant: pageAssistant,

@@ -1,0 +1,65 @@
+{
+  "providers": [
+    {
+      "id": "local-openai-compatible",
+      "name": "本地 OpenAI 兼容服务",
+      "provider": "local_openai_compatible",
+      "mode": "local",
+      "base_url": "http://127.0.0.1:11434",
+      "api_path": "/v1",
+      "model_name": "",
+      "format_type": "openai_compatible",
+      "api_key": "",
+      "organization": "",
+      "project": "",
+      "enable_stream": true,
+      "timeout": 45,
+      "temperature": 0.2,
+      "max_tokens": 900,
+      "enabled": false,
+      "is_default": true,
+      "scope": [
+        "global"
+      ],
+      "created_at": null,
+      "updated_at": null,
+      "last_test_result": null
+    },
+    {
+      "id": "openai-compatible-api",
+      "name": "远程 OpenAI 兼容 API",
+      "provider": "openai_compatible",
+      "mode": "api",
+      "base_url": "",
+      "api_path": "/v1",
+      "model_name": "",
+      "format_type": "openai_compatible",
+      "api_key": "",
+      "organization": "",
+      "project": "",
+      "enable_stream": false,
+      "timeout": 45,
+      "temperature": 0.2,
+      "max_tokens": 900,
+      "enabled": false,
+      "is_default": false,
+      "scope": [
+        "global"
+      ],
+      "created_at": null,
+      "updated_at": null,
+      "last_test_result": null
+    }
+  ],
+  "documents": [],
+  "behavior": {
+    "system_prompt": "你是 RVision 里的 AI 工作台助手。请根据真实系统能力给出下一步，不要承诺不存在的操作。",
+    "strict_document_mode": true,
+    "allow_freeform_suggestions": false,
+    "prefer_workflow_jump": true,
+    "show_reasoning_summary": true,
+    "allow_auto_prefill": true,
+    "updated_at": null
+  },
+  "updated_at": "2026-03-19T03:53:03.393265+00:00"
+}

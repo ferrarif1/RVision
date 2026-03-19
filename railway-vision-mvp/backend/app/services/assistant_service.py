@@ -19,10 +19,15 @@ from sqlalchemy.orm import Session
 from app.db.models import DataAsset, ModelRecord
 from app.security.dependencies import AuthUser
 from app.security.roles import is_buyer_user
+from app.services.ai_context_service import assemble_ai_context, normalize_workflow_scope
+from app.services.ai_provider_service import request_planner_completion, resolve_provider_config
+from app.services.assistant_paths import build_training_path, build_workflow_path
 from app.services.model_router_service import TASK_TYPE_KEYWORDS, TASK_TYPE_LABELS, recommend_small_models
 
 UTC = timezone.utc
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if not (PROJECT_ROOT / "config").exists() and Path("/app/config").exists():
+    PROJECT_ROOT = Path("/app")
 CONFIG_CANDIDATES = (
     PROJECT_ROOT / "config" / "assistant_local_llm_catalog.json",
     Path("/app/config/assistant_local_llm_catalog.json"),
@@ -53,7 +58,10 @@ def _ensure_runtime_dirs() -> None:
 
 
 def _json_load(path: Path) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
     return payload if isinstance(payload, dict) else {}
 
 
@@ -371,11 +379,14 @@ def _task_label(task_type: str | None) -> str:
 
 
 def _serialize_action(*, action_id: str, title: str, summary: str, path: str, reason: str, kind: str = "navigate", prefill: dict[str, Any] | None = None, priority: str = "secondary") -> dict[str, Any]:
+    workflow_path = build_workflow_path(action_id, path)
     return {
         "action_id": action_id,
         "title": title,
         "summary": summary,
         "path": path,
+        "expert_path": path,
+        "workflow_path": workflow_path,
         "reason": reason,
         "kind": kind,
         "prefill": prefill or {},
@@ -395,51 +406,6 @@ def _latest_model_for_task(db: Session, task_type: str, *, status: str) -> Model
         if str(manifest.get("task_type") or "").strip() == task_type:
             return row
     return None
-
-
-def _build_training_path(task_type: str | None) -> str:
-    if task_type == "car_number_ocr":
-        return "training/car-number-labeling"
-    if task_type in {"inspection_mark_ocr", "performance_mark_ocr"}:
-        return f"training/inspection-ocr/{task_type}"
-    if task_type in {"door_lock_state_detect", "connector_defect_detect"}:
-        return f"training/inspection-state/{task_type}"
-    return "training"
-
-
-def _call_openai_compatible_planner(*, api_config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any] | None:
-    base_url = str(api_config.get("base_url") or "").strip().rstrip("/")
-    api_key = str(api_config.get("api_key") or "").strip()
-    model_name = str(api_config.get("model_name") or "").strip()
-    if not base_url or not api_key or not model_name:
-        return None
-    system_prompt = (
-        "你是企业视觉平台里的流程引导助手。"
-        "请根据用户目标、资产、现有模型和平台状态，给出一句概括、最多三条风险、以及一句最优下一步。"
-        "只输出 JSON，键为 summary, risks, suggested_path。"
-    )
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-    ]
-    body = {
-        "model": model_name,
-        "messages": messages,
-        "temperature": float(api_config.get("temperature") or 0.2),
-        "response_format": {"type": "json_object"},
-    }
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    with httpx.Client(timeout=30.0, follow_redirects=True, trust_env=False) as client:
-        resp = client.post(f"{base_url}/chat/completions", headers=headers, json=body)
-        resp.raise_for_status()
-        payload = resp.json()
-    content = payload.get("choices", [{}])[0].get("message", {}).get("content")
-    if not content:
-        return None
-    try:
-        return json.loads(content)
-    except Exception:
-        return {"summary": str(content).strip()}
 
 
 def build_assistant_plan(
@@ -524,7 +490,7 @@ def build_assistant_plan(
             action_id="prepare_training_data",
             title="先准备这类任务的数据",
             summary="当前没有现成模型可直接验证，优先进入对应的数据准备 / 复核工作区。",
-            path=_build_training_path(task_type),
+            path=build_training_path(task_type),
             reason="你描述的目标已经清楚，但还缺可直接验证的现有模型。",
             prefill={"taskType": task_type},
             priority="primary",
@@ -545,7 +511,7 @@ def build_assistant_plan(
                 action_id="open_training_path",
                 title="查看训练与微调入口",
                 summary=f"进入 {_task_label(task_type)} 的数据准备 / 训练入口。",
-                path=_build_training_path(task_type),
+                path=build_training_path(task_type),
                 reason="如果现有模型效果不够，可以立即转去数据准备和训练闭环。",
                 prefill={"taskType": task_type},
             )
@@ -573,11 +539,21 @@ def build_assistant_plan(
             )
         )
 
+    workflow_scope = normalize_workflow_scope(primary_action.get("workflow_path") if primary_action else "", primary_action.get("action_id") if primary_action else "")
+    effective_provider = resolve_provider_config(
+        llm_mode=llm_mode,
+        llm_selection=llm_selection,
+        api_config=api_config,
+        workflow_scope=workflow_scope,
+    )
+    ai_context = assemble_ai_context(workflow_scope=workflow_scope, task_type=task_type, goal=goal)
+
     llm_advice = None
-    if llm_mode == "api" and api_config:
+    if effective_provider and llm_mode in {"api", "local"}:
         try:
-            llm_advice = _call_openai_compatible_planner(
-                api_config=api_config,
+            llm_advice = request_planner_completion(
+                config=effective_provider,
+                system_prompt=str(ai_context.get("system_prompt") or "").strip(),
                 payload={
                     "goal": goal,
                     "task_type": task_type,
@@ -586,7 +562,8 @@ def build_assistant_plan(
                     "released_model": released.model_code if released else None,
                     "submitted_model": submitted.model_code if submitted else None,
                     "approved_model": approved.model_code if approved else None,
-                    "selected_local_model": llm_selection or {},
+                    "selected_llm": llm_selection or {},
+                    "workflow_scope": workflow_scope,
                 },
             )
         except Exception as exc:  # pragma: no cover - external runtime
@@ -602,7 +579,24 @@ def build_assistant_plan(
         "inferred_task_label": _task_label(task_type),
         "llm_mode": llm_mode,
         "llm_selection": llm_selection or {},
+        "provider_used": {
+            "provider_id": str(effective_provider.get("id") or "").strip(),
+            "name": str(effective_provider.get("name") or "").strip(),
+            "mode": str(effective_provider.get("mode") or llm_mode).strip(),
+            "model_name": str(effective_provider.get("model_name") or "").strip(),
+        } if effective_provider else None,
         "signals": signals,
+        "context_documents": [
+            {
+                "id": row.get("id"),
+                "title": row.get("title"),
+                "scope": row.get("scope") or [],
+                "source_type": row.get("source_type"),
+                "updated_at": row.get("updated_at"),
+            }
+            for row in ai_context.get("documents") or []
+        ],
+        "behavior_settings": ai_context.get("behavior") or {},
         "asset_summary": [
             {
                 "asset_id": row.id,

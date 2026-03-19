@@ -13,21 +13,45 @@ const ROLE_LABELS = {
   auditor: '平台审计',
 };
 
-const NAV_ITEMS = [
-  { page: 'dashboard', title: 'Dashboard', group: '主线1：客户资产准备' },
-  { page: 'assistant', title: 'Assistant', group: '主线1：客户资产准备' },
-  { page: 'assets', title: 'Assets', group: '主线1：客户资产准备' },
-  { page: 'models', title: 'Models', group: '主线2：供应商模型交付' },
-  { page: 'training', title: 'Training', group: '主线2：供应商模型交付' },
-  { page: 'pipelines', title: 'Pipelines', group: '主线2：供应商模型交付' },
-  { page: 'tasks', title: 'Tasks', group: '主线3：平台验证发布' },
-  { page: 'results', title: 'Results', group: '主线3：平台验证发布' },
-  { page: 'devices', title: 'Devices', group: '主线4：设备授权与运行' },
-  { page: 'audit', title: 'Audit', group: '主线4：设备授权与运行' },
-  { page: 'settings', title: 'Settings', group: '主线4：设备授权与运行' },
+const SHELL_SECTIONS = [
+  {
+    title: 'AI Workspace',
+    mode: 'ai',
+    items: [
+      { page: 'ai', title: 'AI 首页' },
+      { page: 'aiWorkflowUpload', title: '上传流程' },
+      { page: 'aiWorkflowTrain', title: '训练流程' },
+      { page: 'aiWorkflowDeploy', title: '发布流程' },
+      { page: 'aiWorkflowResults', title: '结果流程' },
+      { page: 'aiWorkflowTroubleshoot', title: '排障流程' },
+    ],
+  },
+  {
+    title: 'Expert Console',
+    mode: 'expert',
+    items: [
+      { page: 'dashboard', title: 'Dashboard' },
+      { page: 'assets', title: 'Assets' },
+      { page: 'models', title: 'Models' },
+      { page: 'training', title: 'Training' },
+      { page: 'pipelines', title: 'Pipelines' },
+      { page: 'tasks', title: 'Tasks' },
+      { page: 'results', title: 'Results' },
+      { page: 'devices', title: 'Devices' },
+      { page: 'audit', title: 'Audit' },
+      { page: 'settings', title: 'Settings' },
+    ],
+  },
 ];
 
 const LABELS = {
+  ai: 'AI Workspace',
+  aiChat: 'AI 会话',
+  aiWorkflowUpload: '上传流程',
+  aiWorkflowTrain: '训练流程',
+  aiWorkflowDeploy: '发布流程',
+  aiWorkflowResults: '结果流程',
+  aiWorkflowTroubleshoot: '排障流程',
   dashboard: '工作台',
   guide: '接入与使用指南',
   assistant: '智能引导',
@@ -51,19 +75,19 @@ function esc(value) {
     .replaceAll("'", '&#39;');
 }
 
-function buildGroups(can) {
-  const grouped = new Map();
-  NAV_ITEMS.forEach((item) => {
-    if (!can(item.page)) return;
-    if (!grouped.has(item.group)) grouped.set(item.group, []);
-    grouped.get(item.group).push(item);
-  });
-  return [...grouped.entries()].map(([title, items]) => ({ title, items }));
-}
-
 function primaryRoleLabel(user) {
   const role = String((user?.roles || [])[0] || user?.role || '');
   return ROLE_LABELS[role] || role || '-';
+}
+
+function buildVisibleSections(can, currentMode) {
+  return SHELL_SECTIONS
+    .filter((section) => section.mode === currentMode || section.mode === 'expert')
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => can(item.page)),
+    }))
+    .filter((section) => section.items.length);
 }
 
 function renderBreadcrumb(routeView) {
@@ -99,7 +123,7 @@ function renderCommandPalette(commandPalette) {
       <div class="command-panel">
         <div class="command-input-wrap">
           <span class="command-prefix">></span>
-          <input id="commandPaletteInput" class="command-input" placeholder="输入指令或页面名，例如：资产、任务、发布..." value="${esc(commandPalette?.query || '')}" />
+          <input id="commandPaletteInput" class="command-input" placeholder="输入指令或页面名，例如：AI、资产、训练、发布..." value="${esc(commandPalette?.query || '')}" />
           <span class="command-kbd">Esc</span>
         </div>
         <div class="command-list">${listHtml}</div>
@@ -112,24 +136,54 @@ export function renderShell({ state, routeView, contentHtml, commandPalette }) {
   const user = state.user;
   const perms = state.permissions || new Set();
   const can = (page) => !PERMISSIONS[page] || perms.has(PERMISSIONS[page]);
-  const groups = buildGroups(can);
   const collapsed = state.sidebarCollapsed ? 'sidebar-collapsed' : '';
+  const visibleSections = buildVisibleSections(can, routeView.mode || 'expert');
 
-  const navHtml = groups.map((g) => {
-    const items = g.items.map((item) => `
+  if (routeView.mode === 'ai') {
+    return `
+      <div class="ai-app-shell">
+        <header class="ai-topbar">
+          <button class="ai-brand ai-brand-button" id="openAiWorkspaceBtn" type="button">
+            <span class="ai-brand-mark">V</span>
+            <span class="ai-brand-copy">
+              <strong>${BRAND_NAME}</strong>
+              <span>AI 工作入口</span>
+            </span>
+          </button>
+          <div class="ai-topbar-right">
+            <button id="openExpertConsoleBtnTop" class="ghost" type="button">工作台</button>
+            <button class="ghost" type="button" data-nav="guide">帮助</button>
+            <button class="ghost" type="button" data-nav="settings">设置</button>
+          </div>
+        </header>
+        <main class="ai-page">
+          ${contentHtml}
+        </main>
+        <div id="toast" class="toast"></div>
+        ${renderCommandPalette(commandPalette)}
+      </div>
+    `;
+  }
+
+  const navHtml = visibleSections.map((section) => {
+    const items = section.items.map((item) => `
       <button class="nav-item ${routeView.navPage === item.page ? 'active' : ''}" data-nav="${item.page}">
         <span class="nav-label">${LABELS[item.page] || item.title}</span>
       </button>
     `).join('');
-    return `<section class="nav-group"><h4>${g.title}</h4>${items}</section>`;
+    return `<section class="nav-group"><h4>${section.title}</h4>${items}</section>`;
   }).join('');
 
   return `
     <div class="app-shell ${collapsed}">
       <aside class="sidebar">
         <div class="brand-row">
-          <div class="brand">${BRAND_NAME}</div>
+          <button class="brand brand-button" id="openAiWorkspaceBtn" type="button">${BRAND_NAME}</button>
           <button class="icon-btn" id="toggleSidebarBtn" title="切换侧栏">☰</button>
+        </div>
+        <div class="mode-switcher">
+          <button id="openAiWorkspaceBtnInline" class="${routeView.mode === 'ai' ? 'primary' : 'ghost'}" type="button">AI Workspace</button>
+          <button id="openExpertConsoleBtnInline" class="${routeView.mode === 'expert' ? 'primary' : 'ghost'}" type="button">Expert Console</button>
         </div>
         ${navHtml}
       </aside>
@@ -137,26 +191,15 @@ export function renderShell({ state, routeView, contentHtml, commandPalette }) {
         <header class="topbar">
           <div class="topbar-left">
             ${routeView.showBack ? '<button id="backBtn" class="ghost">返回</button>' : ''}
-            <button id="homeBtn" class="ghost">工作台</button>
+            <div class="topbar-mode-badge">${esc(routeView.modeLabel || '控制台')}</div>
             <div class="breadcrumb">${renderBreadcrumb(routeView)}</div>
           </div>
           <div class="topbar-right">
-            <button class="ghost topbar-guide-btn ${routeView.navPage === 'guide' ? 'active' : ''}" data-nav="guide">接入与使用指南</button>
-            <label class="theme-switcher">
-              <span>主题</span>
-              <select id="themeSelect">
-                <option value="classic_dark" ${state.visualTheme === 'classic_dark' ? 'selected' : ''}>夜幕金</option>
-                <option value="chatgpt_light" ${state.visualTheme === 'chatgpt_light' ? 'selected' : ''}>ChatGPT 清透白</option>
-                <option value="summer_cream" ${state.visualTheme === 'summer_cream' ? 'selected' : ''}>夏日奶油色</option>
-              </select>
-            </label>
-            <button id="openCommandPaletteBtn" class="command-trigger" title="打开命令面板（Ctrl/Cmd + K）">
-              <span>命令面板</span><kbd>Ctrl/⌘ K</kbd>
-            </button>
-            <span class="pill">${user?.username || '未登录'}</span>
-            <span class="pill">${primaryRoleLabel(user)}</span>
-            <span class="pill">${user?.tenant_code || user?.tenant_id || '-'}</span>
-            <button id="logoutBtn" class="ghost">退出登录</button>
+            <button id="openAiWorkspaceBtnTop" class="ghost" type="button">AI Workspace</button>
+            <button class="ghost topbar-guide-btn ${routeView.navPage === 'guide' ? 'active' : ''}" data-nav="guide">帮助</button>
+            <button class="ghost" data-nav="settings" type="button">设置</button>
+            <span class="pill topbar-user-pill">${user?.username || '未登录'}</span>
+            <button id="logoutBtn" class="ghost">退出</button>
           </div>
         </header>
         <main class="page">
@@ -179,11 +222,18 @@ export function bindShellEvents(root, {
   onCloseCommandPalette,
   onCommandQueryChange,
   onCommandExecute,
+  onOpenAiWorkspace,
+  onOpenExpertConsole,
 }) {
   root.querySelectorAll('[data-nav]').forEach((btn) => {
     btn.addEventListener('click', () => onNavigate(btn.getAttribute('data-nav')));
   });
-  root.querySelector('#homeBtn')?.addEventListener('click', () => onNavigate('dashboard'));
+  ['#openAiWorkspaceBtn', '#openAiWorkspaceBtnInline', '#openAiWorkspaceBtnTop'].forEach((selector) => {
+    root.querySelector(selector)?.addEventListener('click', () => onOpenAiWorkspace?.());
+  });
+  ['#openExpertConsoleBtnInline', '#openExpertConsoleBtnTop'].forEach((selector) => {
+    root.querySelector(selector)?.addEventListener('click', () => onOpenExpertConsole?.());
+  });
   root.querySelector('#backBtn')?.addEventListener('click', onBack);
   root.querySelector('#themeSelect')?.addEventListener('change', (event) => onThemeChange?.(event.target.value));
   root.querySelector('#toggleSidebarBtn')?.addEventListener('click', onToggleSidebar);

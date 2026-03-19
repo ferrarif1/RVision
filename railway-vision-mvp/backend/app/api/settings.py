@@ -20,6 +20,22 @@ from app.services.assistant_service import (
     list_local_llm_download_jobs,
     start_local_llm_download,
 )
+from app.services.ai_provider_service import test_provider_connection
+from app.services.ai_settings_service import (
+    delete_ai_knowledge_document,
+    delete_ai_provider_config,
+    get_ai_behavior_settings,
+    get_ai_knowledge_document,
+    get_default_ai_provider,
+    get_ai_provider_config,
+    list_ai_knowledge_documents,
+    list_ai_provider_configs,
+    record_ai_provider_test_result,
+    set_default_ai_provider,
+    upsert_ai_knowledge_document,
+    upsert_ai_provider_config,
+    update_ai_behavior_settings,
+)
 from app.services.data_governance_service import (
     build_data_governance_preview,
     execute_cleanup_synthetic_runtime,
@@ -39,6 +55,45 @@ class DataGovernanceRunRequest(BaseModel):
 class LocalLlmDownloadRequest(BaseModel):
     repo_id: str
     display_name: str | None = None
+
+
+class AIProviderConfigRequest(BaseModel):
+    id: str | None = None
+    name: str
+    provider: str = "openai_compatible"
+    mode: str = "api"
+    base_url: str = ""
+    api_path: str = "/v1"
+    model_name: str = ""
+    format_type: str = "openai_compatible"
+    api_key: str = ""
+    organization: str = ""
+    project: str = ""
+    enable_stream: bool = False
+    timeout: int = 45
+    temperature: float = 0.2
+    max_tokens: int = 900
+    enabled: bool = True
+    is_default: bool = False
+    scope: list[str] = Field(default_factory=lambda: ["global"])
+
+
+class AIKnowledgeDocumentRequest(BaseModel):
+    id: str | None = None
+    title: str
+    description: str = ""
+    content: str = ""
+    enabled: bool = True
+    scope: list[str] = Field(default_factory=lambda: ["global"])
+
+
+class AIBehaviorSettingsRequest(BaseModel):
+    system_prompt: str = ""
+    strict_document_mode: bool = True
+    allow_freeform_suggestions: bool = False
+    prefer_workflow_jump: bool = True
+    show_reasoning_summary: bool = True
+    allow_auto_prefill: bool = True
 
 
 def _serialize_governance_preview(*, keep_latest: int, can_execute: bool) -> dict:
@@ -258,6 +313,294 @@ def delete_settings_llm_local_model(
         resource_type="settings_llm",
         resource_id=normalized_repo_id,
         detail=result,
+        request=request,
+        actor=current_user,
+    )
+    return result
+
+
+@router.get("/ai/providers")
+def get_settings_ai_providers(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    payload = list_ai_provider_configs()
+    payload["default_provider"] = get_default_ai_provider()
+    record_audit(
+        db,
+        action=actions.AI_SETTINGS_UPDATE,
+        resource_type="settings_ai",
+        resource_id="providers_list",
+        detail={"count": len(payload.get("providers") or [])},
+        request=request,
+        actor=current_user,
+    )
+    return payload
+
+
+@router.post("/ai/providers")
+def create_settings_ai_provider(
+    payload: AIProviderConfigRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    result = upsert_ai_provider_config(payload.model_dump())
+    record_audit(
+        db,
+        action=actions.AI_SETTINGS_UPDATE,
+        resource_type="settings_ai",
+        resource_id=result.get("id") or "provider",
+        detail={"action": "create_or_update_provider", "mode": result.get("mode"), "provider": result.get("provider")},
+        request=request,
+        actor=current_user,
+    )
+    return result
+
+
+@router.put("/ai/providers/{provider_id}")
+def update_settings_ai_provider(
+    provider_id: str,
+    payload: AIProviderConfigRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    body = payload.model_dump()
+    body["id"] = provider_id
+    result = upsert_ai_provider_config(body)
+    record_audit(
+        db,
+        action=actions.AI_SETTINGS_UPDATE,
+        resource_type="settings_ai",
+        resource_id=provider_id,
+        detail={"action": "update_provider", "mode": result.get("mode"), "provider": result.get("provider")},
+        request=request,
+        actor=current_user,
+    )
+    return result
+
+
+@router.delete("/ai/providers/{provider_id}")
+def delete_settings_ai_provider(
+    provider_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    result = delete_ai_provider_config(provider_id)
+    record_audit(
+        db,
+        action=actions.AI_SETTINGS_UPDATE,
+        resource_type="settings_ai",
+        resource_id=provider_id,
+        detail={"action": "delete_provider", "removed": result.get("removed")},
+        request=request,
+        actor=current_user,
+    )
+    return result
+
+
+@router.post("/ai/providers/{provider_id}/default")
+def set_settings_ai_provider_default(
+    provider_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    try:
+        result = set_default_ai_provider(provider_id)
+    except KeyError:
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "settings_ai_provider_not_found",
+            "找不到要设为默认的大模型配置。",
+            next_step="请刷新设置页后重试。",
+        )
+    record_audit(
+        db,
+        action=actions.AI_SETTINGS_UPDATE,
+        resource_type="settings_ai",
+        resource_id=provider_id,
+        detail={"action": "set_default_provider"},
+        request=request,
+        actor=current_user,
+    )
+    return result
+
+
+@router.post("/ai/providers/test")
+def test_settings_ai_provider(
+    payload: AIProviderConfigRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    try:
+        result = test_provider_connection(payload.model_dump())
+    except Exception as exc:
+        result = {
+            "ok": False,
+            "message": f"连接测试失败：{exc}",
+            "tested_at": datetime.utcnow().isoformat(),
+        }
+    if payload.id:
+        record_ai_provider_test_result(payload.id, result)
+    record_audit(
+        db,
+        action=actions.AI_PROVIDER_TEST,
+        resource_type="settings_ai",
+        resource_id=str(payload.id or payload.name or "provider_test"),
+        detail={"ok": result.get("ok"), "message": result.get("message")},
+        request=request,
+        actor=current_user,
+    )
+    return result
+
+
+@router.get("/ai/knowledge")
+def get_settings_ai_knowledge(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    payload = list_ai_knowledge_documents()
+    record_audit(
+        db,
+        action=actions.AI_KNOWLEDGE_UPDATE,
+        resource_type="settings_ai",
+        resource_id="knowledge_list",
+        detail={"count": len(payload.get("documents") or [])},
+        request=request,
+        actor=current_user,
+    )
+    return payload
+
+
+@router.get("/ai/knowledge/{doc_id}")
+def get_settings_ai_knowledge_document(
+    doc_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    result = get_ai_knowledge_document(doc_id)
+    if not result:
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "settings_ai_knowledge_not_found",
+            "找不到这份 AI 系统文档。",
+            next_step="请刷新列表后重新选择。",
+        )
+    record_audit(
+        db,
+        action=actions.AI_KNOWLEDGE_UPDATE,
+        resource_type="settings_ai",
+        resource_id=doc_id,
+        detail={"action": "preview_document"},
+        request=request,
+        actor=current_user,
+    )
+    return result
+
+
+@router.post("/ai/knowledge")
+def create_settings_ai_knowledge_document(
+    payload: AIKnowledgeDocumentRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    result = upsert_ai_knowledge_document(payload.model_dump())
+    record_audit(
+        db,
+        action=actions.AI_KNOWLEDGE_UPDATE,
+        resource_type="settings_ai",
+        resource_id=result.get("id") or "knowledge_document",
+        detail={"action": "create_or_update_document", "source_type": result.get("source_type")},
+        request=request,
+        actor=current_user,
+    )
+    return result
+
+
+@router.put("/ai/knowledge/{doc_id}")
+def update_settings_ai_knowledge_document(
+    doc_id: str,
+    payload: AIKnowledgeDocumentRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    body = payload.model_dump()
+    body["id"] = doc_id
+    result = upsert_ai_knowledge_document(body)
+    record_audit(
+        db,
+        action=actions.AI_KNOWLEDGE_UPDATE,
+        resource_type="settings_ai",
+        resource_id=doc_id,
+        detail={"action": "update_document", "source_type": result.get("source_type")},
+        request=request,
+        actor=current_user,
+    )
+    return result
+
+
+@router.delete("/ai/knowledge/{doc_id}")
+def delete_settings_ai_knowledge_document(
+    doc_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    result = delete_ai_knowledge_document(doc_id)
+    record_audit(
+        db,
+        action=actions.AI_KNOWLEDGE_UPDATE,
+        resource_type="settings_ai",
+        resource_id=doc_id,
+        detail={"action": "delete_document", "removed": result.get("removed")},
+        request=request,
+        actor=current_user,
+    )
+    return result
+
+
+@router.get("/ai/behavior")
+def get_settings_ai_behavior(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    payload = get_ai_behavior_settings()
+    record_audit(
+        db,
+        action=actions.AI_SETTINGS_UPDATE,
+        resource_type="settings_ai",
+        resource_id="behavior",
+        detail={"action": "get_behavior"},
+        request=request,
+        actor=current_user,
+    )
+    return payload
+
+
+@router.put("/ai/behavior")
+def update_settings_ai_behavior(
+    payload: AIBehaviorSettingsRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    result = update_ai_behavior_settings(payload.model_dump())
+    record_audit(
+        db,
+        action=actions.AI_SETTINGS_UPDATE,
+        resource_type="settings_ai",
+        resource_id="behavior",
+        detail={"action": "update_behavior"},
         request=request,
         actor=current_user,
     )

@@ -18,6 +18,7 @@ export const STORAGE_KEYS = {
   permissions: namespacedStorageKey('permissions'),
   visualTheme: namespacedStorageKey('visual_theme'),
   lastRoute: namespacedStorageKey('last_route'),
+  lastExpertRoute: namespacedStorageKey('last_expert_route'),
   sidebarCollapsed: namespacedStorageKey('sidebar_collapsed'),
   prefillTrainingAssetIds: namespacedStorageKey('prefill_training_asset_ids'),
   prefillTrainingValidationAssetIds: namespacedStorageKey('prefill_training_validation_asset_ids'),
@@ -48,6 +49,11 @@ export const STORAGE_KEYS = {
   prefillTaskMeta: namespacedStorageKey('prefill_task_meta'),
   prefillTrainingMeta: namespacedStorageKey('prefill_training_meta'),
   focusModelMeta: namespacedStorageKey('focus_model_meta'),
+  aiSessions: namespacedStorageKey('ai_sessions'),
+  aiRecentActions: namespacedStorageKey('ai_recent_actions'),
+  aiPendingConfirmations: namespacedStorageKey('ai_pending_confirmations'),
+  aiLastPlan: namespacedStorageKey('ai_last_plan'),
+  aiWorkflowDraft: namespacedStorageKey('ai_workflow_draft'),
 };
 
 const LEGACY_STORAGE_KEYS = {
@@ -56,6 +62,7 @@ const LEGACY_STORAGE_KEYS = {
   permissions: 'rv_permissions',
   visualTheme: 'rv_visual_theme',
   lastRoute: 'rv_last_route',
+  lastExpertRoute: 'rv_last_expert_route',
   sidebarCollapsed: 'rv_sidebar_collapsed',
   prefillTrainingAssetIds: 'rv_prefill_training_asset_ids',
   prefillTrainingValidationAssetIds: 'rv_prefill_training_validation_asset_ids',
@@ -86,6 +93,11 @@ const LEGACY_STORAGE_KEYS = {
   prefillTaskMeta: 'rv_prefill_task_meta',
   prefillTrainingMeta: 'rv_prefill_training_meta',
   focusModelMeta: 'rv_focus_model_meta',
+  aiSessions: 'rv_ai_sessions',
+  aiRecentActions: 'rv_ai_recent_actions',
+  aiPendingConfirmations: 'rv_ai_pending_confirmations',
+  aiLastPlan: 'rv_ai_last_plan',
+  aiWorkflowDraft: 'rv_ai_workflow_draft',
 };
 
 export function migrateLegacyStorageKeys(storage = window.localStorage) {

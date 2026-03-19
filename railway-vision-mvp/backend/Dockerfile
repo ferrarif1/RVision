@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt /app/requirements.txt
+COPY backend/requirements.txt /app/requirements.txt
 RUN set -eux; \
     PIP_ARGS=""; \
     if [ -n "${PIP_INDEX_URL:-}" ]; then PIP_ARGS="$PIP_ARGS --index-url ${PIP_INDEX_URL}"; fi; \
@@ -23,6 +23,9 @@ RUN set -eux; \
     if [ -n "${PIP_TRUSTED_HOST:-}" ]; then PIP_ARGS="$PIP_ARGS --trusted-host ${PIP_TRUSTED_HOST}"; fi; \
     pip install --no-cache-dir $PIP_ARGS -r /app/requirements.txt
 
-COPY app /app/app
+COPY backend/app /app/app
+COPY config /app/config
+COPY docs /app/docs
+COPY docker/scripts /app/docker/scripts
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
