@@ -1,0 +1,11 @@
+{
+  "repo_id": "openai/gpt-oss-20b",
+  "target_dir": "/app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b",
+  "status": "running",
+  "started_at": "2026-03-19T12:53:32.231794+00:00",
+  "pid": 84,
+  "log_file": "/app/.runtime/assistant_llm/jobs/llm-dl-925fa76dc711.log",
+  "strategy": "huggingface",
+  "runtime_model_name": "",
+  "base_url": ""
+}

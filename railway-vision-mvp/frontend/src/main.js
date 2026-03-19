@@ -1,8 +1,10 @@
 import { createStore } from './core/store.js';
 import { createRouter } from './core/router.js';
 import { api, apiPost } from './core/api.js';
+import { setNotifier } from './core/notifier.js';
 import { buildDocumentTitle, migrateLegacyStorageKeys, STORAGE_KEYS } from './config/brand.js';
-import { persistAiWorkflowDraft, readAiWorkflowDraft } from './ai/runtime.js';
+import { persistAiWorkflowDraft, readAiLastPlan, readAiWorkflowDraft } from './ai/runtime.js';
+import { WorkflowNavigationController, WorkflowSessionStore } from './ai/workflow.js';
 import { renderShell, bindShellEvents } from './layout/AppShell.js';
 import { getPage } from './pages/index.js';
 
@@ -99,6 +101,7 @@ function clearSession() {
   localStorage.removeItem(STORAGE_KEYS.aiPendingConfirmations);
   localStorage.removeItem(STORAGE_KEYS.aiLastPlan);
   localStorage.removeItem(STORAGE_KEYS.aiWorkflowDraft);
+  WorkflowSessionStore.clear();
   localStorage.removeItem(STORAGE_KEYS.assistantApiKey);
 }
 
@@ -137,6 +140,8 @@ function toast(message, type = 'info') {
     toastEl.textContent = '';
   }, 2600);
 }
+
+setNotifier(toast);
 
 function routePathValue(route) {
   if (route.name === 'assistant') return 'ai';
@@ -674,6 +679,18 @@ function render() {
   if (route.requiresAuth && route.permission && !permissions.has(route.permission)) {
     if (route.name !== '403') {
       router.navigate('403');
+      return;
+    }
+  }
+
+  if (route.requiresAuth && /^aiWorkflow/.test(route.name || '')) {
+    const guard = WorkflowNavigationController.guardRoute(route, {
+      draft: readAiWorkflowDraft(),
+      plan: readAiLastPlan(),
+    });
+    if (!guard.allowed && guard.redirectPath && guard.redirectPath !== routePathValue(route)) {
+      window.setTimeout(() => toast(guard.reason || '请先完成前置步骤后再继续。', 'error'), 50);
+      router.navigate(guard.redirectPath);
       return;
     }
   }

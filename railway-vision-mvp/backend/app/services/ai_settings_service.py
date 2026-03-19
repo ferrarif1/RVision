@@ -5,6 +5,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+import re
+from urllib.parse import urlparse, urlunparse
 
 UTC = timezone.utc
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -64,7 +66,7 @@ DEFAULT_PROVIDER_SETTINGS = [
         "name": "本地 OpenAI 兼容服务",
         "provider": "local_openai_compatible",
         "mode": "local",
-        "base_url": "http://127.0.0.1:11434",
+        "base_url": "",
         "api_path": "/v1",
         "model_name": "",
         "format_type": "openai_compatible",
@@ -106,6 +108,42 @@ DEFAULT_PROVIDER_SETTINGS = [
         "last_test_result": None,
     },
 ]
+
+
+def _running_in_container() -> bool:
+    return Path("/.dockerenv").exists() or Path("/app").exists()
+
+
+def _default_local_base_url() -> str:
+    return "http://host.docker.internal:11434" if _running_in_container() else "http://127.0.0.1:11434"
+
+
+def _normalize_local_base_url(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+      return _default_local_base_url()
+    try:
+      parsed = urlparse(raw)
+    except Exception:
+      return raw
+    host = str(parsed.hostname or "").strip().lower()
+    if not _running_in_container() or host not in {"127.0.0.1", "localhost"}:
+      return raw
+    netloc = parsed.netloc
+    if "@" in netloc:
+      auth, hostport = netloc.rsplit("@", 1)
+      host_bits = hostport.split(":")
+      port = host_bits[1] if len(host_bits) > 1 else str(parsed.port or 11434)
+      new_netloc = f"{auth}@host.docker.internal:{port}"
+    else:
+      port = str(parsed.port or 11434)
+      new_netloc = f"host.docker.internal:{port}"
+    return urlunparse(parsed._replace(netloc=new_netloc))
+
+
+def _provider_slug(value: str) -> str:
+    clean = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+    return clean or f"provider-{uuid.uuid4().hex[:8]}"
 
 
 def _now_iso() -> str:
@@ -180,6 +218,8 @@ def _normalize_provider(payload: dict[str, Any], existing: dict[str, Any] | None
         base["api_key"] = str(payload.get("api_key") or "").strip()
     else:
         base["api_key"] = str(base.get("api_key") or "").strip()
+    if str(base.get("mode") or "") == "local" or str(base.get("provider") or "") == "local_openai_compatible":
+        base["base_url"] = _normalize_local_base_url(base.get("base_url"))
     return base
 
 
@@ -214,6 +254,19 @@ def load_ai_settings_state() -> dict[str, Any]:
         payload["documents"] = [dict(item) for item in documents if isinstance(item, dict)]
         payload["behavior"].update(behavior)
         payload["updated_at"] = stored.get("updated_at")
+    migrated = False
+    normalized_providers: list[dict[str, Any]] = []
+    for item in payload.get("providers") or []:
+        row = dict(item)
+        if str(row.get("mode") or "") == "local" or str(row.get("provider") or "") == "local_openai_compatible":
+            next_base_url = _normalize_local_base_url(row.get("base_url"))
+            if next_base_url != str(row.get("base_url") or "").strip():
+                row["base_url"] = next_base_url
+                migrated = True
+        normalized_providers.append(row)
+    payload["providers"] = normalized_providers
+    if migrated:
+        save_ai_settings_state(payload)
     return payload
 
 
@@ -266,6 +319,59 @@ def upsert_ai_provider_config(payload: dict[str, Any]) -> dict[str, Any]:
     state["providers"] = next_providers
     save_ai_settings_state(state)
     return _mask_provider(normalized)
+
+
+def upsert_local_llm_provider(
+    *,
+    repo_id: str,
+    display_name: str | None = None,
+    model_name: str | None = None,
+    base_url: str | None = None,
+    api_path: str | None = None,
+    scope: list[str] | None = None,
+) -> dict[str, Any]:
+    normalized_repo = str(repo_id or "").strip()
+    if not normalized_repo:
+        raise ValueError("repo_id is required")
+    state = load_ai_settings_state()
+    providers = [dict(item) for item in state.get("providers") or []]
+    provider_id = f"local-llm-{_provider_slug(normalized_repo)}"
+    existing = next((item for item in providers if str(item.get("id") or "") == provider_id), None)
+    local_template = next(
+        (item for item in providers if str(item.get("provider") or "") == "local_openai_compatible"),
+        next((item for item in DEFAULT_PROVIDER_SETTINGS if str(item.get("provider") or "") == "local_openai_compatible"), {}),
+    )
+    payload = {
+        "id": provider_id,
+        "name": str(display_name or normalized_repo).strip() or normalized_repo,
+        "provider": "local_openai_compatible",
+        "mode": "local",
+        "base_url": str(base_url or (existing or {}).get("base_url") or local_template.get("base_url") or "http://127.0.0.1:11434").strip(),
+        "api_path": str(api_path or (existing or {}).get("api_path") or local_template.get("api_path") or "/v1").strip() or "/v1",
+        "model_name": str(model_name or normalized_repo).strip() or normalized_repo,
+        "format_type": "openai_compatible",
+        "api_key": str((existing or {}).get("api_key") or local_template.get("api_key") or "").strip(),
+        "organization": str((existing or {}).get("organization") or local_template.get("organization") or "").strip(),
+        "project": str((existing or {}).get("project") or local_template.get("project") or "").strip(),
+        "enable_stream": bool((existing or {}).get("enable_stream", local_template.get("enable_stream", True))),
+        "timeout": int((existing or {}).get("timeout") or local_template.get("timeout") or 45),
+        "temperature": float((existing or {}).get("temperature") or local_template.get("temperature") or 0.2),
+        "max_tokens": int((existing or {}).get("max_tokens") or local_template.get("max_tokens") or 900),
+        "enabled": True,
+        "is_default": True,
+        "scope": _normalize_scope(scope or (existing or {}).get("scope") or ["global"]),
+    }
+    normalized = _normalize_provider(payload, existing)
+    next_providers = []
+    for item in providers:
+        row = dict(item)
+        row["is_default"] = False
+        next_providers.append(row)
+    next_providers = [item for item in next_providers if str(item.get("id") or "") != provider_id]
+    next_providers.append(normalized)
+    state["providers"] = next_providers
+    save_ai_settings_state(state)
+    return dict(normalized)
 
 
 def delete_ai_provider_config(provider_id: str) -> dict[str, Any]:

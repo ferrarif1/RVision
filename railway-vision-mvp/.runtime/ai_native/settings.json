@@ -5,7 +5,7 @@
       "name": "本地 OpenAI 兼容服务",
       "provider": "local_openai_compatible",
       "mode": "local",
-      "base_url": "http://127.0.0.1:11434",
+      "base_url": "http://host.docker.internal:11434",
       "api_path": "/v1",
       "model_name": "",
       "format_type": "openai_compatible",
@@ -17,12 +17,12 @@
       "temperature": 0.2,
       "max_tokens": 900,
       "enabled": false,
-      "is_default": true,
+      "is_default": false,
       "scope": [
         "global"
       ],
       "created_at": null,
-      "updated_at": null,
+      "updated_at": "2026-03-19T12:49:47.422367+00:00",
       "last_test_result": null
     },
     {
@@ -49,6 +49,31 @@
       "created_at": null,
       "updated_at": null,
       "last_test_result": null
+    },
+    {
+      "id": "local-llm-openai-gpt-oss-20b",
+      "name": "GPT-OSS 20B",
+      "provider": "local_openai_compatible",
+      "mode": "local",
+      "base_url": "http://host.docker.internal:11434",
+      "api_path": "/v1",
+      "model_name": "openai/gpt-oss-20b",
+      "format_type": "openai_compatible",
+      "organization": "",
+      "project": "",
+      "enable_stream": true,
+      "timeout": 45,
+      "temperature": 0.2,
+      "max_tokens": 900,
+      "enabled": true,
+      "is_default": true,
+      "scope": [
+        "global"
+      ],
+      "created_at": "2026-03-19T12:57:49.872590+00:00",
+      "updated_at": "2026-03-19T12:57:49.872590+00:00",
+      "last_test_result": null,
+      "api_key": ""
     }
   ],
   "documents": [],
@@ -61,5 +86,5 @@
     "allow_auto_prefill": true,
     "updated_at": null
   },
-  "updated_at": "2026-03-19T03:53:03.393265+00:00"
+  "updated_at": "2026-03-19T12:58:26.765324+00:00"
 }

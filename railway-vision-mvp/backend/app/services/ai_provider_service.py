@@ -74,6 +74,13 @@ def _compose_api_root(base_url: str, api_path: str) -> str:
     return f"{clean_base}/{clean_path.lstrip('/')}"
 
 
+def _strip_v1_root(base_url: str, api_path: str) -> str:
+    api_root = _compose_api_root(base_url, api_path).rstrip("/")
+    if api_root.endswith("/v1"):
+        return api_root[:-3].rstrip("/")
+    return api_root
+
+
 def _build_headers(config: dict[str, Any]) -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
     api_key = str(config.get("api_key") or "").strip()
@@ -119,6 +126,12 @@ def request_planner_completion(*, config: dict[str, Any], system_prompt: str, pa
     model_name = str(config.get("model_name") or "").strip()
     if not api_root or not model_name:
         return None
+    mode = str(config.get("mode") or "").strip()
+    timeout = max(5, min(300, int(config.get("timeout") or 45)))
+    max_tokens = int(config.get("max_tokens") or 900)
+    if mode == "local":
+        timeout = max(timeout, 120)
+        max_tokens = min(max_tokens, 256)
     body = {
         "model": model_name,
         "messages": [
@@ -126,17 +139,59 @@ def request_planner_completion(*, config: dict[str, Any], system_prompt: str, pa
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],
         "temperature": float(config.get("temperature") or 0.2),
-        "max_tokens": int(config.get("max_tokens") or 900),
+        "max_tokens": max(64, min(4096, max_tokens)),
         "response_format": {"type": "json_object"},
         "stream": False,
     }
     headers = _build_headers(config)
-    timeout = max(5, min(300, int(config.get("timeout") or 45)))
     with httpx.Client(timeout=timeout, follow_redirects=True, trust_env=False) as client:
-        resp = client.post(f"{api_root}/chat/completions", headers=headers, json=body)
-        resp.raise_for_status()
-        data = resp.json()
-    content = data.get("choices", [{}])[0].get("message", {}).get("content")
+        try:
+            resp = client.post(f"{api_root}/chat/completions", headers=headers, json=body)
+            resp.raise_for_status()
+            data = resp.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content")
+        except httpx.HTTPStatusError as exc:
+            if mode != "local" or exc.response.status_code != 404:
+                raise
+            ollama_root = _strip_v1_root(str(config.get("base_url") or ""), str(config.get("api_path") or "/v1"))
+            try:
+                ollama_resp = client.post(
+                    f"{ollama_root}/api/chat",
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "model": model_name,
+                        "messages": body["messages"],
+                        "stream": False,
+                        "options": {
+                            "temperature": body["temperature"],
+                            "num_predict": body["max_tokens"],
+                        },
+                    },
+                )
+                ollama_resp.raise_for_status()
+                data = ollama_resp.json()
+                content = data.get("message", {}).get("content")
+            except httpx.HTTPStatusError as ollama_exc:
+                if ollama_exc.response.status_code != 404:
+                    raise
+                prompt = f"{system_prompt}\n\n请输出紧凑 JSON。\n\n用户请求:\n{json.dumps(payload, ensure_ascii=False)}"
+                generate_resp = client.post(
+                    f"{ollama_root}/api/generate",
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "model": model_name,
+                        "prompt": prompt,
+                        "stream": False,
+                        "format": "json",
+                        "options": {
+                            "temperature": body["temperature"],
+                            "num_predict": body["max_tokens"],
+                        },
+                    },
+                )
+                generate_resp.raise_for_status()
+                data = generate_resp.json()
+                content = data.get("response")
     if not content:
         return None
     try:

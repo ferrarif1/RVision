@@ -1,5 +1,6 @@
 import { PERMISSIONS } from '../core/api.js';
 import { BRAND_NAME } from '../config/brand.js';
+import { listConversationSessions } from '../ai/conversation.js';
 
 const ROLE_LABELS = {
   platform_admin: '平台管理员',
@@ -132,6 +133,57 @@ function renderCommandPalette(commandPalette) {
   `;
 }
 
+function renderConversationSidebar(state, routeView) {
+  const route = state.route || {};
+  const activeSessionId = String(route.params?.sessionId || '').trim();
+  const sessions = listConversationSessions().slice(0, 18);
+  const workflowItems = [
+    { path: 'ai/workflow/upload', title: '上传流程' },
+    { path: 'ai/workflow/train', title: '训练流程' },
+    { path: 'ai/workflow/deploy', title: '发布流程' },
+    { path: 'ai/workflow/results', title: '结果流程' },
+    { path: 'ai/workflow/troubleshoot', title: '排障流程' },
+  ];
+  return `
+    <aside class="conversation-sidebar">
+      <div class="conversation-sidebar-head">
+        <button class="brand brand-button conversation-brand-button" id="openAiWorkspaceBtn" type="button">${BRAND_NAME}</button>
+        <button class="primary conversation-new-btn" type="button" data-nav="ai">新建会话</button>
+      </div>
+      <div class="conversation-sidebar-section">
+        <span class="conversation-sidebar-label">会话</span>
+        <div class="conversation-list">
+          ${sessions.length ? sessions.map((item) => `
+            <button class="conversation-list-item ${activeSessionId && activeSessionId === item.session_id ? 'active' : ''}" type="button" data-nav="ai/chat/${item.session_id}">
+              <strong>${esc(item.title || '未命名会话')}</strong>
+              <span>${esc(item.last_message_preview || item.summary || item.workflow_context?.current_step_title || '等待输入')}</span>
+            </button>
+          `).join('') : '<div class="conversation-empty">还没有会话</div>'}
+        </div>
+      </div>
+      <div class="conversation-sidebar-section">
+        <span class="conversation-sidebar-label">流程</span>
+        <div class="conversation-secondary-list">
+          ${workflowItems.map((item) => `
+            <button class="conversation-secondary-item ${String(route.currentPath || route.pattern || '') === item.path ? 'active' : ''}" type="button" data-nav="${item.path}">
+              ${esc(item.title)}
+            </button>
+          `).join('')}
+        </div>
+      </div>
+      <div class="conversation-sidebar-foot">
+        <button class="ghost" type="button" data-nav="guide">帮助</button>
+        <button class="ghost" type="button" data-nav="settings">设置</button>
+        <div class="conversation-user-meta">
+          <strong>${esc(state.user?.username || '未登录')}</strong>
+          <span>${esc(primaryRoleLabel(state.user))}</span>
+        </div>
+        <button id="logoutBtn" class="ghost" type="button">退出</button>
+      </div>
+    </aside>
+  `;
+}
+
 export function renderShell({ state, routeView, contentHtml, commandPalette }) {
   const user = state.user;
   const perms = state.permissions || new Set();
@@ -141,24 +193,23 @@ export function renderShell({ state, routeView, contentHtml, commandPalette }) {
 
   if (routeView.mode === 'ai') {
     return `
-      <div class="ai-app-shell">
-        <header class="ai-topbar">
-          <button class="ai-brand ai-brand-button" id="openAiWorkspaceBtn" type="button">
-            <span class="ai-brand-mark">V</span>
-            <span class="ai-brand-copy">
-              <strong>${BRAND_NAME}</strong>
-              <span>AI 工作入口</span>
-            </span>
-          </button>
-          <div class="ai-topbar-right">
-            <button id="openExpertConsoleBtnTop" class="ghost" type="button">工作台</button>
-            <button class="ghost" type="button" data-nav="guide">帮助</button>
-            <button class="ghost" type="button" data-nav="settings">设置</button>
-          </div>
-        </header>
-        <main class="ai-page">
-          ${contentHtml}
-        </main>
+      <div class="conversation-app-shell">
+        ${renderConversationSidebar(state, routeView)}
+        <div class="conversation-main-shell">
+          <header class="conversation-topbar">
+            <div class="conversation-topbar-copy">
+              <div class="topbar-mode-badge">${esc(routeView.label || 'AI Workspace')}</div>
+              <div class="breadcrumb">${renderBreadcrumb(routeView)}</div>
+            </div>
+            <div class="conversation-topbar-actions">
+              <button id="openExpertConsoleBtnTop" class="ghost" type="button">工作台</button>
+              <button class="ghost" type="button" data-nav="settings">设置</button>
+            </div>
+          </header>
+          <main class="conversation-page page">
+            ${contentHtml}
+          </main>
+        </div>
         <div id="toast" class="toast"></div>
         ${renderCommandPalette(commandPalette)}
       </div>

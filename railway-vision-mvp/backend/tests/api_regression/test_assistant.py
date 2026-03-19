@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from unittest.mock import patch
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -9,6 +10,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.services.assistant_paths import build_training_path, build_workflow_path
+from app.services.assistant_service import activate_local_llm, delete_local_llm, get_local_llm_folder_info
 from app.services.ai_provider_service import resolve_provider_config
 from app.services.ai_settings_service import delete_ai_provider_config, upsert_ai_provider_config
 from backend.tests.api_regression.helpers import ApiRegressionHelper
@@ -25,6 +27,7 @@ class AssistantRegressionTest(ApiRegressionHelper):
         models = catalog.get("models") or []
         self.assertGreaterEqual(len(models), 10)
         self.assertEqual(models[0]["repo_id"], "openai/gpt-oss-20b")
+        self.assertTrue(any(row.get("repo_id") == "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B" for row in models))
         self.assertTrue(any(row.get("repo_id") == "Qwen/Qwen3-32B" for row in models))
 
     def test_assistant_plan_for_inspection_mark(self) -> None:
@@ -101,6 +104,65 @@ class AssistantRegressionTest(ApiRegressionHelper):
         finally:
             delete_ai_provider_config(results_provider["id"])
             delete_ai_provider_config(global_provider["id"])
+
+    def test_activate_local_llm_creates_default_local_provider(self) -> None:
+        repo_id = f"{self.unique_name('local-model').replace('_', '-')}/demo"
+        folder = Path(get_local_llm_folder_info(repo_id)["target_dir"])
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "config.json").write_text("{}", encoding="utf-8")
+        try:
+            result = activate_local_llm(repo_id)
+            self.assertEqual(result["repo_id"], repo_id)
+            self.assertTrue(result["provider_id"].startswith("local-llm-"))
+            resolved = resolve_provider_config(llm_mode="local", workflow_scope="global", llm_selection={}, api_config={})
+            self.assertIsNotNone(resolved)
+            self.assertEqual(resolved["model_name"], repo_id)
+            self.assertTrue(resolved["is_default"])
+            self.assertTrue(str(get_local_llm_folder_info(repo_id)["host_path"]).strip())
+        finally:
+            provider_id = f"local-llm-{repo_id.replace('/', '-').replace('_', '-').lower()}"
+            try:
+                delete_ai_provider_config(provider_id)
+            except Exception:
+                pass
+            delete_local_llm(repo_id)
+
+    def test_activate_local_llm_uses_runtime_alias_without_snapshot(self) -> None:
+        repo_id = "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
+        provider_id = f"local-llm-{repo_id.replace('/', '-').replace('_', '-').lower()}"
+        with patch(
+            "app.services.assistant_service.get_local_llm_catalog",
+            return_value={
+                "models": [
+                    {
+                        "repo_id": repo_id,
+                        "display_name": "DeepSeek R1 Distill Qwen 14B",
+                        "runtime_aliases": {"ollama": "deepseek-r1:14b"},
+                    }
+                ]
+            },
+        ), patch(
+            "app.services.assistant_service.get_local_llm_runtime_status",
+            return_value={"ok": True, "models": ["deepseek-r1:14b"]},
+        ), patch(
+            "app.services.assistant_service.test_provider_connection",
+            return_value={"ok": True, "message": "ok"},
+        ):
+            try:
+                result = activate_local_llm(repo_id)
+                self.assertEqual(result["repo_id"], repo_id)
+                self.assertTrue(result["runtime_available"])
+                self.assertEqual(result["runtime_model_name"], "deepseek-r1:14b")
+                self.assertEqual(result["model_name"], "deepseek-r1:14b")
+                resolved = resolve_provider_config(llm_mode="local", workflow_scope="global", llm_selection={}, api_config={})
+                self.assertIsNotNone(resolved)
+                self.assertEqual(resolved["model_name"], "deepseek-r1:14b")
+                self.assertTrue(resolved["is_default"])
+            finally:
+                try:
+                    delete_ai_provider_config(provider_id)
+                except Exception:
+                    pass
 
     def test_ai_settings_and_context_injection(self) -> None:
         provider_name = self.unique_name("provider")

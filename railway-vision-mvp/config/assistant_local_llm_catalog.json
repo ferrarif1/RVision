@@ -18,6 +18,23 @@
     },
     {
       "rank": 2,
+      "repo_id": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+      "display_name": "DeepSeek R1 Distill Qwen 14B",
+      "vendor": "DeepSeek",
+      "family": "deepseek-r1",
+      "parameter_label": "14B",
+      "license": "mit",
+      "strengths": ["推理", "中文", "本地对话"],
+      "recommended_for": "本机 Ollama 已装模型时可直接接入对话，无需重复下载快照。",
+      "context_window": "128K",
+      "quant_hint": "已安装 Ollama 时可直接接入 deepseek-r1:14b",
+      "official_url": "https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+      "runtime_aliases": {
+        "ollama": "deepseek-r1:14b"
+      }
+    },
+    {
+      "rank": 2,
       "repo_id": "meta-llama/Llama-3.3-70B-Instruct",
       "display_name": "Llama 3.3 70B Instruct",
       "vendor": "Meta",

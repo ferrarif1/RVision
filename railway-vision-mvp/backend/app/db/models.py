@@ -163,6 +163,7 @@ class DataAsset(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     file_name = Column(String(255), nullable=False)
     asset_type = Column(String(32), nullable=False)
+    asset_purpose = Column(String(32), nullable=False, default="training")
     storage_uri = Column(Text, nullable=False)
     source_uri = Column(Text, nullable=True)
     sensitivity_level = Column(String(8), nullable=False)

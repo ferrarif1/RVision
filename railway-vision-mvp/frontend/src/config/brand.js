@@ -54,6 +54,10 @@ export const STORAGE_KEYS = {
   aiPendingConfirmations: namespacedStorageKey('ai_pending_confirmations'),
   aiLastPlan: namespacedStorageKey('ai_last_plan'),
   aiWorkflowDraft: namespacedStorageKey('ai_workflow_draft'),
+  aiMessageMap: namespacedStorageKey('ai_message_map'),
+  aiComposerDraftMap: namespacedStorageKey('ai_composer_draft_map'),
+  aiActiveSessionId: namespacedStorageKey('ai_active_session_id'),
+  workflowSession: namespacedStorageKey('workflow_session'),
 };
 
 const LEGACY_STORAGE_KEYS = {
@@ -98,6 +102,10 @@ const LEGACY_STORAGE_KEYS = {
   aiPendingConfirmations: 'rv_ai_pending_confirmations',
   aiLastPlan: 'rv_ai_last_plan',
   aiWorkflowDraft: 'rv_ai_workflow_draft',
+  aiMessageMap: 'rv_ai_message_map',
+  aiComposerDraftMap: 'rv_ai_composer_draft_map',
+  aiActiveSessionId: 'rv_ai_active_session_id',
+  workflowSession: 'rv_workflow_session',
 };
 
 export function migrateLegacyStorageKeys(storage = window.localStorage) {

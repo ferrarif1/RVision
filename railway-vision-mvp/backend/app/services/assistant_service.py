@@ -20,7 +20,7 @@ from app.db.models import DataAsset, ModelRecord
 from app.security.dependencies import AuthUser
 from app.security.roles import is_buyer_user
 from app.services.ai_context_service import assemble_ai_context, normalize_workflow_scope
-from app.services.ai_provider_service import request_planner_completion, resolve_provider_config
+from app.services.ai_provider_service import request_planner_completion, resolve_provider_config, test_provider_connection
 from app.services.assistant_paths import build_training_path, build_workflow_path
 from app.services.model_router_service import TASK_TYPE_KEYWORDS, TASK_TYPE_LABELS, recommend_small_models
 
@@ -76,6 +76,47 @@ def _repo_target_dir(repo_id: str) -> Path:
     return DOWNLOAD_ROOT / str(repo_id or "").strip().replace("/", "__")
 
 
+def _host_mark_path(source: str) -> Path:
+    source_path = Path(str(source or ""))
+    if str(source_path).startswith("/run/host_mark/"):
+        return Path("/") / source_path.name
+    return source_path
+
+
+def _resolve_host_visible_path(target: Path) -> str:
+    resolved = target.resolve()
+    mountinfo = Path("/proc/self/mountinfo")
+    if not mountinfo.exists():
+        return str(resolved)
+    best_match: tuple[int, Path, str, str] | None = None
+    for raw_line in mountinfo.read_text(encoding="utf-8", errors="ignore").splitlines():
+        if " - " not in raw_line:
+            continue
+        left, right = raw_line.split(" - ", 1)
+        left_parts = left.split()
+        right_parts = right.split()
+        if len(left_parts) < 5 or len(right_parts) < 2:
+            continue
+        mount_root = left_parts[3]
+        mount_point = Path(left_parts[4])
+        mount_source = right_parts[1]
+        try:
+            relative = resolved.relative_to(mount_point)
+        except ValueError:
+            continue
+        score = len(str(mount_point))
+        if best_match and score <= best_match[0]:
+            continue
+        best_match = (score, relative, mount_root, mount_source)
+    if not best_match:
+        return str(resolved)
+    _, relative, mount_root, mount_source = best_match
+    host_root = _host_mark_path(mount_source)
+    if mount_root and mount_root != "/":
+        host_root = host_root.joinpath(*Path(mount_root).parts[1:])
+    return str((host_root / relative).resolve())
+
+
 def _dir_size_bytes(path: Path) -> int:
     if not path.exists():
         return 0
@@ -101,6 +142,17 @@ def _remove_path(path: Path) -> None:
         return
 
 
+def _resolve_runtime_alias(model_row: dict[str, Any], runtime_status: dict[str, Any] | None = None) -> tuple[str | None, bool]:
+    aliases = model_row.get("runtime_aliases") if isinstance(model_row.get("runtime_aliases"), dict) else {}
+    alias = str(aliases.get("ollama") or aliases.get("local_openai_compatible") or "").strip()
+    if not alias:
+        return None, False
+    runtime_payload = runtime_status if isinstance(runtime_status, dict) else {}
+    runtime_models = runtime_payload.get("models") if isinstance(runtime_payload.get("models"), list) else []
+    normalized_models = {str(item or "").strip() for item in runtime_models if str(item or "").strip()}
+    return alias, alias in normalized_models
+
+
 def _parse_log_progress(log_path: Path) -> int | None:
     if not log_path.exists():
         return None
@@ -117,18 +169,75 @@ def _parse_log_progress(log_path: Path) -> int | None:
         return None
 
 
+def _catalog_model_row(repo_id: str, *, force_refresh: bool = False) -> dict[str, Any]:
+    normalized_repo_id = str(repo_id or "").strip()
+    if not normalized_repo_id:
+        return {}
+    catalog = get_local_llm_catalog(force_refresh=force_refresh)
+    return next(
+        (item for item in (catalog.get("models") or []) if str(item.get("repo_id") or "").strip() == normalized_repo_id),
+        {},
+    )
+
+
+def _resolve_download_strategy(repo_id: str) -> dict[str, Any]:
+    model_row = _catalog_model_row(repo_id, force_refresh=False)
+    runtime_status = get_local_llm_runtime_status()
+    runtime_model_name, runtime_available = _resolve_runtime_alias(model_row, runtime_status)
+    base_url = str(runtime_status.get("base_url") or runtime_status.get("recommended_base_url") or "").strip()
+    strategy = "ollama" if runtime_status.get("ok") and runtime_model_name and base_url else "huggingface"
+    return {
+        "strategy": strategy,
+        "runtime_model_name": runtime_model_name,
+        "runtime_available": runtime_available,
+        "base_url": base_url,
+        "model_row": model_row,
+    }
+
+
+def _delete_runtime_model(*, base_url: str, runtime_model_name: str) -> dict[str, Any]:
+    api_root = str(base_url or "").strip().rstrip("/")
+    if api_root.endswith("/v1"):
+        api_root = api_root[:-3].rstrip("/")
+    model_name = str(runtime_model_name or "").strip()
+    if not api_root or not model_name:
+        return {"removed": False, "message": "missing runtime model config"}
+    try:
+        with httpx.Client(timeout=60.0, follow_redirects=True, trust_env=False) as client:
+            resp = client.request("DELETE", f"{api_root}/api/delete", json={"name": model_name}, headers={"Content-Type": "application/json"})
+            if resp.status_code >= 400:
+                try:
+                    detail = resp.text
+                except Exception:
+                    detail = ""
+                return {"removed": False, "message": detail or f"status={resp.status_code}"}
+        return {"removed": True, "message": "runtime model removed"}
+    except Exception as exc:
+        return {"removed": False, "message": str(exc)}
+
+
 def _hydrate_job_runtime(payload: dict[str, Any]) -> dict[str, Any]:
     job = dict(payload)
     target_dir = Path(str(job.get("target_dir") or "")).expanduser()
     log_path = Path(str(job.get("log_file") or "")).expanduser()
     status = str(job.get("status") or "unknown").strip() or "unknown"
+    strategy = str(job.get("strategy") or "huggingface").strip() or "huggingface"
+    runtime_model_name = str(job.get("runtime_model_name") or "").strip()
     progress_pct = 0
     if status == "succeeded":
         progress_pct = 100
     elif status in {"starting", "running"}:
-        progress_pct = _parse_log_progress(log_path) or 0
+        progress_pct = int(job.get("progress_pct") or 0) if strategy == "ollama" else (_parse_log_progress(log_path) or 0)
     elif status == "failed":
-        progress_pct = _parse_log_progress(log_path) or 0
+        progress_pct = int(job.get("progress_pct") or 0) if strategy == "ollama" else (_parse_log_progress(log_path) or 0)
+    runtime_ready = bool(job.get("runtime_ready"))
+    if strategy == "ollama" and runtime_model_name:
+        try:
+            runtime_status = get_local_llm_runtime_status()
+            runtime_models = runtime_status.get("models") if isinstance(runtime_status.get("models"), list) else []
+            runtime_ready = runtime_model_name in {str(item or "").strip() for item in runtime_models if str(item or "").strip()}
+        except Exception:
+            runtime_ready = bool(job.get("runtime_ready"))
     job["progress_pct"] = progress_pct
     job["progress_label"] = (
         "已完成"
@@ -139,8 +248,9 @@ def _hydrate_job_runtime(payload: dict[str, Any]) -> dict[str, Any]:
         if status == "failed"
         else f"{progress_pct}%"
     )
-    job["downloaded_bytes"] = _dir_size_bytes(target_dir)
+    job["downloaded_bytes"] = int(job.get("downloaded_bytes") or 0) if strategy == "ollama" else _dir_size_bytes(target_dir)
     job["has_local_snapshot"] = target_dir.exists() and any(target_dir.iterdir()) if target_dir.exists() else False
+    job["runtime_ready"] = runtime_ready
     return job
 
 
@@ -220,16 +330,30 @@ def refresh_local_llm_catalog_cache() -> dict[str, Any]:
 
 def get_local_llm_catalog(*, force_refresh: bool = False) -> dict[str, Any]:
     _ensure_runtime_dirs()
+    runtime_status = get_local_llm_runtime_status()
     if not force_refresh and CATALOG_CACHE_PATH.exists():
         payload = _json_load(CATALOG_CACHE_PATH)
-        if _catalog_cache_is_fresh(payload):
+        base_repo_ids = {
+            str(item.get("repo_id") or "").strip()
+            for item in (_local_catalog_base().get("models") or [])
+            if str(item.get("repo_id") or "").strip()
+        }
+        cached_repo_ids = {
+            str(item.get("repo_id") or "").strip()
+            for item in (payload.get("models") or [])
+            if isinstance(item, dict) and str(item.get("repo_id") or "").strip()
+        }
+        if _catalog_cache_is_fresh(payload) and base_repo_ids.issubset(cached_repo_ids):
             models = [dict(item) for item in payload.get("models") or []]
             for item in models:
                 target_dir = _repo_target_dir(str(item.get("repo_id") or ""))
                 installed = target_dir.exists() and any(target_dir.iterdir()) if target_dir.exists() else False
+                runtime_model_name, runtime_available = _resolve_runtime_alias(item, runtime_status)
                 item["installed"] = installed
                 item["local_path"] = str(target_dir)
                 item["local_size_bytes"] = _dir_size_bytes(target_dir) if installed else 0
+                item["runtime_model_name"] = runtime_model_name
+                item["runtime_available"] = runtime_available
             payload["models"] = models
             return payload
     payload = refresh_local_llm_catalog_cache()
@@ -237,9 +361,12 @@ def get_local_llm_catalog(*, force_refresh: bool = False) -> dict[str, Any]:
     for item in models:
         target_dir = _repo_target_dir(str(item.get("repo_id") or ""))
         installed = target_dir.exists() and any(target_dir.iterdir()) if target_dir.exists() else False
+        runtime_model_name, runtime_available = _resolve_runtime_alias(item, runtime_status)
         item["installed"] = installed
         item["local_path"] = str(target_dir)
         item["local_size_bytes"] = _dir_size_bytes(target_dir) if installed else 0
+        item["runtime_model_name"] = runtime_model_name
+        item["runtime_available"] = runtime_available
     payload["models"] = models
     return payload
 
@@ -276,6 +403,7 @@ def start_local_llm_download(*, repo_id: str, display_name: str | None = None) -
     target_dir = _repo_target_dir(repo_id)
     status_path = _job_path(job_id)
     log_path = DOWNLOAD_JOB_ROOT / f"{job_id}.log"
+    strategy = _resolve_download_strategy(repo_id)
     cmd = [
         sys.executable,
         str(DOWNLOAD_SCRIPT),
@@ -287,20 +415,28 @@ def start_local_llm_download(*, repo_id: str, display_name: str | None = None) -
         str(status_path),
         "--log-file",
         str(log_path),
+        "--strategy",
+        str(strategy.get("strategy") or "huggingface"),
     ]
+    if strategy.get("strategy") == "ollama":
+        cmd.extend(["--base-url", str(strategy.get("base_url") or ""), "--runtime-model", str(strategy.get("runtime_model_name") or "")])
     env = os.environ.copy()
     log_handle = log_path.open("a", encoding="utf-8")
     proc = subprocess.Popen(cmd, stdout=log_handle, stderr=subprocess.STDOUT, env=env)
     bootstrap_payload = {
         "job_id": job_id,
         "repo_id": repo_id,
-        "display_name": display_name or repo_id,
+        "display_name": display_name or str(strategy.get("model_row", {}).get("display_name") or repo_id),
         "status": "starting",
         "created_at": _now_iso(),
         "pid": proc.pid,
         "target_dir": str(target_dir),
         "status_file": str(status_path),
         "log_file": str(log_path),
+        "strategy": str(strategy.get("strategy") or "huggingface"),
+        "runtime_model_name": str(strategy.get("runtime_model_name") or ""),
+        "base_url": str(strategy.get("base_url") or ""),
+        "runtime_ready": bool(strategy.get("runtime_available")),
     }
     status_path.write_text(json.dumps(bootstrap_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return _hydrate_job_runtime(bootstrap_payload)
@@ -329,6 +465,15 @@ def delete_local_llm(repo_id: str) -> dict[str, Any]:
     target_dir = _repo_target_dir(normalized_repo_id)
     removed_local_snapshot = target_dir.exists()
     _remove_path(target_dir)
+    model_row = _catalog_model_row(normalized_repo_id, force_refresh=False)
+    runtime_status = get_local_llm_runtime_status()
+    runtime_model_name, runtime_available = _resolve_runtime_alias(model_row, runtime_status)
+    runtime_delete_result = {"removed": False, "message": "", "runtime_model_name": runtime_model_name}
+    if runtime_available and runtime_model_name and runtime_status.get("ok"):
+        runtime_delete_result = _delete_runtime_model(
+            base_url=str(runtime_status.get("base_url") or runtime_status.get("recommended_base_url") or ""),
+            runtime_model_name=runtime_model_name,
+        ) | {"runtime_model_name": runtime_model_name}
     removed_job_records = 0
     for job_path in DOWNLOAD_JOB_ROOT.glob("*.json"):
         job = _read_job(job_path)
@@ -340,12 +485,149 @@ def delete_local_llm(repo_id: str) -> dict[str, Any]:
         _remove_path(Path(str(job.get("log_file") or "")).expanduser())
         _remove_path(job_path)
         removed_job_records += 1
+    removed_provider_ids: list[str] = []
+    from app.services.ai_settings_service import delete_ai_provider_config, load_ai_settings_state
+
+    for provider in load_ai_settings_state().get("providers") or []:
+        if str(provider.get("mode") or "") != "local":
+            continue
+        provider_model_name = str(provider.get("model_name") or "").strip()
+        if provider_model_name not in {normalized_repo_id, str(runtime_model_name or "").strip()}:
+            continue
+        provider_id = str(provider.get("id") or "").strip()
+        if not provider_id:
+            continue
+        try:
+            delete_ai_provider_config(provider_id)
+            removed_provider_ids.append(provider_id)
+        except Exception:
+            continue
     return {
         "repo_id": normalized_repo_id,
         "target_dir": str(target_dir),
         "removed_local_snapshot": removed_local_snapshot,
+        "removed_runtime_model": bool(runtime_delete_result.get("removed")),
+        "runtime_model_name": runtime_delete_result.get("runtime_model_name"),
+        "runtime_delete_message": str(runtime_delete_result.get("message") or "").strip(),
         "removed_job_records": removed_job_records,
+        "removed_provider_ids": removed_provider_ids,
         "deleted_at": _now_iso(),
+    }
+
+
+def get_local_llm_folder_info(repo_id: str) -> dict[str, Any]:
+    normalized_repo_id = str(repo_id or "").strip()
+    target_dir = _repo_target_dir(normalized_repo_id)
+    host_path = _resolve_host_visible_path(target_dir)
+    return {
+        "repo_id": normalized_repo_id,
+        "target_dir": str(target_dir),
+        "host_path": host_path,
+        "exists": target_dir.exists(),
+        "open_command": f'open "{host_path}"',
+        "generated_at": _now_iso(),
+    }
+
+
+def get_local_llm_runtime_status() -> dict[str, Any]:
+    from app.services.ai_settings_service import _default_local_base_url, get_default_ai_provider
+
+    default_provider = get_default_ai_provider(include_secret=True) or {}
+    candidate = dict(default_provider) if str(default_provider.get("mode") or "") == "local" else {}
+    base_url = str(candidate.get("base_url") or _default_local_base_url()).strip()
+    api_path = str(candidate.get("api_path") or "/v1").strip() or "/v1"
+    config = {
+        "provider": "local_openai_compatible",
+        "mode": "local",
+        "base_url": base_url,
+        "api_path": api_path,
+        "api_key": str(candidate.get("api_key") or "").strip(),
+        "organization": str(candidate.get("organization") or "").strip(),
+        "project": str(candidate.get("project") or "").strip(),
+        "timeout": int(candidate.get("timeout") or 10),
+    }
+    try:
+        api_root = base_url.rstrip("/")
+        if api_path and not api_root.endswith(api_path.rstrip("/")):
+            api_root = f"{api_root}/{api_path.lstrip('/')}"
+        models_url = f"{api_root}/models"
+        with httpx.Client(timeout=5.0, follow_redirects=True, trust_env=False) as client:
+            resp = client.get(models_url, headers={"Content-Type": "application/json"})
+            resp.raise_for_status()
+            payload = resp.json()
+        rows = payload.get("data") if isinstance(payload, dict) else []
+        models = []
+        if isinstance(rows, list):
+            for item in rows[:24]:
+                if isinstance(item, dict):
+                    models.append(str(item.get("id") or item.get("name") or "").strip())
+        return {
+            "ok": True,
+            "base_url": base_url,
+            "api_path": api_path,
+            "api_root": api_root,
+            "recommended_base_url": base_url,
+            "models": [item for item in models if item],
+            "model_count": len([item for item in models if item]),
+            "message": "本地兼容服务已在线。",
+            "checked_at": _now_iso(),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "base_url": base_url,
+            "api_path": api_path,
+            "recommended_base_url": base_url,
+            "models": [],
+            "model_count": 0,
+            "message": f"本地兼容服务未连通：{exc}",
+            "checked_at": _now_iso(),
+        }
+
+
+def activate_local_llm(repo_id: str) -> dict[str, Any]:
+    normalized_repo_id = str(repo_id or "").strip()
+    if not normalized_repo_id:
+        raise ValueError("repo_id is required")
+    target_dir = _repo_target_dir(normalized_repo_id)
+    catalog = get_local_llm_catalog(force_refresh=False)
+    model_row = next((item for item in catalog.get("models") or [] if str(item.get("repo_id") or "").strip() == normalized_repo_id), {})
+    runtime_status = get_local_llm_runtime_status()
+    runtime_model_name, runtime_available = _resolve_runtime_alias(model_row, runtime_status)
+    has_snapshot = target_dir.exists() and any(target_dir.iterdir()) if target_dir.exists() else False
+    if not has_snapshot and not runtime_available:
+        raise FileNotFoundError(normalized_repo_id)
+    from app.services.ai_settings_service import upsert_local_llm_provider
+
+    provider = upsert_local_llm_provider(
+        repo_id=normalized_repo_id,
+        display_name=str(model_row.get("display_name") or normalized_repo_id),
+        model_name=runtime_model_name or normalized_repo_id,
+    )
+    try:
+        connection = test_provider_connection(provider)
+    except Exception as exc:
+        connection = {
+            "ok": False,
+            "message": f"本地兼容服务暂时不可用：{exc}",
+            "tested_at": _now_iso(),
+        }
+    return {
+        "repo_id": normalized_repo_id,
+        "display_name": str(model_row.get("display_name") or normalized_repo_id),
+        "provider_id": provider.get("id"),
+        "provider_name": provider.get("name"),
+        "model_name": provider.get("model_name"),
+        "base_url": provider.get("base_url"),
+        "api_path": provider.get("api_path"),
+        "target_dir": str(target_dir),
+        "host_path": _resolve_host_visible_path(target_dir),
+        "has_snapshot": has_snapshot,
+        "runtime_model_name": runtime_model_name,
+        "runtime_available": runtime_available,
+        "connection_ok": bool(connection.get("ok")),
+        "connection_message": str(connection.get("message") or "").strip(),
+        "activated_at": _now_iso(),
     }
 
 
@@ -546,7 +828,8 @@ def build_assistant_plan(
         api_config=api_config,
         workflow_scope=workflow_scope,
     )
-    ai_context = assemble_ai_context(workflow_scope=workflow_scope, task_type=task_type, goal=goal)
+    is_local_provider = bool(effective_provider and str(effective_provider.get("mode") or "").strip() == "local")
+    ai_context = assemble_ai_context(workflow_scope=workflow_scope, task_type=task_type, goal=goal, compact=is_local_provider)
 
     llm_advice = None
     if effective_provider and llm_mode in {"api", "local"}:
@@ -558,12 +841,13 @@ def build_assistant_plan(
                     "goal": goal,
                     "task_type": task_type,
                     "task_label": _task_label(task_type),
-                    "asset_file_names": [row.file_name for row in asset_rows][:5],
+                    "asset_file_names": [row.file_name for row in asset_rows][:2] if not is_local_provider else [],
                     "released_model": released.model_code if released else None,
                     "submitted_model": submitted.model_code if submitted else None,
                     "approved_model": approved.model_code if approved else None,
-                    "selected_llm": llm_selection or {},
+                    "selected_llm": {} if is_local_provider else (llm_selection or {}),
                     "workflow_scope": workflow_scope,
+                    "response_style": "compact_json" if is_local_provider else "full_json",
                 },
             )
         except Exception as exc:  # pragma: no cover - external runtime

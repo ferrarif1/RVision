@@ -1,15 +1,16 @@
 import { assistantModeLabel, persistAssistantLocalSettings, readAssistantLocalSettings } from './runtime.js';
 
 export async function loadAISettingsBundle(ctx) {
-  const [providers, knowledge, behavior, providerModes, localModels, downloadJobs] = await Promise.all([
+  const [providers, knowledge, behavior, providerModes, localModels, downloadJobs, localRuntime] = await Promise.all([
     ctx.get('/settings/ai/providers'),
     ctx.get('/settings/ai/knowledge'),
     ctx.get('/settings/ai/behavior'),
     ctx.get('/settings/llm/provider-modes'),
     ctx.get('/settings/llm/local-models'),
     ctx.get('/settings/llm/download-jobs'),
+    ctx.get('/settings/llm/local-runtime'),
   ]);
-  return { providers, knowledge, behavior, providerModes, localModels, downloadJobs };
+  return { providers, knowledge, behavior, providerModes, localModels, downloadJobs, localRuntime };
 }
 
 function providerMatchesScope(provider, preferredScope = 'global') {

@@ -49,7 +49,10 @@ services:
       ASSET_REPO_PATH: /app/app/uploads
       MODEL_SIGNING_PUBLIC_KEY: /app/keys/model_sign_public.pem
       AUDIT_EXPORT_ENABLED: "true"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
+      - ../.runtime:/app/.runtime
       - ../backend/app/models_repo:/app/app/models_repo
       - ../backend/app/uploads:/app/app/uploads
       - ../demo_data:/app/demo_data

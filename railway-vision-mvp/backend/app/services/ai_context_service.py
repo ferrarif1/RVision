@@ -28,11 +28,13 @@ def _doc_matches_scope(scope_rows: list[str], workflow_scope: str) -> bool:
     return workflow_scope in normalized
 
 
-def assemble_ai_context(*, workflow_scope: str = "global", task_type: str | None = None, goal: str = "") -> dict[str, Any]:
+def assemble_ai_context(*, workflow_scope: str = "global", task_type: str | None = None, goal: str = "", compact: bool = False) -> dict[str, Any]:
     behavior = get_ai_behavior_settings()
     doc_rows = list_ai_knowledge_documents().get("documents") or []
     active_docs: list[dict[str, Any]] = []
     excerpts: list[str] = []
+    excerpt_limit = 420 if compact else 1800
+    excerpt_doc_limit = 2 if compact else 4
     for row in doc_rows:
         if not row.get("enabled"):
             continue
@@ -40,7 +42,7 @@ def assemble_ai_context(*, workflow_scope: str = "global", task_type: str | None
             continue
         full = get_ai_knowledge_document(str(row.get("id") or "")) or {}
         content = str(full.get("content") or "").strip()
-        excerpt = content[:1800]
+        excerpt = content[:excerpt_limit]
         active_docs.append(
             {
                 "id": row.get("id"),
@@ -64,7 +66,10 @@ def assemble_ai_context(*, workflow_scope: str = "global", task_type: str | None
     if goal:
         system_prompt_parts.append(f"当前用户目标：{goal}。")
     if excerpts:
-        system_prompt_parts.append("以下是当前启用的系统上下文文档摘录：\n\n" + "\n\n".join(excerpts[:4]))
+        if compact:
+            system_prompt_parts.append("系统文档摘录：\n" + "\n\n".join(excerpts[:excerpt_doc_limit]))
+        else:
+            system_prompt_parts.append("以下是当前启用的系统上下文文档摘录：\n\n" + "\n\n".join(excerpts[:excerpt_doc_limit]))
     return {
         "workflow_scope": workflow_scope,
         "behavior": behavior,

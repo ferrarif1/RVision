@@ -13,9 +13,12 @@ from app.security.dependencies import AuthUser, get_current_user, require_roles
 from app.security.roles import ROLE_PLATFORM_ADMIN, SETTINGS_VIEW_ROLES, has_any_role
 from app.services.audit_service import record_audit
 from app.services.assistant_service import (
+    activate_local_llm,
     cancel_local_llm_download,
     delete_local_llm,
+    get_local_llm_folder_info,
     get_local_llm_catalog,
+    get_local_llm_runtime_status,
     get_provider_modes,
     list_local_llm_download_jobs,
     start_local_llm_download,
@@ -243,6 +246,25 @@ def get_settings_llm_download_jobs(
     return payload
 
 
+@router.get("/llm/local-runtime")
+def get_settings_llm_local_runtime(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    payload = get_local_llm_runtime_status()
+    record_audit(
+        db,
+        action=actions.ASSISTANT_PLAN,
+        resource_type="settings_llm",
+        resource_id="local_runtime",
+        detail={"ok": payload.get("ok"), "base_url": payload.get("base_url"), "model_count": payload.get("model_count")},
+        request=request,
+        actor=current_user,
+    )
+    return payload
+
+
 @router.post("/llm/download")
 def start_settings_llm_download(
     payload: LocalLlmDownloadRequest,
@@ -313,6 +335,71 @@ def delete_settings_llm_local_model(
         resource_type="settings_llm",
         resource_id=normalized_repo_id,
         detail=result,
+        request=request,
+        actor=current_user,
+    )
+    return result
+
+
+@router.post("/llm/local-models/{repo_id:path}/open-folder")
+def open_settings_llm_local_model_folder(
+    repo_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    normalized_repo_id = str(repo_id or "").strip()
+    if not normalized_repo_id:
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "settings_llm_repo_required",
+            "请先指定要打开目录的本地模型。",
+            next_step="回到设置页的大模型与下载，从已下载模型里选择一条记录。",
+        )
+    result = get_local_llm_folder_info(normalized_repo_id)
+    record_audit(
+        db,
+        action=actions.AI_SETTINGS_UPDATE,
+        resource_type="settings_llm",
+        resource_id=normalized_repo_id,
+        detail={"action": "open_local_model_folder", **result},
+        request=request,
+        actor=current_user,
+    )
+    return result
+
+
+@router.post("/llm/local-models/{repo_id:path}/activate")
+def activate_settings_llm_local_model(
+    repo_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: AuthUser = Depends(require_roles(*SETTINGS_VIEW_ROLES)),
+):
+    normalized_repo_id = str(repo_id or "").strip()
+    if not normalized_repo_id:
+        raise_ui_error(
+            status.HTTP_400_BAD_REQUEST,
+            "settings_llm_repo_required",
+            "请先指定要接入的本地模型。",
+            next_step="回到设置页的大模型与下载，从已下载模型里选择一条记录后重新接入。",
+        )
+    try:
+        result = activate_local_llm(normalized_repo_id)
+    except FileNotFoundError:
+        raise_ui_error(
+            status.HTTP_404_NOT_FOUND,
+            "settings_llm_local_model_missing",
+            "当前本地模型快照还没准备好，暂时不能接入对话。",
+            next_step="请先等待下载完成，再重新点击“接入对话”。",
+            raw_detail={"repo_id": normalized_repo_id},
+        )
+    record_audit(
+        db,
+        action=actions.AI_SETTINGS_UPDATE,
+        resource_type="settings_llm",
+        resource_id=normalized_repo_id,
+        detail={"action": "activate_local_model", **result},
         request=request,
         actor=current_user,
     )
