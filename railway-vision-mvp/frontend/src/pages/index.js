@@ -1583,6 +1583,8 @@ function makeContext(route, ctx) {
 function intentFromGoal(goal = '') {
   const text = String(goal || '').trim().toLowerCase();
   if (!text) return 'upload';
+  if (/(你是谁|你是什么|介绍一下你自己|什么模型|模型名称|当前模型|现在用的模型|测试模型名称|你能做什么|你会什么|能帮我做什么|who are you|what are you|what can you do|which model|model name)/.test(text)) return 'chat';
+  if (/^(hi|hello|hey|你好|您好|嗨)[!！,.， ]*$/.test(text)) return 'chat';
   if (/(为什么|失败|没开始|卡住|阻塞|排障|故障|异常|troubleshoot|stuck)/.test(text)) return 'troubleshoot';
   if (/(发布|部署|buyer|设备|release|deploy|审批通过)/.test(text)) return 'deploy';
   if (/(结果|最近任务|查看任务|跑一下|验证|推理|results|infer|run)/.test(text)) return 'results';
@@ -1596,6 +1598,39 @@ function buildLocalIntentPlan({ goal = '', assetIds = [], currentTaskType = '', 
   const taskType = String(currentTaskType || '').trim();
   const taskLabel = aiTaskLabel(taskType);
   const hasAssets = Array.isArray(assetIds) && assetIds.length > 0;
+  if (intent === 'chat') {
+    return {
+      generated_at: new Date().toISOString(),
+      goal,
+      inferred_task_type: taskType || '',
+      inferred_task_label: taskType ? taskLabel : '通用任务',
+      llm_mode: 'disabled',
+      llm_selection: {},
+      signals: [
+        '当前使用浏览器内规则引擎进行对话兜底。',
+      ],
+      asset_summary: assetIds.map((assetId) => ({
+        asset_id: assetId,
+        file_name: assetId,
+        purpose: 'inference',
+        asset_type: 'image',
+      })),
+      recommendation: null,
+      current_state: {
+        released_model: currentModelId ? { model_id: currentModelId, model_code: currentModelId, version: '' } : null,
+        submitted_model: null,
+        approved_model: null,
+      },
+      primary_action: null,
+      secondary_actions: [],
+      llm_advice: {
+        intent: 'chat',
+        summary: '当前是普通对话问题，不需要进入上传、训练或验证流程。可以继续直接提问，或切换模型后再发一条消息验证。',
+        risks: [],
+      },
+      guidance_summary: '当前是普通对话问题，不需要进入上传、训练或验证流程。可以继续直接提问，或切换模型后再发一条消息验证。',
+    };
+  }
   const primaryAction = intent === 'train'
     ? {
       action_id: 'prepare_training_data',
@@ -1700,6 +1735,10 @@ function buildLocalIntentPlan({ goal = '', assetIds = [], currentTaskType = '', 
     },
     guidance_summary: primaryAction.summary,
   };
+}
+
+function isChatOnlyPlan(plan = null) {
+  return !plan?.primary_action;
 }
 
 function syncWorkflowDraftContext(draft = {}, resolved) {
@@ -1991,11 +2030,18 @@ function renderMessageAttachments(attachments = []) {
 
 function renderInlineActionCard(message, session = null) {
   const plan = message.plan || null;
-  const primaryAction = plan?.primary_action || session?.primary_action || null;
-  if (!primaryAction && !message.workflow_context) return '';
+  const primaryAction = plan?.primary_action || null;
   const secondaryActions = Array.isArray(plan?.secondary_actions) ? plan.secondary_actions.slice(0, 2) : [];
-  const workflowPath = workflowRouteForAction(primaryAction || {});
+  const directActions = Array.isArray(message.actions) ? message.actions.slice(0, 3) : [];
+  if (!primaryAction && !message.workflow_context && !secondaryActions.length && !directActions.length) return '';
+  const workflowPath = primaryAction ? workflowRouteForAction(primaryAction || {}) : '';
   const workflowLabel = friendlyWorkflowPathLabel(workflowPath);
+  const actionSummary = String(
+    plan?.llm_advice?.summary
+    || plan?.guidance_summary
+    || primaryAction?.summary
+    || ''
+  ).trim();
   return `
     <article class="inline-action-card">
       ${message.workflow_context ? renderWorkflowStepperCompact(message.workflow_context) : ''}
@@ -2004,17 +2050,29 @@ function renderInlineActionCard(message, session = null) {
           <div>
             <span class="ai-side-label">下一步</span>
             <strong>${esc(primaryAction.title || '继续这一步')}</strong>
-            <p>${esc(plan?.guidance_summary || primaryAction.summary || '')}</p>
+            <p>${esc(actionSummary)}</p>
           </div>
           <div class="inline-action-card-actions">
             <button class="primary" type="button" data-conversation-action="workflow" data-conversation-session="${esc(session?.session_id || '')}">继续</button>
             <button class="ghost" type="button" data-conversation-action="expert" data-conversation-session="${esc(session?.session_id || '')}">打开专家页</button>
           </div>
         </div>
+      ` : actionSummary ? `
+        <div class="inline-action-card-main inline-action-card-summary-only">
+          <div>
+            <span class="ai-side-label">下一步</span>
+            <p>${esc(actionSummary)}</p>
+          </div>
+        </div>
       ` : ''}
       ${secondaryActions.length ? `
         <div class="assistant-message-actions">
           ${secondaryActions.map((action) => `<button class="ghost" type="button" data-conversation-action="secondary" data-conversation-secondary="${esc(action.action_id || '')}" data-conversation-session="${esc(session?.session_id || '')}">${esc(action.title || '备选路径')}</button>`).join('')}
+        </div>
+      ` : ''}
+      ${directActions.length ? `
+        <div class="assistant-message-actions">
+          ${directActions.map((action) => `<button class="${action.primary ? 'primary' : 'ghost'}" type="button" data-conversation-action="direct" data-conversation-direct="${esc(action.id || '')}" data-conversation-message="${esc(message.id || '')}" data-conversation-session="${esc(session?.session_id || '')}">${esc(action.label || '继续')}</button>`).join('')}
         </div>
       ` : ''}
       ${workflowLabel ? `<div class="assistant-chip-row"><span class="assistant-inline-chip">${esc(workflowLabel)}</span></div>` : ''}
@@ -2029,11 +2087,14 @@ function renderConversationMessage(message, session = null) {
   const providerUsed = message?.plan?.provider_used;
   const providerLabel = String(providerUsed?.name || providerUsed?.model_name || '').trim();
   const providerModel = String(providerUsed?.model_name || '').trim();
+  const messageText = !isUser && message?.kind === 'plan'
+    ? String(message?.plan?.llm_advice?.summary || message?.text || '').trim()
+    : String(message?.text || '').trim();
   return `
     <article class="assistant-message ${roleClass} ${kindClass}" data-message-id="${esc(message.id)}">
       ${isUser ? '' : '<span class="assistant-message-avatar">AI</span>'}
       <div class="assistant-message-bubble">
-        ${message.text ? `<p>${esc(message.text)}</p>` : ''}
+        ${messageText ? `<p>${esc(messageText)}</p>` : ''}
         ${message.kind === 'typing' ? '<div class="streaming-message"><span></span><span></span><span></span></div>' : ''}
         ${!isUser && providerLabel ? `<div class="assistant-chip-row assistant-provider-chip-row"><span class="assistant-inline-chip">${esc(providerLabel)}${providerModel && providerModel !== providerLabel ? ` · ${esc(providerModel)}` : ''}</span></div>` : ''}
         ${renderMessageAttachments(message.attachments)}
@@ -2042,6 +2103,21 @@ function renderConversationMessage(message, session = null) {
       </div>
     </article>
   `;
+}
+
+function deriveConversationMessageSummary(sessionMessages = []) {
+  const latestAssistantPlan = sessionMessages
+    .slice()
+    .reverse()
+    .find((item) => item?.role === 'assistant' && item?.kind === 'plan');
+  if (!latestAssistantPlan) return '';
+  return String(
+    latestAssistantPlan?.plan?.llm_advice?.summary
+    || latestAssistantPlan?.text
+    || latestAssistantPlan?.plan?.guidance_summary
+    || latestAssistantPlan?.plan?.primary_action?.summary
+    || ''
+  ).trim();
 }
 
 function buildConversationProviderOptions(aiSettingsBundle = null, activeProvider = null) {
@@ -2096,8 +2172,6 @@ function buildConversationProviderOptions(aiSettingsBundle = null, activeProvide
 }
 
 function renderComposer(draft = {}, busy = false, session = null, activeProvider = null, providerOptions = []) {
-  const providerLabel = String(activeProvider?.name || activeProvider?.model_name || '').trim();
-  const providerModel = String(activeProvider?.model_name || '').trim();
   return `
     <section class="prompt-composer-shell">
       <form class="prompt-composer" id="conversationComposerForm">
@@ -2110,7 +2184,6 @@ function renderComposer(draft = {}, busy = false, session = null, activeProvider
         <div class="composer-toolbar">
           <div class="composer-toolbar-left">
             <button class="composer-icon-button" type="button" id="conversationUploadTrigger" title="添加附件">+</button>
-            ${providerLabel ? `<span class="composer-provider-chip" title="当前发送将使用该模型">${esc(providerLabel)}${providerModel && providerModel !== providerLabel ? ` · ${esc(providerModel)}` : ''}</span>` : ''}
             ${providerOptions.length ? `
               <label class="composer-model-select-wrap" title="切换后，下一条消息会直接调用新模型">
                 <select id="conversationProviderSelect" class="composer-model-select" ${busy ? 'disabled' : ''}>
@@ -2240,8 +2313,10 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
             asset_ids: attachments.map((item) => item.asset_id).filter(Boolean),
             task_type: taskType,
             current_model_id: currentModelId,
+            source_path: '',
+            source_label: '',
           };
-          const workflow = WorkflowStateMachine.resolve({ route, draft, plan: readAiLastPlan() });
+          const workflow = WorkflowStateMachine.resolve({ route, draft, plan: null });
           persistAiWorkflowDraft({
             ...draft,
             workflow_context: workflow.aiContext,
@@ -2253,9 +2328,547 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
           if (routeSessionId) {
             session = listConversationSessions().find((item) => item.session_id === routeSessionId) || session || null;
             messages = readSessionMessages(routeSessionId);
+            const latestSummary = deriveConversationMessageSummary(messages);
+            if (session?.session_id && latestSummary && latestSummary !== String(session.summary || '').trim()) {
+              touchConversationSession(session.session_id, {
+                summary: latestSummary,
+                last_message_preview: latestSummary,
+              });
+              session = listConversationSessions().find((item) => item.session_id === routeSessionId) || session || null;
+            }
             return;
           }
           messages = session?.session_id ? readSessionMessages(session.session_id) : [];
+        }
+
+        async function waitForConversationTaskTerminal(taskId, { timeoutMs = 90_000 } = {}) {
+          const deadline = Date.now() + timeoutMs;
+          while (Date.now() < deadline) {
+            const task = await ctx.get(`/tasks/${taskId}`);
+            const status = String(task?.status || '');
+            if (status === 'SUCCEEDED') return task;
+            if (['FAILED', 'CANCELLED'].includes(status)) {
+              throw new Error(normalizeUiErrorMessage(task?.error_message || `任务执行失败：${status}`));
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, 2000));
+          }
+          throw new Error(`任务 ${taskId} 等待超时，请稍后重试`);
+        }
+
+        function buildConversationDatasetLabel(taskType = '', taskId = '') {
+          const cleanTaskType = String(taskType || 'dataset').trim() || 'dataset';
+          const taskSuffix = String(taskId || '').trim().slice(0, 8) || new Date().toISOString().slice(0, 10).replace(/-/g, '');
+          return `${cleanTaskType}-chat-${taskSuffix}`;
+        }
+
+        function persistConversationTrainingPrefill({
+          assetId = '',
+          taskType = '',
+          modelId = '',
+          datasetLabel = '',
+          datasetVersionId = '',
+        } = {}) {
+          const cleanAssetId = String(assetId || '').trim();
+          const cleanTaskType = String(taskType || '').trim();
+          const cleanModelId = String(modelId || '').trim();
+          const cleanDatasetLabel = String(datasetLabel || '').trim();
+          const cleanDatasetVersionId = String(datasetVersionId || '').trim();
+          if (cleanAssetId) localStorage.setItem(STORAGE_KEYS.prefillTrainingAssetIds, cleanAssetId);
+          if (cleanDatasetLabel) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetLabel, cleanDatasetLabel);
+          if (cleanDatasetVersionId) localStorage.setItem(STORAGE_KEYS.prefillTrainingDatasetVersionId, cleanDatasetVersionId);
+          if (cleanModelId) localStorage.setItem(STORAGE_KEYS.focusModelId, cleanModelId);
+          if (cleanTaskType) localStorage.setItem(STORAGE_KEYS.prefillTaskType, cleanTaskType);
+        }
+
+        function buildInferenceFollowupActions({
+          taskId = '',
+          taskType = '',
+          modelId = '',
+          assetIds = [],
+        } = {}) {
+          const cleanTaskId = String(taskId || '').trim();
+          const cleanTaskType = String(taskType || '').trim();
+          const cleanModelId = String(modelId || '').trim();
+          const cleanAssetIds = Array.isArray(assetIds) ? assetIds.map((item) => String(item || '').trim()).filter(Boolean) : [];
+          return [
+            {
+              id: `open-result-${cleanTaskId}`,
+              label: '查看结果页',
+              kind: 'navigate',
+              path: `results/task/${cleanTaskId}`,
+              primary: true,
+            },
+            {
+              id: `export-result-${cleanTaskId}`,
+              label: '整理成训练数据',
+              kind: 'export_result_dataset',
+              task_id: cleanTaskId,
+              task_type: cleanTaskType,
+              model_id: cleanModelId,
+              asset_ids: cleanAssetIds,
+            },
+            {
+              id: `open-task-${cleanTaskId}`,
+              label: '继续复核',
+              kind: 'navigate',
+              path: `results/task/${cleanTaskId}`,
+            },
+          ].filter((item) => item.path || item.kind === 'export_result_dataset');
+        }
+
+        async function executeConversationDatasetExport(action, currentSession) {
+          const taskId = String(action?.task_id || '').trim();
+          const taskType = String(action?.task_type || currentSession?.task_type || '').trim();
+          const modelId = String(action?.model_id || '').trim();
+          if (!taskId) {
+            ctx.toast('当前没有可导出的结果任务。', 'error');
+            return;
+          }
+          busy = true;
+          const typingMessage = buildMessage({
+            role: 'assistant',
+            kind: 'typing',
+            status: 'streaming',
+            text: '',
+          });
+          appendSessionMessage(currentSession.session_id, typingMessage);
+          rerender();
+          try {
+            const datasetLabel = buildConversationDatasetLabel(taskType, taskId);
+            const exported = await ctx.post('/results/export-dataset', {
+              task_ids: [taskId],
+              dataset_label: datasetLabel,
+              asset_purpose: 'training',
+              include_screenshots: true,
+            });
+            const exportedAssetId = String(exported?.asset?.id || '').trim();
+            const datasetVersionId = String(exported?.dataset_version?.id || '').trim();
+            persistConversationTrainingPrefill({
+              assetId: exportedAssetId,
+              taskType,
+              modelId,
+              datasetLabel: exported?.dataset_version?.dataset_label || datasetLabel,
+              datasetVersionId,
+            });
+            const summaryRows = exported?.summary || {};
+            const exportText = `已整理成训练数据。数据集 ${exported?.dataset_version?.dataset_label || datasetLabel}:${exported?.dataset_version?.version || '-'} 已生成，共汇总 ${summaryRows.result_count ?? summaryRows.row_count ?? 0} 条结果。`;
+            replaceSessionMessage(currentSession.session_id, typingMessage.id, buildMessage({
+              role: 'assistant',
+              kind: 'text',
+              text: exportText,
+              actions: [
+                {
+                  id: `open-training-${datasetVersionId || exportedAssetId}`,
+                  label: '去训练中心',
+                  kind: 'navigate',
+                  path: buildTrainingExpertPath(taskType),
+                  primary: true,
+                },
+                {
+                  id: `create-training-${datasetVersionId || exportedAssetId}`,
+                  label: '直接创建训练作业',
+                  kind: 'create_training_job',
+                  asset_id: exportedAssetId,
+                  task_type: taskType,
+                  model_id: modelId,
+                  dataset_label: exported?.dataset_version?.dataset_label || datasetLabel,
+                  dataset_version_id: datasetVersionId,
+                },
+                {
+                  id: `open-result-${taskId}`,
+                  label: '回看结果',
+                  kind: 'navigate',
+                  path: `results/task/${taskId}`,
+                },
+              ],
+            }));
+            touchConversationSession(currentSession.session_id, {
+              summary: exportText,
+              last_message_preview: exportText,
+            });
+            ctx.toast('训练数据已整理');
+          } catch (error) {
+            replaceSessionMessage(currentSession.session_id, typingMessage.id, buildMessage({
+              role: 'assistant',
+              kind: 'text',
+              text: error.message || '整理训练数据失败',
+              error: error.message || '整理训练数据失败',
+            }));
+            ctx.toast(error.message || '整理训练数据失败', 'error');
+          } finally {
+            busy = false;
+            updateSessionSnapshot();
+            rerender();
+          }
+        }
+
+        async function executeConversationTrainingJob(action, currentSession) {
+          const assetId = String(action?.asset_id || '').trim();
+          const taskType = String(action?.task_type || currentSession?.task_type || '').trim();
+          const modelId = String(action?.model_id || '').trim();
+          const datasetLabel = String(action?.dataset_label || '').trim();
+          if (!assetId || !taskType) {
+            ctx.toast('当前缺少训练所需的数据或任务类型。', 'error');
+            return;
+          }
+          busy = true;
+          const typingMessage = buildMessage({
+            role: 'assistant',
+            kind: 'typing',
+            status: 'streaming',
+            text: '',
+          });
+          appendSessionMessage(currentSession.session_id, typingMessage);
+          rerender();
+          try {
+            const versionSuffix = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+            const created = await ctx.post('/training/jobs', {
+              asset_ids: [assetId],
+              validation_asset_ids: [],
+              base_model_id: modelId || null,
+              training_kind: 'finetune',
+              target_model_code: taskType,
+              target_version: `chat-${versionSuffix}`,
+              worker_selector: {},
+              spec: {},
+            });
+            const trainingText = `训练作业已创建。当前作业 ${created?.job_code || created?.id || '-'} 正在排队或派发，训练数据 ${datasetLabel || assetId} 已带入。`;
+            replaceSessionMessage(currentSession.session_id, typingMessage.id, buildMessage({
+              role: 'assistant',
+              kind: 'text',
+              text: trainingText,
+              actions: [
+                {
+                  id: `refresh-training-${created?.id || assetId}`,
+                  label: '刷新训练状态',
+                  kind: 'refresh_training_job',
+                  job_id: created?.id || '',
+                  task_type: taskType,
+                  primary: true,
+                },
+                {
+                  id: `open-training-workspace-${created?.id || assetId}`,
+                  label: '打开训练中心',
+                  kind: 'navigate',
+                  path: buildTrainingExpertPath(taskType),
+                },
+                ...(modelId ? [{
+                  id: `open-model-${modelId}`,
+                  label: '查看当前模型',
+                  kind: 'navigate',
+                  path: 'models',
+                }] : []),
+              ],
+            }));
+            touchConversationSession(currentSession.session_id, {
+              summary: trainingText,
+              last_message_preview: trainingText,
+            });
+            ctx.toast('训练作业已创建');
+          } catch (error) {
+            replaceSessionMessage(currentSession.session_id, typingMessage.id, buildMessage({
+              role: 'assistant',
+              kind: 'text',
+              text: error.message || '创建训练作业失败',
+              error: error.message || '创建训练作业失败',
+            }));
+            ctx.toast(error.message || '创建训练作业失败', 'error');
+          } finally {
+            busy = false;
+            updateSessionSnapshot();
+            rerender();
+          }
+        }
+
+        async function executeConversationTrainingStatus(action, currentSession) {
+          const jobId = String(action?.job_id || '').trim();
+          const taskType = String(action?.task_type || currentSession?.task_type || '').trim();
+          if (!jobId) {
+            ctx.toast('当前没有可查询的训练作业。', 'error');
+            return;
+          }
+          busy = true;
+          const typingMessage = buildMessage({
+            role: 'assistant',
+            kind: 'typing',
+            status: 'streaming',
+            text: '',
+          });
+          appendSessionMessage(currentSession.session_id, typingMessage);
+          rerender();
+          try {
+            const job = await ctx.get(`/training/jobs/${encodeURIComponent(jobId)}`);
+            const candidateModelId = String(job?.candidate_model?.id || '').trim();
+            const trainingText = `训练作业 ${job?.job_code || jobId} 当前状态 ${job?.status || '-'}` +
+              `${job?.assigned_worker_code ? `，worker ${job.assigned_worker_code}` : ''}` +
+              `${candidateModelId ? `，已产出候选模型 ${job.candidate_model.model_code}:${job.candidate_model.version}` : ''}。`;
+            const actions = [
+              {
+                id: `open-training-${jobId}`,
+                label: '打开训练中心',
+                kind: 'navigate',
+                path: buildTrainingExpertPath(taskType || String(job?.target_model_code || '').trim()),
+                primary: true,
+              },
+            ];
+            if (candidateModelId && String(job?.candidate_model?.status || '').trim() === 'SUBMITTED') {
+              actions.push({
+                id: `approve-model-${candidateModelId}`,
+                label: '直接审批这版模型',
+                kind: 'approve_model',
+                model_id: candidateModelId,
+              });
+            } else if (candidateModelId && String(job?.candidate_model?.status || '').trim() === 'APPROVED') {
+              actions.push({
+                id: `release-model-${candidateModelId}`,
+                label: '直接发布这版模型',
+                kind: 'release_model',
+                model_id: candidateModelId,
+              });
+            }
+            replaceSessionMessage(currentSession.session_id, typingMessage.id, buildMessage({
+              role: 'assistant',
+              kind: 'text',
+              text: trainingText,
+              actions,
+            }));
+            touchConversationSession(currentSession.session_id, {
+              summary: trainingText,
+              last_message_preview: trainingText,
+              task_type: String(job?.target_model_code || currentSession?.task_type || '').trim(),
+            });
+          } catch (error) {
+            replaceSessionMessage(currentSession.session_id, typingMessage.id, buildMessage({
+              role: 'assistant',
+              kind: 'text',
+              text: error.message || '刷新训练状态失败',
+              error: error.message || '刷新训练状态失败',
+            }));
+            ctx.toast(error.message || '刷新训练状态失败', 'error');
+          } finally {
+            busy = false;
+            updateSessionSnapshot();
+            rerender();
+          }
+        }
+
+        async function executeConversationModelApprove(action, currentSession) {
+          const modelId = String(action?.model_id || '').trim();
+          if (!modelId) {
+            ctx.toast('当前没有可审批的模型。', 'error');
+            return;
+          }
+          busy = true;
+          const typingMessage = buildMessage({
+            role: 'assistant',
+            kind: 'typing',
+            status: 'streaming',
+            text: '',
+          });
+          appendSessionMessage(currentSession.session_id, typingMessage);
+          rerender();
+          try {
+            const workbench = await ctx.get(`/models/${encodeURIComponent(modelId)}/approval-workbench`);
+            const validationReport = workbench?.readiness?.validation_report || {};
+            const approved = await ctx.post('/models/approve', {
+              model_id: modelId,
+              validation_asset_ids: Array.isArray(validationReport?.validation_asset_ids) ? validationReport.validation_asset_ids : [],
+              validation_result: String(validationReport?.validation_result || 'passed').trim() || 'passed',
+              validation_summary: String(validationReport?.summary || '').trim() || '会话内审批通过',
+            });
+            localStorage.setItem(STORAGE_KEYS.focusModelId, String(approved?.model_id || modelId));
+            const approvalText = `模型审批已提交。当前模型状态 ${approved?.status || 'APPROVED'}。${String(approved?.validation_summary || '').trim() || '自动验证通过。'}`;
+            replaceSessionMessage(currentSession.session_id, typingMessage.id, buildMessage({
+              role: 'assistant',
+              kind: 'text',
+              text: approvalText,
+              actions: [
+                {
+                  id: `release-model-${modelId}`,
+                  label: '直接发布这版模型',
+                  kind: 'release_model',
+                  model_id: modelId,
+                  primary: true,
+                },
+                {
+                  id: `open-model-${modelId}`,
+                  label: '打开模型中心',
+                  kind: 'navigate',
+                  path: 'models',
+                },
+              ],
+            }));
+            touchConversationSession(currentSession.session_id, {
+              summary: approvalText,
+              last_message_preview: approvalText,
+            });
+            ctx.toast('模型已审批');
+          } catch (error) {
+            replaceSessionMessage(currentSession.session_id, typingMessage.id, buildMessage({
+              role: 'assistant',
+              kind: 'text',
+              text: error.message || '审批模型失败',
+              error: error.message || '审批模型失败',
+            }));
+            ctx.toast(error.message || '审批模型失败', 'error');
+          } finally {
+            busy = false;
+            updateSessionSnapshot();
+            rerender();
+          }
+        }
+
+        async function executeConversationModelRelease(action, currentSession) {
+          const modelId = String(action?.model_id || '').trim();
+          if (!modelId) {
+            ctx.toast('当前没有可发布的模型。', 'error');
+            return;
+          }
+          busy = true;
+          const typingMessage = buildMessage({
+            role: 'assistant',
+            kind: 'typing',
+            status: 'streaming',
+            text: '',
+          });
+          appendSessionMessage(currentSession.session_id, typingMessage);
+          rerender();
+          try {
+            const workbench = await ctx.get(`/models/${encodeURIComponent(modelId)}/release-workbench`);
+            const recommended = workbench?.recommended_release || {};
+            const released = await ctx.post('/models/release', {
+              model_id: modelId,
+              target_devices: Array.isArray(recommended?.target_devices) ? recommended.target_devices : [],
+              target_buyers: Array.isArray(recommended?.target_buyers) ? recommended.target_buyers : [],
+              delivery_mode: String(recommended?.delivery_mode || 'local_key').trim(),
+              authorization_mode: String(recommended?.authorization_mode || 'device_key').trim(),
+              runtime_encryption: recommended?.runtime_encryption !== false,
+              api_access_key_label: recommended?.api_access_key_label || null,
+              local_key_label: recommended?.local_key_label || null,
+            });
+            localStorage.setItem(STORAGE_KEYS.focusModelId, String(released?.model_id || modelId));
+            const releaseText = `模型已发布。发布记录 ${released?.release_id || '-'}，状态 ${released?.status || 'RELEASED'}。`;
+            replaceSessionMessage(currentSession.session_id, typingMessage.id, buildMessage({
+              role: 'assistant',
+              kind: 'text',
+              text: releaseText,
+              actions: [
+                {
+                  id: `open-model-${modelId}`,
+                  label: '查看已发布模型',
+                  kind: 'navigate',
+                  path: 'models',
+                  primary: true,
+                },
+                {
+                  id: 'open-dashboard',
+                  label: '返回工作台',
+                  kind: 'navigate',
+                  path: 'dashboard',
+                },
+              ],
+            }));
+            touchConversationSession(currentSession.session_id, {
+              summary: releaseText,
+              last_message_preview: releaseText,
+            });
+            ctx.toast('模型已发布');
+          } catch (error) {
+            replaceSessionMessage(currentSession.session_id, typingMessage.id, buildMessage({
+              role: 'assistant',
+              kind: 'text',
+              text: error.message || '发布模型失败',
+              error: error.message || '发布模型失败',
+            }));
+            ctx.toast(error.message || '发布模型失败', 'error');
+          } finally {
+            busy = false;
+            updateSessionSnapshot();
+            rerender();
+          }
+        }
+
+        async function executeConversationTask(action, currentSession, plan, draft) {
+          const assetIds = [
+            ...new Set([
+              ...((Array.isArray(currentSession?.asset_ids) ? currentSession.asset_ids : []).map((item) => String(item || '').trim()).filter(Boolean)),
+              ...((Array.isArray(draft?.asset_ids) ? draft.asset_ids : []).map((item) => String(item || '').trim()).filter(Boolean)),
+              ...messages.flatMap((message) => Array.isArray(message.attachments) ? message.attachments : []).map((item) => String(item?.asset_id || '').trim()).filter(Boolean),
+            ]),
+          ];
+          const assetId = String(action?.prefill?.taskAssetId || assetIds[0] || '').trim();
+          const modelId = String(action?.prefill?.taskModelId || '').trim();
+          const taskType = String(action?.prefill?.taskType || draft?.task_type || currentSession?.task_type || plan?.inferred_task_type || '').trim();
+          if (!assetId) {
+            ctx.toast('当前还没有可执行的样例资产，请先上传图片。', 'error');
+            return;
+          }
+          if (!modelId) {
+            ctx.toast('当前动作缺少模型编号，暂时不能直接识别。', 'error');
+            return;
+          }
+          busy = true;
+          const typingMessage = buildMessage({
+            role: 'assistant',
+            kind: 'typing',
+            status: 'streaming',
+            text: '',
+          });
+          appendSessionMessage(currentSession.session_id, typingMessage);
+          rerender();
+          try {
+            const created = await ctx.post('/tasks/create', {
+              model_id: modelId,
+              asset_id: assetId,
+              task_type: taskType || null,
+              use_master_scheduler: false,
+              intent_text: String(plan?.goal || draft?.goal || currentSession?.title || '').trim(),
+              context: {},
+              options: {},
+            });
+            localStorage.setItem(STORAGE_KEYS.lastTaskId, String(created?.id || ''));
+            const settled = await waitForConversationTaskTerminal(created.id);
+            const rows = await ctx.get(`/results${toQuery({ task_id: created.id })}`).catch(() => []);
+            const summaries = (Array.isArray(rows) ? rows : []).map((row) => summarizeResultRow(row));
+            const recognizedTexts = [...new Set(summaries.flatMap((item) => item.recognizedTexts || []).filter(Boolean))];
+            const objectCount = summaries.reduce((sum, item) => sum + Number(item.objectCount || 0), 0);
+            const resultText = recognizedTexts.length
+              ? `识别已完成。任务 ${created.id} 共返回 ${rows.length} 条结果，识别文本：${recognizedTexts.slice(0, 6).join(' / ')}。`
+              : `识别已完成。任务 ${created.id} 共返回 ${rows.length} 条结果，命中 ${objectCount} 个对象。`;
+            const resultMessage = buildMessage({
+              role: 'assistant',
+              kind: 'text',
+              text: resultText,
+              actions: buildInferenceFollowupActions({
+                taskId: created.id,
+                taskType,
+                modelId,
+                assetIds,
+              }),
+            });
+            replaceSessionMessage(currentSession.session_id, typingMessage.id, resultMessage);
+            touchConversationSession(currentSession.session_id, {
+              title: currentSession.title,
+              summary: resultText,
+              task_type: taskType,
+              asset_ids: assetIds,
+              last_task_id: created.id,
+              last_message_preview: resultText,
+            });
+            ctx.toast('识别已完成');
+          } catch (error) {
+            replaceSessionMessage(currentSession.session_id, typingMessage.id, buildMessage({
+              role: 'assistant',
+              kind: 'text',
+              text: error.message || '识别执行失败',
+              error: error.message || '识别执行失败',
+            }));
+            ctx.toast(error.message || '识别执行失败', 'error');
+          } finally {
+            busy = false;
+            updateSessionSnapshot();
+            rerender();
+          }
         }
 
         function rerender() {
@@ -2361,7 +2974,8 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
             persistActiveAiSessionId(currentSession.session_id);
             session = currentSession;
           }
-          const workflowContext = syncAiDraft(text, attachments);
+          const chatOnlyGoal = intentFromGoal(text) === 'chat';
+          const workflowContext = chatOnlyGoal ? null : syncAiDraft(text, attachments);
           const conversationHistory = buildConversationHistoryContext(messages, 8);
           const memoryContext = buildAiMemoryContext(readAiMemoryEntries(), 8);
           const userMessage = buildMessage({
@@ -2408,7 +3022,7 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
               asset_ids: attachments.map((item) => item.asset_id).filter(Boolean),
               current_task_type: '',
               current_model_id: '',
-              workflow_context: workflowContext,
+              workflow_context: workflowContext || {},
               conversation_history: conversationHistory,
               memory_context: memoryContext,
               llm_mode: runtimeConfig.llmMode,
@@ -2416,24 +3030,47 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
               api_config: runtimeConfig.apiConfig,
             });
             persistAiLastPlan(plan);
+            const chatOnlyPlan = isChatOnlyPlan(plan);
+            const plannedDraft = {
+              goal: String(text || currentSession?.title || '').trim(),
+              asset_ids: attachments.map((item) => item.asset_id).filter(Boolean),
+              task_type: String(plan?.inferred_task_type || '').trim(),
+              current_model_id: attachments.length
+                ? String(plan?.primary_action?.prefill?.taskModelId || plan?.current_state?.released_model?.model_id || '').trim()
+                : '',
+              source_path: '',
+              source_label: '',
+            };
+            const resolvedWorkflow = chatOnlyPlan ? null : WorkflowStateMachine.resolve({ route, draft: plannedDraft, plan });
+            persistAiWorkflowDraft({
+              ...plannedDraft,
+              workflow_context: resolvedWorkflow?.aiContext || null,
+            });
+            const assistantSummary = String(
+              plan?.llm_advice?.summary
+              || plan?.guidance_summary
+              || plan?.primary_action?.summary
+              || '我已经整理好下一步。'
+            ).trim() || '我已经整理好下一步。';
             const assistantMessage = buildMessage({
               role: 'assistant',
               kind: 'plan',
-              text: plan.guidance_summary || plan.primary_action?.summary || '我已经整理好下一步。',
+              text: assistantSummary,
               plan,
-              workflowContext,
+              workflowContext: resolvedWorkflow?.aiContext || null,
+              actions: Array.isArray(plan?.direct_actions) ? plan.direct_actions : [],
             });
             replaceSessionMessage(currentSession.session_id, typingMessage.id, assistantMessage);
             syncAiPendingConfirmations(plan, currentSession.session_id);
             touchConversationSession(currentSession.session_id, {
               title: currentSession.title || buildConversationTitle(text, attachments),
-              summary: plan.guidance_summary || plan.primary_action?.summary || '',
+              summary: assistantMessage.text,
               task_type: plan.inferred_task_type || '',
               asset_ids: attachments.map((item) => item.asset_id).filter(Boolean),
-              workflow_path: workflowRouteForAction(plan.primary_action || {}),
-              expert_path: plan.primary_action?.expert_path || plan.primary_action?.path || '',
+              workflow_path: chatOnlyPlan ? '' : workflowRouteForAction(plan.primary_action || {}),
+              expert_path: chatOnlyPlan ? '' : (plan.primary_action?.expert_path || plan.primary_action?.path || ''),
               primary_action: plan.primary_action || null,
-              workflow_context: workflowContext,
+              workflow_context: resolvedWorkflow?.aiContext || null,
               last_message_preview: assistantMessage.text,
               provider_id: String(plan?.provider_used?.provider_id || activeProvider?.id || '').trim(),
               model_name: String(plan?.provider_used?.model_name || activeProvider?.model_name || '').trim(),
@@ -2454,13 +3091,28 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
               currentModelId: '',
             });
             persistAiLastPlan(plan);
+            const chatOnlyPlan = isChatOnlyPlan(plan);
+            const fallbackDraft = {
+              goal: String(text || currentSession?.title || '').trim(),
+              asset_ids: attachments.map((item) => item.asset_id).filter(Boolean),
+              task_type: String(plan?.inferred_task_type || '').trim(),
+              current_model_id: '',
+              source_path: '',
+              source_label: '',
+            };
+            const fallbackResolvedWorkflow = chatOnlyPlan ? null : WorkflowStateMachine.resolve({ route, draft: fallbackDraft, plan });
+            persistAiWorkflowDraft({
+              ...fallbackDraft,
+              workflow_context: fallbackResolvedWorkflow?.aiContext || null,
+            });
             const fallbackMessage = buildMessage({
               role: 'assistant',
               kind: 'plan',
               text: plan.guidance_summary || '智能规划服务暂时不可用，已切到本地规则引擎。',
               plan,
-              workflowContext,
-              error: '已切换到本地规则引擎。可继续当前流程；如果持续失败，再看详细日志。',
+              workflowContext: fallbackResolvedWorkflow?.aiContext || null,
+              actions: Array.isArray(plan?.direct_actions) ? plan.direct_actions : [],
+              error: chatOnlyPlan ? '' : '已切换到本地规则引擎。可继续当前流程；如果持续失败，再看详细日志。',
             });
             replaceSessionMessage(currentSession.session_id, typingMessage.id, fallbackMessage);
             syncAiPendingConfirmations(plan, currentSession.session_id);
@@ -2469,14 +3121,14 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
               summary: fallbackMessage.text,
               task_type: plan.inferred_task_type || '',
               asset_ids: attachments.map((item) => item.asset_id).filter(Boolean),
-              workflow_path: workflowRouteForAction(plan.primary_action || {}),
-              expert_path: plan.primary_action?.expert_path || plan.primary_action?.path || '',
+              workflow_path: chatOnlyPlan ? '' : workflowRouteForAction(plan.primary_action || {}),
+              expert_path: chatOnlyPlan ? '' : (plan.primary_action?.expert_path || plan.primary_action?.path || ''),
               primary_action: plan.primary_action || null,
-              workflow_context: workflowContext,
+              workflow_context: fallbackResolvedWorkflow?.aiContext || null,
               last_message_preview: fallbackMessage.text,
               ...currentProviderPatch(activeProvider),
             });
-            ctx.toast('智能规划服务暂时不可用，已切换到本地规则引擎。', 'error');
+            if (!chatOnlyPlan) ctx.toast('智能规划服务暂时不可用，已切换到本地规则引擎。', 'error');
           } finally {
             busy = false;
             updateSessionSnapshot();
@@ -2489,14 +3141,57 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
           }
         }
 
-        function runConversationAction(kind, secondaryActionId = '') {
+        async function runConversationAction(kind, secondaryActionId = '', messageId = '') {
           const currentSession = session || (routeSessionId ? listConversationSessions().find((item) => item.session_id === routeSessionId) : null);
           const latestPlan = readAiLastPlan();
           const plan = messages.slice().reverse().find((item) => item.plan)?.plan || latestPlan;
+          const sourceMessage = String(messageId || '').trim()
+            ? messages.find((item) => item.id === messageId) || null
+            : null;
+          const directAction = kind === 'direct'
+            ? (Array.isArray(sourceMessage?.actions) ? sourceMessage.actions : []).find((item) => item?.id === secondaryActionId)
+            : null;
           const action = kind === 'secondary'
             ? [plan?.primary_action, ...(plan?.secondary_actions || [])].find((item) => item?.action_id === secondaryActionId)
-            : plan?.primary_action || currentSession?.primary_action;
+            : kind === 'direct'
+              ? directAction
+              : plan?.primary_action || currentSession?.primary_action;
           if (!action) return;
+          if (kind === 'direct') {
+            if (String(action.kind || '') === 'navigate') {
+              if (String(action.asset_id || '').trim() || String(action.dataset_version_id || '').trim()) {
+                persistConversationTrainingPrefill({
+                  assetId: action.asset_id,
+                  taskType: action.task_type || currentSession?.task_type || '',
+                  modelId: action.model_id || '',
+                  datasetLabel: action.dataset_label || '',
+                  datasetVersionId: action.dataset_version_id || '',
+                });
+              }
+              ctx.navigate(action.path || 'ai');
+              return;
+            }
+            if (String(action.kind || '') === 'export_result_dataset') {
+              await executeConversationDatasetExport(action, currentSession);
+              return;
+            }
+            if (String(action.kind || '') === 'create_training_job') {
+              await executeConversationTrainingJob(action, currentSession);
+              return;
+            }
+            if (String(action.kind || '') === 'refresh_training_job') {
+              await executeConversationTrainingStatus(action, currentSession);
+              return;
+            }
+            if (String(action.kind || '') === 'approve_model') {
+              await executeConversationModelApprove(action, currentSession);
+              return;
+            }
+            if (String(action.kind || '') === 'release_model') {
+              await executeConversationModelRelease(action, currentSession);
+              return;
+            }
+          }
           const workflowPath = workflowRouteForAction(action);
           const existingDraft = readAiWorkflowDraft();
           const mergedAssetIds = [...new Set([
@@ -2514,6 +3209,10 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
               || existingDraft?.workflow_context
               || null,
           };
+          if (String(action?.kind || '').trim() === 'run_task' || String(action?.action_id || '').trim() === 'run_inference_with_model') {
+            await executeConversationTask(action, currentSession, plan, draft);
+            return;
+          }
           persistAiWorkflowDraft(draft);
           rememberAiNavigationAndPrefill({
             targetPath: kind === 'expert' ? (action.expert_path || action.path || 'dashboard') : workflowPath,
@@ -2665,10 +3364,11 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
             });
           });
           root.querySelectorAll('[data-conversation-action]').forEach((button) => {
-            button.addEventListener('click', () => {
-              runConversationAction(
+            button.addEventListener('click', async () => {
+              await runConversationAction(
                 button.getAttribute('data-conversation-action') || '',
-                button.getAttribute('data-conversation-secondary') || '',
+                button.getAttribute('data-conversation-secondary') || button.getAttribute('data-conversation-direct') || '',
+                button.getAttribute('data-conversation-message') || '',
               );
             });
           });
@@ -3026,7 +3726,7 @@ function pageDashboard(route, rawCtx) {
         <div class="hero-copy">
           <span class="hero-eyebrow">${esc(preset.eyebrow)}</span>
           <h2>${esc(preset.title)}</h2>
-          <p>${esc(preset.subtitle)}</p>
+          <p>工作台现在只负责恢复当前上下文、继续最近执行和回到 AI 会话。复杂操作不再在这里平铺展开。</p>
           <div class="role-chip-row">
             <span class="role-chip">${esc(roleLabel(userRole))}</span>
             ${roleBadges.slice(1).map((item) => `<span class="role-chip muted">${esc(item)}</span>`).join('')}
@@ -3041,8 +3741,8 @@ function pageDashboard(route, rawCtx) {
       <section class="card dashboard-entry-card">
         <div class="dashboard-entry-head">
           <div>
-            <h3>快捷切换</h3>
-            <p class="hint">当前闭环会优先显示在上方；这里仅保留少量直达入口，用于人工切换到资产、模型或任务工作区。</p>
+            <h3>继续当前工作</h3>
+            <p class="hint">优先回到 AI 会话完成大多数任务；只有需要细调参数或人工治理时，再进入专家页。</p>
           </div>
           <div class="selection-summary dashboard-focus-summary">
             <strong>当前角色重点</strong>
@@ -3050,60 +3750,40 @@ function pageDashboard(route, rawCtx) {
           </div>
         </div>
         <div class="quick-action-grid">
-          ${availableActions.length
-            ? availableActions.map((item, index) => `<button class="${index === 0 ? 'primary' : 'ghost'} quick-action-btn" data-dashboard-nav="${esc(item.path)}">${esc(item.label)}</button>`).join('')
-            : '<div class="state empty">当前角色暂无推荐动作</div>'}
+          <button class="primary quick-action-btn" type="button" data-dashboard-nav="ai">回到 AI 会话</button>
+          ${availableActions.slice(0, 2).map((item) => `<button class="ghost quick-action-btn" type="button" data-dashboard-nav="${esc(item.path)}">${esc(item.label)}</button>`).join('')}
         </div>
       </section>
       <section class="card">
-        <div class="workspace-switcher">
-          <button class="ghost" type="button" data-dashboard-panel-tab="overview">工作台总览</button>
-          <button class="ghost" type="button" data-dashboard-panel-tab="assets">最近资产</button>
-          <button class="ghost" type="button" data-dashboard-panel-tab="models">最近模型</button>
-          <button class="ghost" type="button" data-dashboard-panel-tab="tasks">最近任务</button>
+        <div class="selection-card-head">
+          <strong>当前上下文</strong>
+          <span class="hint">这里只保留继续下一步所需的最小状态。</span>
         </div>
-        <div id="dashboardPanelMeta" class="hint">默认先看工作台总览；最近资产、模型、任务按需进入，不再一次性全铺开。</div>
+        <div id="dashboardContextGrid">${renderLoading('加载当前上下文...')}</div>
       </section>
-      <section class="card" data-dashboard-panel="overview">
-        <div class="workspace-switcher">
-          <button class="ghost" type="button" data-dashboard-overview-tab="lanes">主线指标</button>
-          <button class="ghost" type="button" data-dashboard-overview-tab="real-data">真实数据盘</button>
+      <section class="card">
+        <div class="selection-card-head">
+          <strong>最近执行</strong>
+          <span class="hint">最近资产、模型、任务各只保留一条最值得继续的主线。</span>
         </div>
-        <div id="dashboardOverviewMeta" class="hint">默认先看四条主线指标；需要确认真实资产和车号数据基础盘时，再进入真实数据盘。</div>
+        <div id="dashboardResumeGrid">${renderLoading('加载最近执行...')}</div>
       </section>
-      <section class="lane-grid" id="laneGrid" data-dashboard-panel="overview" data-dashboard-overview-panel="lanes">${renderLoading('加载主线指标...')}</section>
-      <section class="lane-grid" id="realDataGrid" data-dashboard-panel="overview" data-dashboard-overview-panel="real-data" hidden>${renderLoading('加载真实数据来源...')}</section>
-      <section class="card" data-dashboard-panel="assets" hidden>
-        <h3>最近资产</h3>
-        <div id="recentAssets">${renderLoading()}</div>
-      </section>
-      <section class="card" data-dashboard-panel="models" hidden>
-        <h3>最近模型</h3>
-        <div id="recentModels">${renderLoading()}</div>
-      </section>
-      <section class="card" data-dashboard-panel="tasks" hidden>
-        <h3>最近任务</h3>
-        <div id="recentTasks">${renderLoading()}</div>
+      <section class="card">
+        <div class="selection-card-head">
+          <strong>运行概况</strong>
+          <span class="hint">保留少量核心数值，用来判断该继续验证、训练还是发布。</span>
+        </div>
+        <div id="dashboardExecutionMetrics">${renderLoading('加载运行概况...')}</div>
       </section>
     `,
     async mount(root) {
       root.querySelectorAll('[data-dashboard-nav]').forEach((btn) => {
         btn.addEventListener('click', () => ctx.navigate(btn.getAttribute('data-dashboard-nav')));
       });
-      const dashboardPanelMeta = root.querySelector('#dashboardPanelMeta');
-      const dashboardPanelTabs = Array.from(root.querySelectorAll('[data-dashboard-panel-tab]'));
-      const dashboardPanels = Array.from(root.querySelectorAll('[data-dashboard-panel]'));
-      const dashboardOverviewMeta = root.querySelector('#dashboardOverviewMeta');
-      const dashboardOverviewTabs = Array.from(root.querySelectorAll('[data-dashboard-overview-tab]'));
-      const dashboardOverviewPanels = Array.from(root.querySelectorAll('[data-dashboard-overview-panel]'));
-      const laneGrid = root.querySelector('#laneGrid');
-      const realDataGrid = root.querySelector('#realDataGrid');
-      const recentAssets = root.querySelector('#recentAssets');
-      const recentModels = root.querySelector('#recentModels');
-      const recentTasks = root.querySelector('#recentTasks');
+      const contextGrid = root.querySelector('#dashboardContextGrid');
+      const resumeGrid = root.querySelector('#dashboardResumeGrid');
+      const metricsGrid = root.querySelector('#dashboardExecutionMetrics');
       const dashboardFlowCard = root.querySelector('#dashboardFlowCard');
-      let activeDashboardPanel = 'overview';
-      let activeDashboardOverviewPanel = 'lanes';
 
       function updateWorkbenchDraft(patch = {}, { touchStep = '' } = {}) {
         const currentDraft = readAiWorkflowDraft();
@@ -3242,62 +3922,6 @@ function pageDashboard(route, rawCtx) {
         });
       }
 
-      function setDashboardOverviewPanel(panel) {
-        activeDashboardOverviewPanel = ['lanes', 'real-data'].includes(panel) ? panel : 'lanes';
-        dashboardOverviewPanels.forEach((section) => {
-          section.hidden = section.getAttribute('data-dashboard-overview-panel') !== activeDashboardOverviewPanel;
-        });
-        dashboardOverviewTabs.forEach((btn) => {
-          const active = btn.getAttribute('data-dashboard-overview-tab') === activeDashboardOverviewPanel;
-          btn.classList.toggle('primary', active);
-          btn.classList.toggle('ghost', !active);
-          btn.setAttribute('aria-pressed', active ? 'true' : 'false');
-        });
-        if (dashboardOverviewMeta) {
-          dashboardOverviewMeta.textContent = activeDashboardOverviewPanel === 'lanes'
-            ? '先看四条主线指标，确认资产、模型、执行和设备运行面。'
-            : '需要确认真实演示资产、车号样本和 OCR 训练包时，再进入真实数据盘。';
-        }
-      }
-
-      function setDashboardPanel(panel) {
-        activeDashboardPanel = panel;
-        dashboardPanelTabs.forEach((btn) => {
-          const active = btn.getAttribute('data-dashboard-panel-tab') === panel;
-          btn.classList.toggle('primary', active);
-          btn.classList.toggle('ghost', !active);
-        });
-        dashboardPanels.forEach((section) => {
-          if (section.hasAttribute('data-dashboard-overview-panel')) return;
-          section.hidden = section.getAttribute('data-dashboard-panel') !== panel;
-        });
-        if (panel === 'overview') {
-          setDashboardOverviewPanel(activeDashboardOverviewPanel);
-        } else {
-          dashboardOverviewPanels.forEach((section) => {
-            section.hidden = true;
-          });
-        }
-        if (dashboardPanelMeta) {
-          dashboardPanelMeta.textContent = ({
-            overview: '先看当前角色重点、主线指标和真实数据基础盘。',
-            assets: '聚焦最近准备好的真实资产，适合继续去任务、训练或验证。',
-            models: '查看最近模型状态，决定是继续验证、审批还是发布。',
-            tasks: '查看最近任务执行情况，快速进入结果或任务详情。',
-          })[panel] || '按当前工作区继续查看。';
-        }
-      }
-
-      dashboardPanelTabs.forEach((btn) => {
-        btn.addEventListener('click', () => {
-          setDashboardPanel(btn.getAttribute('data-dashboard-panel-tab') || 'overview');
-        });
-      });
-      dashboardOverviewTabs.forEach((btn) => {
-        btn.addEventListener('click', () => {
-          setDashboardOverviewPanel(btn.getAttribute('data-dashboard-overview-tab') || 'lanes');
-        });
-      });
       try {
         const data = await ctx.get('/dashboard/summary');
         const dashboardPlan = readAiLastPlan();
@@ -3312,176 +3936,124 @@ function pageDashboard(route, rawCtx) {
           });
           bindDashboardFlowCard();
         }
-        const lanes = data?.lanes || {};
-        const hygiene = data?.hygiene || {};
-        const realData = data?.real_data || {};
-        laneGrid.innerHTML = `
-          <article class="lane-card">
-            <h4>主线1 资产输入</h4>
-            <p class="metric">${lanes.line1_assets?.total_assets ?? 0}</p>
-            <p class="muted">可用于训练 / 验证 / 推理的真实资产总量${Number(hygiene.hidden_assets || 0) > 0 ? ` · 已隐藏 ${Number(hygiene.hidden_assets)} 个测试/截图资产` : ''}</p>
-          </article>
-          <article class="lane-card">
-            <h4>主线2 模型交付与微调</h4>
-            <p class="metric">${lanes.line2_models_training?.models_submitted ?? 0} / ${lanes.line2_models_training?.models_released ?? 0}</p>
-            <p class="muted">待审模型 / 已发布模型${Number(hygiene.hidden_models || 0) > 0 ? ` · 已隐藏 ${Number(hygiene.hidden_models)} 个测试候选` : ''}</p>
-          </article>
-          <article class="lane-card">
-            <h4>主线3 验证与执行</h4>
-            <p class="metric">${lanes.line3_execution?.tasks_succeeded ?? 0}</p>
-            <p class="muted">成功任务数（累计）${Number(hygiene.hidden_tasks || 0) > 0 ? ` · 已隐藏 ${Number(hygiene.hidden_tasks)} 条测试任务` : ''}</p>
-          </article>
-          <article class="lane-card">
-            <h4>主线4 授权设备运行</h4>
-            <p class="metric">${lanes.line4_governance_delivery?.devices_online ?? 0} / ${lanes.line4_governance_delivery?.devices_total ?? 0}</p>
-            <p class="muted">在线设备 / 设备总数</p>
-          </article>
-        `;
-        realDataGrid.innerHTML = `
-          <article class="lane-card">
-            <h4>真实演示资产</h4>
-            <p class="metric">${realData.demo_assets ?? 0}</p>
-            <p class="muted">来自 demo_data / 演示导入的真实图片、视频和本地训练包</p>
-          </article>
-          <article class="lane-card">
-            <h4>本地车号样本</h4>
-            <p class="metric">${realData.local_train_images ?? 0}</p>
-            <p class="muted">demo_data/train 内已整理好的现有车号照片</p>
-          </article>
-          <article class="lane-card">
-            <h4>待复核文本行</h4>
-            <p class="metric">${realData.labeling_rows ?? 0}</p>
-            <p class="muted">车号 OCR 文本标注清单总行数</p>
-          </article>
-          <article class="lane-card">
-            <h4>OCR 文本训练包</h4>
-            <p class="metric">${realData.text_train_rows ?? 0} / ${realData.text_validation_rows ?? 0}</p>
-            <p class="muted">当前真值/建议值回灌后的 train / validation 行数</p>
-          </article>
-        `;
-
         const assets = data?.recent?.assets || [];
         const models = data?.recent?.models || [];
         const tasks = data?.recent?.tasks || [];
-        recentAssets.innerHTML = assets.length
-          ? `
+        const currentAsset = assets[0] || null;
+        const currentModel = models[0] || null;
+        const currentTask = tasks[0] || null;
+        if (contextGrid) {
+          contextGrid.innerHTML = `
             <div class="selection-grid">
-              ${assets.slice(0, 6).map((row) => `
-                <article class="selection-card">
-                  <div class="selection-card-head selection-card-head--stack">
-                    <div class="selection-card-title">
-                      <strong>${esc(row.file_name)}</strong>
-                      <span class="selection-card-subtitle">${esc(enumText('asset_purpose', row.asset_purpose || 'inference'))}</span>
-                    </div>
-                    <span class="badge">${esc(enumText('sensitivity_level', row.sensitivity_level || 'L2'))}</span>
-                  </div>
-                  <div class="selection-card-meta selection-card-meta--compact">
-                    <span>资源类型</span><strong>${esc(row.asset_type || '-')}</strong>
-                    <span>创建时间</span><strong>${formatDateTime(row.created_at)}</strong>
-                    <span>资源数</span><strong>${esc(row.resource_count ?? '-')}</strong>
-                    <span>下一步</span><strong>用于任务 / 训练 / 验证</strong>
-                  </div>
-                  <details class="inline-details">
-                    <summary>技术详情</summary>
-                    <div class="details-panel">
-                      <div class="selection-card-meta selection-card-meta--compact">
-                        <span>资产编号</span><strong class="mono">${esc(truncateMiddle(row.id || '-', 10, 8))}</strong>
-                        <span>数据集标签</span><strong>${esc(row.dataset_label || '-')}</strong>
-                        <span>目标模型</span><strong>${esc(row.intended_model_code || '-')}</strong>
-                      </div>
-                    </div>
-                  </details>
-                  <div class="selection-card-actions">
-                    <button class="ghost" type="button" data-dashboard-asset-nav="tasks" data-dashboard-step="results" data-dashboard-asset-id="${esc(row.id || '')}" data-dashboard-task-type="${esc(row.intended_model_code || '')}">去验证</button>
-                    <button class="ghost" type="button" data-dashboard-asset-nav="${esc(buildTrainingExpertPath(row.intended_model_code || ''))}" data-dashboard-step="train" data-dashboard-asset-id="${esc(row.id || '')}" data-dashboard-task-type="${esc(row.intended_model_code || '')}">加入训练</button>
-                  </div>
-                </article>
-              `).join('')}
+              <article class="selection-card">
+                <div class="selection-card-head"><strong>当前目标</strong></div>
+                <div class="selection-summary">
+                  <span>${esc(String(dashboardDraft?.goal || dashboardPlan?.goal || '还没有明确目标').trim() || '还没有明确目标')}</span>
+                  <span>${esc(dashboardDraft?.task_type ? `任务类型：${aiTaskLabel(dashboardDraft.task_type)}` : '下一条高频动作应先从 AI 会话里明确目标。')}</span>
+                </div>
+              </article>
+              <article class="selection-card">
+                <div class="selection-card-head"><strong>当前资源</strong></div>
+                <div class="selection-summary">
+                  <span>${esc(dashboardDraft?.asset_ids?.length ? `已带入 ${dashboardDraft.asset_ids.length} 个资源` : '还没有带入样例资源')}</span>
+                  <span>${esc(dashboardDraft?.current_model_id ? `当前模型：${truncateMiddle(dashboardDraft.current_model_id, 10, 8)}` : '当前还没固定模型')}</span>
+                </div>
+              </article>
+              <article class="selection-card">
+                <div class="selection-card-head"><strong>当前执行状态</strong></div>
+                <div class="selection-summary">
+                  <span>${esc(dashboardDraft?.last_task_id ? `最近任务：${truncateMiddle(dashboardDraft.last_task_id, 10, 8)}` : '还没有最近任务')}</span>
+                  <span>${esc(dashboardResolved?.nextStep?.title ? `下一步：${dashboardResolved.nextStep.title}` : '下一步会由 AI 根据上下文判断。')}</span>
+                </div>
+              </article>
             </div>
-          `
-          : renderEmpty('暂无资产');
-        recentModels.innerHTML = models.length
-          ? `
+          `;
+        }
+        if (resumeGrid) {
+          resumeGrid.innerHTML = `
             <div class="selection-grid">
-              ${models.slice(0, 6).map((row) => `
-                <article class="selection-card">
-                  <div class="selection-card-head selection-card-head--stack">
-                    <div class="selection-card-title">
-                      <strong>${esc(row.model_code || '-')}</strong>
-                      <span class="selection-card-subtitle">${esc(row.version || '-')}</span>
-                    </div>
-                    <span class="badge">${esc(enumText('model_status', row.status || '-'))}</span>
+              <article class="selection-card">
+                <div class="selection-card-head selection-card-head--stack">
+                  <div class="selection-card-title">
+                    <strong>${esc(currentAsset?.file_name || '最近资产')}</strong>
+                    <span class="selection-card-subtitle">${esc(currentAsset ? enumText('asset_purpose', currentAsset.asset_purpose || 'inference') : '还没有资产')}</span>
                   </div>
-                  <div class="selection-card-meta selection-card-meta--compact">
-                    <span>任务类型</span><strong>${esc(enumText('task_type', row.task_type || '-'))}</strong>
-                    <span>来源</span><strong>${esc(enumText('model_type', row.model_type || '-') || row.model_type || '-')}</strong>
-                    <span>创建时间</span><strong>${formatDateTime(row.created_at)}</strong>
-                    <span>下一步</span><strong>${row.status === 'RELEASED' ? '可验证 / 可执行' : '审批 / 发布'}</strong>
+                  ${currentAsset ? `<span class="badge">${esc(enumText('sensitivity_level', currentAsset.sensitivity_level || 'L2'))}</span>` : ''}
+                </div>
+                <div class="selection-summary">
+                  <span>${esc(currentAsset ? '这条资源最适合继续去识别或补到训练链。' : '先上传一条单图或视频资源，AI 才能继续做识别判断。')}</span>
+                </div>
+                <div class="selection-card-actions">
+                  <button class="${currentAsset ? 'primary' : 'ghost'}" type="button" data-dashboard-asset-nav="${esc(currentAsset ? 'tasks' : 'assets')}" data-dashboard-step="${esc(currentAsset ? 'results' : 'upload')}" data-dashboard-asset-id="${esc(currentAsset?.id || '')}" data-dashboard-task-type="${esc(currentAsset?.intended_model_code || '')}">${esc(currentAsset ? '继续识别' : '先上传资产')}</button>
+                </div>
+              </article>
+              <article class="selection-card">
+                <div class="selection-card-head selection-card-head--stack">
+                  <div class="selection-card-title">
+                    <strong>${esc(currentModel?.model_code || '最近模型')}</strong>
+                    <span class="selection-card-subtitle">${esc(currentModel?.version || '还没有模型')}</span>
                   </div>
-                  <details class="inline-details">
-                    <summary>技术详情</summary>
-                    <div class="details-panel">
-                      <div class="selection-card-meta selection-card-meta--compact">
-                        <span>模型编号</span><strong class="mono">${esc(truncateMiddle(row.id || '-', 10, 8))}</strong>
-                        <span>状态</span><strong>${esc(row.status || '-')}</strong>
-                        <span>编码</span><strong>${esc(row.model_code || '-')}</strong>
-                      </div>
-                    </div>
-                  </details>
-                  <div class="selection-card-actions">
-                    <button class="ghost" type="button" data-dashboard-model-nav="${esc(row.status === 'RELEASED' ? 'tasks' : 'models')}" data-dashboard-step="${esc(row.status === 'RELEASED' ? 'results' : 'deploy')}" data-dashboard-model-id="${esc(row.id || '')}" data-dashboard-task-type="${esc(row.task_type || '')}">${esc(row.status === 'RELEASED' ? '直接验证' : '去审批发布')}</button>
+                  ${currentModel ? `<span class="badge">${esc(enumText('model_status', currentModel.status || '-'))}</span>` : ''}
+                </div>
+                <div class="selection-summary">
+                  <span>${esc(currentModel ? (currentModel.status === 'RELEASED' ? '这版模型已可直接验证或执行。' : '这版模型更适合继续审批或发布。') : '等训练或审批推进后，这里会显示最值得继续的一版模型。')}</span>
+                </div>
+                <div class="selection-card-actions">
+                  <button class="${currentModel ? 'ghost' : 'ghost'}" type="button" data-dashboard-model-nav="${esc(currentModel?.status === 'RELEASED' ? 'tasks' : 'models')}" data-dashboard-step="${esc(currentModel?.status === 'RELEASED' ? 'results' : 'deploy')}" data-dashboard-model-id="${esc(currentModel?.id || '')}" data-dashboard-task-type="${esc(currentModel?.task_type || '')}" ${currentModel ? '' : 'disabled'}>${esc(currentModel?.status === 'RELEASED' ? '直接验证' : currentModel ? '去审批发布' : '等待模型')}</button>
+                </div>
+              </article>
+              <article class="selection-card">
+                <div class="selection-card-head selection-card-head--stack">
+                  <div class="selection-card-title">
+                    <strong>${esc(currentTask ? enumText('task_type', currentTask.task_type || '-') : '最近任务')}</strong>
+                    <span class="selection-card-subtitle">${esc(currentTask ? formatDateTime(currentTask.created_at) : '还没有任务')}</span>
                   </div>
-                </article>
-              `).join('')}
+                  ${currentTask ? `<span class="badge">${esc(enumText('task_status', currentTask.status || '-'))}</span>` : ''}
+                </div>
+                <div class="selection-summary">
+                  <span>${esc(currentTask ? (currentTask.status === 'SUCCEEDED' ? '这条任务已经有结果，可以继续复核或回灌训练。' : '这条任务还没完成，适合继续查看执行与排障状态。') : '当前没有最近任务，优先让 AI 帮你决定是否先识别或训练。')}</span>
+                </div>
+                <div class="selection-card-actions">
+                  <button class="${currentTask ? 'ghost' : 'ghost'}" type="button" data-dashboard-task-nav="${esc(currentTask ? (currentTask.status === 'SUCCEEDED' ? `results/task/${currentTask.id}` : `tasks/${currentTask.id}`) : 'ai')}" data-dashboard-step="${esc(currentTask ? (currentTask.status === 'SUCCEEDED' ? 'results' : 'troubleshoot') : '')}" data-dashboard-task-id="${esc(currentTask?.id || '')}" data-dashboard-model-id="${esc(currentTask?.model_id || '')}" data-dashboard-asset-id="${esc(currentTask?.asset_id || '')}" data-dashboard-task-type="${esc(currentTask?.task_type || '')}" ${currentTask ? '' : 'disabled'}>${esc(currentTask?.status === 'SUCCEEDED' ? '查看结果' : currentTask ? '查看任务' : '等待任务')}</button>
+                </div>
+              </article>
             </div>
-          `
-          : renderEmpty('暂无模型');
-        recentTasks.innerHTML = tasks.length
-          ? `
-            <div class="selection-grid">
-              ${tasks.slice(0, 6).map((row) => `
-                <article class="selection-card">
-                  <div class="selection-card-head selection-card-head--stack">
-                    <div class="selection-card-title">
-                      <strong>${esc(enumText('task_type', row.task_type || '-'))}</strong>
-                      <span class="selection-card-subtitle">${formatDateTime(row.created_at)}</span>
-                    </div>
-                    <span class="badge">${esc(enumText('task_status', row.status || '-'))}</span>
-                  </div>
-                  <div class="selection-card-meta selection-card-meta--compact">
-                    <span>执行方式</span><strong>${row.model_id ? '按显式模型' : row.pipeline_id ? '按流水线' : '按调度器'}</strong>
-                    <span>设备</span><strong>${esc(row.device_code || '-')}</strong>
-                    <span>资产</span><strong class="mono">${esc(truncateMiddle(row.asset_id || '-', 10, 8))}</strong>
-                    <span>下一步</span><strong>${row.status === 'SUCCEEDED' ? '查看结果' : '继续等待 / 查看详情'}</strong>
-                  </div>
-                  <details class="inline-details">
-                    <summary>技术详情</summary>
-                    <div class="details-panel">
-                      <div class="selection-card-meta selection-card-meta--compact">
-                        <span>任务编号</span><strong class="mono">${esc(truncateMiddle(row.id || '-', 10, 8))}</strong>
-                        <span>流水线编号</span><strong class="mono">${esc(truncateMiddle(row.pipeline_id || '-', 10, 8))}</strong>
-                        <span>模型编号</span><strong class="mono">${esc(truncateMiddle(row.model_id || '-', 10, 8))}</strong>
-                      </div>
-                    </div>
-                  </details>
-                  <div class="selection-card-actions">
-                    <button class="ghost" type="button" data-dashboard-task-nav="${esc(row.status === 'SUCCEEDED' ? `results/task/${row.id}` : `tasks/${row.id}`)}" data-dashboard-step="${esc(row.status === 'SUCCEEDED' ? 'results' : 'troubleshoot')}" data-dashboard-task-id="${esc(row.id || '')}" data-dashboard-model-id="${esc(row.model_id || '')}" data-dashboard-asset-id="${esc(row.asset_id || '')}" data-dashboard-task-type="${esc(row.task_type || '')}">${esc(row.status === 'SUCCEEDED' ? '查看结果' : '查看任务')}</button>
-                  </div>
-                </article>
-              `).join('')}
+          `;
+        }
+        if (metricsGrid) {
+          const lanes = data?.lanes || {};
+          metricsGrid.innerHTML = `
+            <div class="workbench-overview-grid">
+              <article class="metric-card compact">
+                <h4>可用资产</h4>
+                <p class="metric">${esc(lanes.line1_assets?.total_assets ?? 0)}</p>
+                <span>当前可用于验证、训练和推理的真实资产。</span>
+              </article>
+              <article class="metric-card compact">
+                <h4>已发布模型</h4>
+                <p class="metric">${esc(lanes.line2_models_training?.models_released ?? 0)}</p>
+                <span>可直接用于 AI 会话和任务执行的模型数量。</span>
+              </article>
+              <article class="metric-card compact">
+                <h4>成功任务</h4>
+                <p class="metric">${esc(lanes.line3_execution?.tasks_succeeded ?? 0)}</p>
+                <span>最近可回看结果并继续回灌训练的执行数量。</span>
+              </article>
+              <article class="metric-card compact">
+                <h4>在线设备</h4>
+                <p class="metric">${esc(`${lanes.line4_governance_delivery?.devices_online ?? 0} / ${lanes.line4_governance_delivery?.devices_total ?? 0}`)}</p>
+                <span>用于上线验证和设备发布的当前在线状态。</span>
+              </article>
             </div>
-          `
-          : renderEmpty('暂无任务');
+          `;
+        }
         bindRecentContinuations();
       } catch (error) {
         if (dashboardFlowCard) dashboardFlowCard.innerHTML = renderError(error.message);
-        laneGrid.innerHTML = renderError(error.message);
-        realDataGrid.innerHTML = renderError(error.message);
-        recentAssets.innerHTML = renderError(error.message);
-        recentModels.innerHTML = renderError(error.message);
-        recentTasks.innerHTML = renderError(error.message);
+        if (contextGrid) contextGrid.innerHTML = renderError(error.message);
+        if (resumeGrid) resumeGrid.innerHTML = renderError(error.message);
+        if (metricsGrid) metricsGrid.innerHTML = renderError(error.message);
       }
-      setDashboardPanel(activeDashboardPanel);
     },
   };
 }

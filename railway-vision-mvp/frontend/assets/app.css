@@ -4475,11 +4475,11 @@ html[data-ui-theme="chatgpt_light"] .inline-details {
 }
 
 .assistant-plan-bubble {
-  background: rgba(255, 255, 255, 0.98);
+  background: transparent;
 }
 
 .assistant-chat-shell[data-assistant-theme="chatgpt_light"] .assistant-plan-bubble {
-  background: rgba(255, 255, 255, 0.98);
+  background: transparent;
 }
 
 .assistant-chip-row,

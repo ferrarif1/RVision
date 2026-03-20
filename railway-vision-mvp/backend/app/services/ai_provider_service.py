@@ -36,6 +36,36 @@ def _scoped_saved_provider(*, llm_mode: str, workflow_scope: str | None) -> dict
     return next((item for item in preferred if item.get("is_default")), None) or preferred[0]
 
 
+def resolve_api_fallback_provider(*, workflow_scope: str | None = None, exclude_provider_id: str = "") -> dict[str, Any] | None:
+    providers = [dict(item) for item in (load_ai_settings_state().get("providers") or []) if isinstance(item, dict)]
+    normalized_exclude = str(exclude_provider_id or "").strip()
+    candidates = []
+    for item in providers:
+        if not item.get("enabled"):
+            continue
+        if str(item.get("mode") or "").strip() != "api":
+            continue
+        if normalized_exclude and str(item.get("id") or "").strip() == normalized_exclude:
+            continue
+        if not _provider_matches_scope(item, workflow_scope):
+            continue
+        if not str(item.get("base_url") or "").strip():
+            continue
+        if not str(item.get("model_name") or "").strip():
+            continue
+        candidates.append(item)
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda item: (
+            1 if str(item.get("api_key") or "").strip() else 0,
+            1 if item.get("is_default") else 0,
+        ),
+        reverse=True,
+    )
+    return candidates[0]
+
+
 def resolve_provider_config(*, llm_mode: str, llm_selection: dict[str, Any] | None = None, api_config: dict[str, Any] | None = None, workflow_scope: str | None = None) -> dict[str, Any] | None:
     selection = llm_selection or {}
     provider_id = str(selection.get("provider_id") or (api_config or {}).get("provider_id") or "").strip()
@@ -153,7 +183,9 @@ def request_planner_completion(*, config: dict[str, Any], system_prompt: str, pa
     timeout = max(5, min(300, int(config.get("timeout") or 45)))
     max_tokens = int(config.get("max_tokens") or 900)
     if mode == "local":
-        timeout = max(timeout, 300)
+        # Local runtimes on this machine can hang for several minutes on large models.
+        # Keep the window short so the planner can fail over to a remote API promptly.
+        timeout = max(45, min(timeout, 75))
         max_tokens = min(max_tokens, 96)
         compact_payload = {
             "goal": str(payload.get("goal") or "").strip(),

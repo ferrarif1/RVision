@@ -3,7 +3,7 @@ import { createRouter } from './core/router.js';
 import { api, apiPost } from './core/api.js';
 import { setNotifier } from './core/notifier.js';
 import { buildDocumentTitle, migrateLegacyStorageKeys, STORAGE_KEYS } from './config/brand.js';
-import { removeAiMemoryEntry, removeConversationSession, saveConversationMemory } from './ai/conversation.js';
+import { reconcileConversationStorage, removeAiMemoryEntry, removeConversationSession, saveConversationMemory } from './ai/conversation.js';
 import { persistAiWorkflowDraft, readAiLastPlan, readAiWorkflowDraft } from './ai/runtime.js';
 import { WorkflowNavigationController, WorkflowSessionStore } from './ai/workflow.js';
 import { renderShell, bindShellEvents } from './layout/AppShell.js';
@@ -12,6 +12,7 @@ import { getPage } from './pages/index.js';
 const root = document.getElementById('app');
 
 migrateLegacyStorageKeys();
+reconcileConversationStorage();
 
 function applyVisualTheme(theme) {
   const normalized = theme === 'chatgpt_light' ? 'chatgpt_light' : 'chatgpt_light';

@@ -1,1 +1,0 @@
-{"base_model": null, "bias": [0.0], "epochs": 6, "feature_spec": "byte_hist16+sha3+size", "generated_at": 1773333902, "labels": ["car_number_ocr"], "learning_rate": 0.0005, "train_samples": 1, "trainer": "builtin_logreg", "val_samples": 1, "weights": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]}

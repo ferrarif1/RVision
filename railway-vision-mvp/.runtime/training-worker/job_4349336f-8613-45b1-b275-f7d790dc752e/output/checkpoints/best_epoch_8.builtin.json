@@ -1,8 +1,0 @@
-{
-  "epoch": 8,
-  "metric": "val_accuracy",
-  "value": 1.0,
-  "labels": [
-    "car_number_ocr"
-  ]
-}

@@ -131,6 +131,7 @@ function normalizeStore(store) {
 function buildWorkflowSignals(draft = {}, plan = null) {
   const goal = String(draft?.goal || plan?.goal || '').trim();
   const sourcePath = String(draft?.source_path || '').trim();
+  const allowExpertFallback = Boolean(sourcePath);
   const taskType = String(draft?.task_type || plan?.inferred_task_type || '').trim();
   const assetIds = normalizeIds(draft?.asset_ids);
   const currentState = plan?.current_state || {};
@@ -139,10 +140,10 @@ function buildWorkflowSignals(draft = {}, plan = null) {
     || currentState?.approved_model?.model_id
     || currentState?.released_model?.model_id
     || currentState?.submitted_model?.model_id
-    || localStorage.getItem(STORAGE_KEYS.focusModelId)
+    || (allowExpertFallback ? localStorage.getItem(STORAGE_KEYS.focusModelId) : '')
     || ''
   ).trim();
-  const lastTaskId = String(localStorage.getItem(STORAGE_KEYS.lastTaskId) || '').trim();
+  const lastTaskId = String(allowExpertFallback ? (localStorage.getItem(STORAGE_KEYS.lastTaskId) || '') : '').trim();
   const trainingAssetIds = splitCsv(localStorage.getItem(STORAGE_KEYS.prefillTrainingAssetIds));
   const trainingValidationAssetIds = splitCsv(localStorage.getItem(STORAGE_KEYS.prefillTrainingValidationAssetIds));
   const trainingDatasetVersionId = String(localStorage.getItem(STORAGE_KEYS.prefillTrainingDatasetVersionId) || '').trim();
@@ -216,7 +217,6 @@ function isAutoCompleted(stepKey, signals) {
     return Boolean(
       signals.hasAssets
       || signals.hasTrainingSeed
-      || signals.hasModelSeed
       || signals.hasResultSeed
     );
   }
@@ -231,7 +231,7 @@ function unlockState(stepKey, completedMap, signals, flowId) {
   }
   if (stepKey === 'deploy') {
     if (flowId === 'release' && signals.hasModelSeed) return { unlocked: true, reason: '' };
-    if (!completedMap.train && !signals.hasModelSeed) return { unlocked: false, reason: '先完成训练准备，或先带入候选模型。' };
+    if (!completedMap.train) return { unlocked: false, reason: '先完成训练准备，再继续审批与发布。' };
     return { unlocked: true, reason: '' };
   }
   if (stepKey === 'results') {

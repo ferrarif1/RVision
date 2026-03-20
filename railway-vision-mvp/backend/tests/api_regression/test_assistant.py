@@ -256,3 +256,52 @@ class AssistantRegressionTest(ApiRegressionHelper):
         finally:
             self.request_json("DELETE", f"/settings/ai/knowledge/{doc_id}", token=self.platform_token)
             self.request_json("DELETE", f"/settings/ai/providers/{provider_id}", token=self.platform_token)
+
+    def test_chat_queries_default_to_chat_without_workflow(self) -> None:
+        cases = [
+            ("测试模型名称", "model_info"),
+            ("最近训练怎么样", "training_status"),
+            ("最近结果在哪", "result_status"),
+            ("为什么最近任务失败", "troubleshoot_status"),
+        ]
+        for goal, expected_intent in cases:
+            with self.subTest(goal=goal):
+                plan = self.request_json(
+                    "POST",
+                    "/assistant/plan",
+                    token=self.buyer_token,
+                    json={
+                        "goal": goal,
+                        "llm_mode": "api",
+                    },
+                )
+                self.assertIsNone(plan.get("primary_action"))
+                self.assertEqual((plan.get("llm_advice") or {}).get("intent"), expected_intent)
+                self.assertTrue(str(plan.get("guidance_summary") or "").strip())
+
+    def test_chat_queries_return_in_conversation_direct_actions(self) -> None:
+        training_plan = self.request_json(
+            "POST",
+            "/assistant/plan",
+            token=self.buyer_token,
+            json={
+                "goal": "最近训练怎么样",
+                "llm_mode": "api",
+            },
+        )
+        training_action_kinds = [str(item.get("kind") or "").strip() for item in training_plan.get("direct_actions") or []]
+        self.assertIn("refresh_training_job", training_action_kinds)
+        self.assertIn("navigate", training_action_kinds)
+
+        result_plan = self.request_json(
+            "POST",
+            "/assistant/plan",
+            token=self.buyer_token,
+            json={
+                "goal": "最近结果在哪",
+                "llm_mode": "api",
+            },
+        )
+        result_action_kinds = [str(item.get("kind") or "").strip() for item in result_plan.get("direct_actions") or []]
+        self.assertIn("navigate", result_action_kinds)
+        self.assertIn("export_result_dataset", result_action_kinds)

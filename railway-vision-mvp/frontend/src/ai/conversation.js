@@ -12,20 +12,44 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value ?? null));
 }
 
+function derivePlanMessageText(message = {}) {
+  const plan = message?.plan && typeof message.plan === 'object' ? message.plan : null;
+  if (String(message.role || '').trim() !== 'assistant') return String(message.text || '').trim();
+  if (String(message.kind || '').trim() !== 'plan') return String(message.text || '').trim();
+  return String(
+    plan?.llm_advice?.summary
+    || message.text
+    || plan?.guidance_summary
+    || plan?.primary_action?.summary
+    || ''
+  ).trim();
+}
+
 function normalizeMessage(message = {}) {
+  const plan = message?.plan && typeof message.plan === 'object' ? clone(message.plan) : null;
+  const hasPrimaryAction = !!(plan && plan.primary_action && typeof plan.primary_action === 'object');
   return {
     id: String(message.id || '').trim(),
     role: String(message.role || 'assistant').trim() || 'assistant',
     kind: String(message.kind || 'text').trim() || 'text',
-    text: String(message.text || '').trim(),
+    text: derivePlanMessageText(message),
     created_at: String(message.created_at || new Date().toISOString()).trim(),
     status: String(message.status || 'ready').trim() || 'ready',
     attachments: Array.isArray(message.attachments) ? message.attachments.map(normalizeAttachment) : [],
-    plan: message.plan ? clone(message.plan) : null,
-    workflow_context: message.workflow_context ? clone(message.workflow_context) : null,
+    plan,
+    workflow_context: hasPrimaryAction && message.workflow_context ? clone(message.workflow_context) : null,
     actions: Array.isArray(message.actions) ? clone(message.actions) : [],
     error: String(message.error || '').trim(),
   };
+}
+
+function deriveSessionSummaryFromMessages(messages = []) {
+  const latestAssistantPlan = (Array.isArray(messages) ? messages : [])
+    .slice()
+    .reverse()
+    .find((item) => item?.role === 'assistant' && item?.kind === 'plan');
+  if (!latestAssistantPlan) return '';
+  return String(latestAssistantPlan.text || '').trim();
 }
 
 export function normalizeAttachment(attachment = {}) {
@@ -129,6 +153,51 @@ export function readAiMemoryEntries() {
 
 export function persistAiMemoryEntries(rows) {
   writeStorageJson(STORAGE_KEYS.aiMemoryEntries, (Array.isArray(rows) ? rows : []).map(normalizeMemoryEntry).slice(0, 40));
+}
+
+export function reconcileConversationStorage() {
+  const rawSessions = readAiSessions().map(normalizeSession);
+  const rawMessageMap = readAiMessageMap();
+  let changed = false;
+  const nextMessageMap = {};
+  for (const [sessionId, rows] of Object.entries(rawMessageMap || {})) {
+    const normalizedRows = (Array.isArray(rows) ? rows : []).map(normalizeMessage);
+    nextMessageMap[sessionId] = normalizedRows;
+    if (JSON.stringify(rows || []) !== JSON.stringify(normalizedRows)) {
+      changed = true;
+    }
+  }
+  const nextSessions = rawSessions.map((session) => {
+    const sessionMessages = Array.isArray(nextMessageMap[session.session_id]) ? nextMessageMap[session.session_id] : [];
+    const latestSummary = deriveSessionSummaryFromMessages(sessionMessages);
+    const latestPreview = latestSummary || session.last_message_preview;
+    const latestAssistantPlan = sessionMessages
+      .slice()
+      .reverse()
+      .find((item) => item?.role === 'assistant' && item?.kind === 'plan');
+    const latestPrimaryAction = latestAssistantPlan?.plan?.primary_action && typeof latestAssistantPlan.plan.primary_action === 'object'
+      ? clone(latestAssistantPlan.plan.primary_action)
+      : null;
+    const nextSession = normalizeSession({
+      ...session,
+      summary: latestSummary || session.summary,
+      last_message_preview: latestPreview,
+      message_count: sessionMessages.length || session.message_count,
+      primary_action: latestAssistantPlan ? latestPrimaryAction : session.primary_action,
+      workflow_context: latestPrimaryAction ? session.workflow_context : null,
+      workflow_path: latestAssistantPlan ? (latestPrimaryAction ? session.workflow_path : '') : session.workflow_path,
+      expert_path: latestAssistantPlan ? (latestPrimaryAction ? session.expert_path : '') : session.expert_path,
+    });
+    if (JSON.stringify(session) !== JSON.stringify(nextSession)) {
+      changed = true;
+    }
+    return nextSession;
+  });
+  if (changed) {
+    persistAiMessageMap(nextMessageMap);
+    persistAiSessions(nextSessions);
+  }
+  return { sessions: nextSessions, messageMap: nextMessageMap, changed };
 }
 
 export function upsertAiMemoryEntry(entry = {}) {

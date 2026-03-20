@@ -16,13 +16,13 @@ from typing import Any
 import httpx
 from sqlalchemy.orm import Session
 
-from app.db.models import DataAsset, ModelRecord
+from app.db.models import DataAsset, InferenceResult, InferenceTask, ModelRecord, TrainingJob
 from app.security.dependencies import AuthUser
 from app.security.roles import is_buyer_user
 from app.services.ai_context_service import assemble_ai_context, normalize_workflow_scope
-from app.services.ai_provider_service import request_planner_completion, resolve_provider_config, test_provider_connection
+from app.services.ai_provider_service import request_planner_completion, resolve_api_fallback_provider, resolve_provider_config, test_provider_connection
 from app.services.assistant_paths import build_training_path, build_workflow_path
-from app.services.model_router_service import TASK_TYPE_KEYWORDS, TASK_TYPE_LABELS, recommend_small_models
+from app.services.model_router_service import TASK_TYPE_KEYWORDS, TASK_TYPE_LABELS, recommend_small_models, task_type_from_model
 
 UTC = timezone.utc
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -669,7 +669,8 @@ def _infer_task_type_from_goal(goal: str) -> tuple[str | None, list[str]]:
             best_score = score
             matched_terms = local_terms
     if best_task:
-        return best_task, [f"命中目标词：{', '.join(dict.fromkeys(matched_terms)[:5])}"]
+        deduped_terms = list(dict.fromkeys(matched_terms))[:5]
+        return best_task, [f"命中目标词：{', '.join(deduped_terms)}"]
     return None, ["未命中稳定任务词，将保守给出通用下一步。"]
 
 
@@ -695,6 +696,17 @@ def _serialize_action(*, action_id: str, title: str, summary: str, path: str, re
     }
 
 
+def _serialize_direct_action(*, action_id: str, label: str, kind: str, primary: bool = False, **extra: Any) -> dict[str, Any]:
+    payload = {
+        "id": action_id,
+        "label": label,
+        "kind": kind,
+        "primary": bool(primary),
+    }
+    payload.update({key: value for key, value in extra.items() if value not in (None, "", [], {})})
+    return payload
+
+
 def _latest_model_for_task(db: Session, task_type: str, *, status: str) -> ModelRecord | None:
     rows = (
         db.query(ModelRecord)
@@ -707,6 +719,241 @@ def _latest_model_for_task(db: Session, task_type: str, *, status: str) -> Model
         if str(manifest.get("task_type") or "").strip() == task_type:
             return row
     return None
+
+
+def _released_models_for_task(db: Session, task_type: str, *, limit: int = 3) -> list[ModelRecord]:
+    if not str(task_type or "").strip():
+        return []
+    rows = (
+        db.query(ModelRecord)
+        .filter(ModelRecord.status == "RELEASED")
+        .order_by(ModelRecord.created_at.desc())
+        .all()
+    )
+    matched: list[ModelRecord] = []
+    for row in rows:
+        resolved_task = str(task_type_from_model(row) or row.model_code or "").strip()
+        if resolved_task == task_type:
+            matched.append(row)
+        if len(matched) >= max(1, int(limit or 3)):
+            break
+    return matched
+
+
+def _detect_chat_intent(goal: str) -> str:
+    text = str(goal or "").strip().lower()
+    if not text:
+        return ""
+    if re.search(r"(你是谁|你是什么|介绍一下你自己|who are you|what are you)", text):
+        return "identity"
+    if re.search(r"(模型名称|什么模型|当前模型|现在用的模型|which model|model name|测试模型名称)", text):
+        return "model_info"
+    if re.search(r"(排障|为什么.*失败|失败原因|故障建议|阻塞原因|为什么没跑起来|troubleshoot|failure reason|stuck)", text):
+        return "troubleshoot_status"
+    if re.search(r"(最近训练|训练怎么样|训练状态|训练进度|latest training|training status)", text):
+        return "training_status"
+    if re.search(r"(最近结果|结果在哪|最近识别|最近任务|查看结果|latest result|latest task|result status)", text):
+        return "result_status"
+    if re.search(r"(待验证模型|待审批模型|审批状态|有没有待验证|发布准备|pending approval|approval status|release status)", text):
+        return "model_status"
+    if re.search(r"(你能做什么|你会什么|能帮我做什么|what can you do|help me with)", text):
+        return "capabilities"
+    if re.fullmatch(r"(hi|hello|hey|你好|您好|嗨)[!！,.， ]*", text):
+        return "greeting"
+    return ""
+
+
+def _format_short_time(value: datetime | None) -> str:
+    if not isinstance(value, datetime):
+        return ""
+    try:
+        return value.astimezone(UTC).strftime("%m-%d %H:%M UTC")
+    except Exception:
+        return value.strftime("%m-%d %H:%M")
+
+
+def _latest_training_job(db: Session) -> TrainingJob | None:
+    return db.query(TrainingJob).order_by(TrainingJob.created_at.desc()).first()
+
+
+def _latest_inference_task(db: Session) -> InferenceTask | None:
+    return db.query(InferenceTask).order_by(InferenceTask.created_at.desc()).first()
+
+
+def _latest_failed_training_job(db: Session) -> TrainingJob | None:
+    return db.query(TrainingJob).filter(TrainingJob.status == "FAILED").order_by(TrainingJob.created_at.desc()).first()
+
+
+def _latest_failed_inference_task(db: Session) -> InferenceTask | None:
+    return db.query(InferenceTask).filter(InferenceTask.status == "FAILED").order_by(InferenceTask.created_at.desc()).first()
+
+
+def _summarize_result_payload(payload: Any) -> str:
+    data = payload if isinstance(payload, dict) else {}
+    ocr_rows = data.get("ocr") if isinstance(data.get("ocr"), list) else []
+    if ocr_rows:
+        texts = [str(row.get("text") or "").strip() for row in ocr_rows if isinstance(row, dict)]
+        texts = [item for item in texts if item]
+        if texts:
+            return f"OCR 结果示例：{texts[0]}"
+    detections = data.get("detections") if isinstance(data.get("detections"), list) else []
+    if detections:
+        return f"检测结果 {len(detections)} 项。"
+    state = str(data.get("state") or "").strip()
+    if state:
+        return f"状态结果：{state}"
+    if data:
+        return "已有结构化结果。"
+    return ""
+
+
+def _build_chat_reply(intent: str, provider_used: dict[str, Any] | None, *, db: Session | None = None) -> str:
+    provider_name = str((provider_used or {}).get("name") or "").strip()
+    model_name = str((provider_used or {}).get("model_name") or "").strip()
+    provider_label = " · ".join(part for part in [provider_name, model_name] if part).strip()
+    if intent == "model_info":
+        return f"当前会话正在使用 {provider_label or '当前默认模型'}。切换模型后，下一条消息会直接调用新模型。"
+    if intent == "identity":
+        suffix = f"。当前默认模型是 {provider_label}" if provider_label else ""
+        return f"我是 RVision 的 AI 助手，负责结合当前会话、附件、记忆和流程上下文给出下一步建议{suffix}。"
+    if intent == "capabilities":
+        return "我可以帮你整理目标、读取当前会话上下文、分析附件、推荐下一步流程，并在需要时把你带到验证、训练、发布或排障入口。"
+    if intent == "greeting":
+        return f"你好。当前会话已连接 {provider_label or '默认模型'}，可以直接问问题，或拖入图片和文件继续。"
+    if intent == "training_status" and db is not None:
+        latest_job = _latest_training_job(db)
+        if not latest_job:
+            return "当前还没有训练作业。你可以先上传数据，或让我帮你把最近结果整理成训练数据。"
+        candidate_hint = f"，已产出待验证模型 {latest_job.candidate_model_id}" if str(latest_job.candidate_model_id or "").strip() else ""
+        worker_hint = f"，当前 worker {latest_job.assigned_worker_code}" if str(latest_job.assigned_worker_code or "").strip() else ""
+        return (
+            f"最近一条训练作业是 {latest_job.target_model_code}:{latest_job.target_version}，"
+            f"状态 {latest_job.status}，创建于 {_format_short_time(latest_job.created_at)}"
+            f"{worker_hint}{candidate_hint}。"
+        )
+    if intent == "result_status" and db is not None:
+        latest_task = _latest_inference_task(db)
+        if not latest_task:
+            return "当前还没有识别任务结果。你可以先上传样例并选一个模型，我会直接在会话里发起识别。"
+        latest_result = (
+            db.query(InferenceResult)
+            .filter(InferenceResult.task_id == latest_task.id)
+            .order_by(InferenceResult.created_at.desc())
+            .first()
+        )
+        result_hint = _summarize_result_payload(latest_result.result_json if latest_result else {})
+        suffix = f" {result_hint}" if result_hint else ""
+        return (
+            f"最近一条识别任务是 {latest_task.task_type}，状态 {latest_task.status}，"
+            f"创建于 {_format_short_time(latest_task.created_at)}。{suffix}".strip()
+        )
+    if intent == "model_status" and db is not None:
+        submitted = db.query(ModelRecord).filter(ModelRecord.status == "SUBMITTED").order_by(ModelRecord.created_at.desc()).first()
+        approved = db.query(ModelRecord).filter(ModelRecord.status == "APPROVED").order_by(ModelRecord.created_at.desc()).first()
+        released = db.query(ModelRecord).filter(ModelRecord.status == "RELEASED").order_by(ModelRecord.created_at.desc()).first()
+        if submitted:
+            return f"当前最近的待验证模型是 {submitted.model_code}:{submitted.version}，状态 SUBMITTED，可继续审批验证。"
+        if approved:
+            return f"当前最近的已审批未发布模型是 {approved.model_code}:{approved.version}，可以继续做发布准备。"
+        if released:
+            return f"当前没有待验证模型，最近已发布模型是 {released.model_code}:{released.version}。"
+        return "当前还没有模型进入待验证或发布阶段。"
+    if intent == "troubleshoot_status" and db is not None:
+        failed_job = _latest_failed_training_job(db)
+        failed_task = _latest_failed_inference_task(db)
+        if failed_job and (not failed_task or failed_job.created_at >= failed_task.created_at):
+            reason = str(failed_job.error_message or "").strip() or "训练作业执行失败，建议先看 worker、数据和规格配置。"
+            return f"最近失败的是训练作业 {failed_job.job_code}，状态 FAILED。{reason}"
+        if failed_task:
+            reason = str(failed_task.error_message or "").strip() or "识别任务执行失败，建议先看模型、资产和运行日志。"
+            return f"最近失败的是识别任务 {failed_task.id}，状态 FAILED。{reason}"
+        return "当前没有新的失败任务。若你怀疑有隐性阻塞，可以让我继续查训练机、任务和发布门禁。"
+    return ""
+
+
+def _build_chat_direct_actions(db: Session, intent: str) -> list[dict[str, Any]]:
+    if intent == "training_status":
+        latest_job = _latest_training_job(db)
+        if not latest_job:
+            return []
+        actions = [
+            _serialize_direct_action(
+                action_id=f"refresh-training-{latest_job.id}",
+                label="刷新训练状态",
+                kind="refresh_training_job",
+                primary=True,
+                job_id=latest_job.id,
+                task_type=latest_job.target_model_code,
+            ),
+            _serialize_direct_action(
+                action_id=f"open-training-{latest_job.id}",
+                label="打开训练中心",
+                kind="navigate",
+                path=build_training_path(latest_job.target_model_code),
+            ),
+        ]
+        if str(latest_job.candidate_model_id or "").strip():
+            candidate = db.query(ModelRecord).filter(ModelRecord.id == latest_job.candidate_model_id).first()
+            if candidate and candidate.status == "SUBMITTED":
+                actions.append(_serialize_direct_action(action_id=f"approve-model-{candidate.id}", label="直接审批这版模型", kind="approve_model", model_id=candidate.id))
+            elif candidate and candidate.status == "APPROVED":
+                actions.append(_serialize_direct_action(action_id=f"release-model-{candidate.id}", label="直接发布这版模型", kind="release_model", model_id=candidate.id))
+        return actions[:3]
+    if intent == "result_status":
+        latest_task = _latest_inference_task(db)
+        if not latest_task:
+            return []
+        actions = [
+            _serialize_direct_action(action_id=f"open-result-{latest_task.id}", label="查看结果页", kind="navigate", path=f"results/task/{latest_task.id}", primary=True),
+        ]
+        if latest_task.status == "SUCCEEDED":
+            asset_ids = [str(latest_task.asset_id or "").strip()] if str(latest_task.asset_id or "").strip() else []
+            actions.append(
+                _serialize_direct_action(
+                    action_id=f"export-result-{latest_task.id}",
+                    label="整理成训练数据",
+                    kind="export_result_dataset",
+                    task_id=latest_task.id,
+                    task_type=str(latest_task.task_type or "").strip(),
+                    model_id=str(latest_task.model_id or "").strip(),
+                    asset_ids=asset_ids,
+                )
+            )
+        return actions[:3]
+    if intent == "model_status":
+        submitted = db.query(ModelRecord).filter(ModelRecord.status == "SUBMITTED").order_by(ModelRecord.created_at.desc()).first()
+        if submitted:
+            return [
+                _serialize_direct_action(action_id=f"approve-model-{submitted.id}", label="直接审批这版模型", kind="approve_model", model_id=submitted.id, primary=True),
+                _serialize_direct_action(action_id=f"open-model-{submitted.id}", label="打开模型中心", kind="navigate", path="models"),
+            ]
+        approved = db.query(ModelRecord).filter(ModelRecord.status == "APPROVED").order_by(ModelRecord.created_at.desc()).first()
+        if approved:
+            return [
+                _serialize_direct_action(action_id=f"release-model-{approved.id}", label="直接发布这版模型", kind="release_model", model_id=approved.id, primary=True),
+                _serialize_direct_action(action_id=f"open-model-{approved.id}", label="打开模型中心", kind="navigate", path="models"),
+            ]
+        released = db.query(ModelRecord).filter(ModelRecord.status == "RELEASED").order_by(ModelRecord.created_at.desc()).first()
+        if released:
+            return [
+                _serialize_direct_action(action_id=f"open-model-{released.id}", label="查看已发布模型", kind="navigate", path="models", primary=True),
+            ]
+        return []
+    if intent == "troubleshoot_status":
+        failed_job = _latest_failed_training_job(db)
+        failed_task = _latest_failed_inference_task(db)
+        if failed_job and (not failed_task or failed_job.created_at >= failed_task.created_at):
+            return [
+                _serialize_direct_action(action_id=f"refresh-training-{failed_job.id}", label="查看失败训练", kind="refresh_training_job", job_id=failed_job.id, task_type=failed_job.target_model_code, primary=True),
+                _serialize_direct_action(action_id="open-audit", label="打开排障中心", kind="navigate", path="audit"),
+            ]
+        if failed_task:
+            return [
+                _serialize_direct_action(action_id=f"open-failed-task-{failed_task.id}", label="查看失败任务", kind="navigate", path=f"results/task/{failed_task.id}", primary=True),
+                _serialize_direct_action(action_id="open-audit", label="打开排障中心", kind="navigate", path="audit"),
+            ]
+        return []
+    return []
 
 
 def build_assistant_plan(
@@ -726,6 +973,7 @@ def build_assistant_plan(
 ) -> dict[str, Any]:
     task_type = current_task_type
     signals: list[str] = []
+    chat_intent = _detect_chat_intent(goal)
     asset_rows: list[DataAsset] = []
     if asset_ids:
         asset_rows = db.query(DataAsset).filter(DataAsset.id.in_(tuple(asset_ids))).order_by(DataAsset.created_at.desc()).all()
@@ -765,10 +1013,50 @@ def build_assistant_plan(
     released = _latest_model_for_task(db, task_type or "", status="RELEASED") if task_type else None
     submitted = _latest_model_for_task(db, task_type or "", status="SUBMITTED") if task_type else None
     approved = _latest_model_for_task(db, task_type or "", status="APPROVED") if task_type else None
+    released_options = _released_models_for_task(db, task_type or "", limit=3) if task_type else []
 
     primary_action = None
     secondary_actions: list[dict[str, Any]] = []
-    if selected_model or released:
+    has_assets = bool(asset_rows)
+    if chat_intent:
+        primary_action = None
+    elif not has_assets and task_type:
+        primary_action = None
+    elif not has_assets:
+        upload_summary = (
+            f"先上传至少一份{_task_label(task_type)}样例，再继续后续识别、验证或训练。"
+            if task_type else
+            "请先上传图片、视频或 ZIP 数据集，再继续下一步。"
+        )
+        primary_action = _serialize_action(
+            action_id="upload_or_select_assets",
+            title="先上传样例",
+            summary=upload_summary,
+            path="assets",
+            reason="当前没有可用样例，不能直接验证、训练或验收结果。",
+            prefill={"taskType": task_type} if task_type else {},
+            priority="primary",
+        )
+    elif has_assets and task_type and not current_model_id and released_options:
+        primary_action = None
+        secondary_actions.extend(
+            _serialize_action(
+                action_id="run_inference_with_model",
+                title=f"用 {row.model_code}:{row.version} 开始识别",
+                summary=f"使用 {row.model_code}:{row.version} 对当前样例直接执行识别。",
+                path="ai",
+                reason="你已经带入样例，当前有可用已发布模型，可以直接开始识别。",
+                kind="run_task",
+                prefill={
+                    "taskModelId": row.id,
+                    "taskType": task_type,
+                    "taskAssetId": asset_rows[0].id if asset_rows else "",
+                    "taskHint": goal,
+                },
+            )
+            for row in released_options
+        )
+    elif selected_model or released:
         chosen = selected_model or {
             "model_id": released.id,
             "model_code": released.model_code,
@@ -809,7 +1097,7 @@ def build_assistant_plan(
             priority="primary",
         )
 
-    if task_type:
+    if task_type and has_assets and not (has_assets and released_options and not current_model_id):
         secondary_actions.append(
             _serialize_action(
                 action_id="open_training_path",
@@ -843,7 +1131,7 @@ def build_assistant_plan(
             )
         )
 
-    workflow_scope = normalize_workflow_scope(primary_action.get("workflow_path") if primary_action else "", primary_action.get("action_id") if primary_action else "")
+    workflow_scope = "global" if chat_intent else normalize_workflow_scope(primary_action.get("workflow_path") if primary_action else "", primary_action.get("action_id") if primary_action else "")
     effective_provider = resolve_provider_config(
         llm_mode=llm_mode,
         llm_selection=llm_selection,
@@ -883,7 +1171,10 @@ def build_assistant_plan(
     ]
 
     llm_advice = None
-    if effective_provider and llm_mode in {"api", "local"}:
+    provider_used = effective_provider
+    direct_actions: list[dict[str, Any]] = []
+    if effective_provider and llm_mode in {"api", "local"} and not chat_intent:
+        fallback_errors: list[str] = []
         try:
             llm_advice = request_planner_completion(
                 config=effective_provider,
@@ -905,10 +1196,63 @@ def build_assistant_plan(
                 },
             )
         except Exception as exc:  # pragma: no cover - external runtime
+            llm_advice = None
+            fallback_errors.append(str(exc))
+        if not llm_advice and is_local_provider:
+            api_fallback = resolve_api_fallback_provider(
+                workflow_scope=workflow_scope,
+                exclude_provider_id=str(effective_provider.get("id") or "").strip(),
+            )
+            if api_fallback:
+                try:
+                    llm_advice = request_planner_completion(
+                        config=api_fallback,
+                        system_prompt=str(ai_context.get("system_prompt") or "").strip(),
+                        payload={
+                            "goal": goal,
+                            "task_type": task_type,
+                            "task_label": _task_label(task_type),
+                            "asset_file_names": [row.file_name for row in asset_rows][:2],
+                            "released_model": released.model_code if released else None,
+                            "submitted_model": submitted.model_code if submitted else None,
+                            "approved_model": approved.model_code if approved else None,
+                            "selected_llm": llm_selection or {},
+                            "workflow_scope": workflow_scope,
+                            "workflow_context": workflow_context,
+                            "conversation_history": compact_history,
+                            "memory_context": compact_memory,
+                            "response_style": "full_json",
+                        },
+                    )
+                    if llm_advice:
+                        provider_used = api_fallback
+                    else:
+                        fallback_errors.append("api provider returned empty response")
+                except Exception as api_exc:  # pragma: no cover - external runtime
+                    fallback_errors.append(str(api_exc))
+        if not llm_advice and fallback_errors:
             llm_advice = {
-                "summary": "外部 API 大模型暂时没有返回稳定建议，当前已回退到平台内规划引擎。",
-                "risks": [str(exc)],
+                "summary": "当前模型和远程 API 都没有及时返回建议，系统已回退到平台内规划引擎。",
+                "risks": fallback_errors[:3],
             }
+
+    if chat_intent:
+        llm_advice = {
+            "summary": _build_chat_reply(chat_intent, provider_used, db=db),
+            "intent": chat_intent,
+        }
+        direct_actions = _build_chat_direct_actions(db, chat_intent)
+    elif task_type and not has_assets:
+        llm_advice = llm_advice or {
+            "summary": f"你要做的是{_task_label(task_type)}。先上传至少一张样例图片，我再列出当前可直接使用的模型并开始识别。",
+            "intent": "task_missing_asset",
+        }
+    elif has_assets and task_type and released_options and not current_model_id:
+        model_labels = "、".join(f"{row.model_code}:{row.version}" for row in released_options[:3])
+        llm_advice = llm_advice or {
+            "summary": f"已带入样例。当前可直接使用的 {_task_label(task_type)} 模型有：{model_labels}。选一个后我会直接开始识别。",
+            "intent": "task_model_selection",
+        }
 
     return {
         "generated_at": _now_iso(),
@@ -918,11 +1262,11 @@ def build_assistant_plan(
         "llm_mode": llm_mode,
         "llm_selection": llm_selection or {},
         "provider_used": {
-            "provider_id": str(effective_provider.get("id") or "").strip(),
-            "name": str(effective_provider.get("name") or "").strip(),
-            "mode": str(effective_provider.get("mode") or llm_mode).strip(),
-            "model_name": str(effective_provider.get("model_name") or "").strip(),
-        } if effective_provider else None,
+            "provider_id": str(provider_used.get("id") or "").strip(),
+            "name": str(provider_used.get("name") or "").strip(),
+            "mode": str(provider_used.get("mode") or llm_mode).strip(),
+            "model_name": str(provider_used.get("model_name") or "").strip(),
+        } if provider_used else None,
         "signals": signals,
         "context_documents": [
             {
@@ -967,6 +1311,34 @@ def build_assistant_plan(
         },
         "primary_action": primary_action,
         "secondary_actions": secondary_actions,
+        "direct_actions": direct_actions,
         "llm_advice": llm_advice,
-        "guidance_summary": primary_action["summary"] if primary_action else "先补齐目标和资产，再继续下一步。",
+        "guidance_summary": (
+            str((llm_advice or {}).get("summary") or "").strip()
+            if str((llm_advice or {}).get("summary") or "").strip()
+            else primary_action["summary"] if primary_action else "继续补充问题或上下文。"
+        ),
     }
+    if (not has_assets) and (selected_model or released):
+        chosen = selected_model or {
+            "model_id": released.id,
+            "model_code": released.model_code,
+            "version": released.version,
+            "task_type": task_type,
+        }
+        secondary_actions.insert(
+            0,
+            _serialize_action(
+                action_id="validate_existing_model",
+                title="准备好样例后去验证现有模型",
+                summary="带着样例和现有模型进入任务中心，跑一轮在线验证。",
+                path="tasks",
+                reason="现有模型仍然是最快的起点，但要先有可用样例。",
+                prefill={
+                    "taskModelId": chosen.get("model_id"),
+                    "taskType": chosen.get("task_type") or task_type,
+                    "taskAssetId": asset_rows[0].id if asset_rows else "",
+                    "taskHint": goal,
+                },
+            ),
+        )
