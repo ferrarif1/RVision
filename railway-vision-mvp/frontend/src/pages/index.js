@@ -124,6 +124,98 @@ function renderWorkbenchOverview({ title = '', summary = '', status = '', metric
   `;
 }
 
+function dashboardExpertPathForStep(stepKey, taskType = '') {
+  if (stepKey === 'upload') return 'assets';
+  if (stepKey === 'train') return buildTrainingExpertPath(taskType);
+  if (stepKey === 'deploy') return 'models';
+  if (stepKey === 'results') return 'results';
+  if (stepKey === 'troubleshoot') return 'audit';
+  return 'dashboard';
+}
+
+function renderDashboardFlowCard({ resolved, draft = {}, plan = null } = {}) {
+  const steps = Array.isArray(resolved?.steps) ? resolved.steps : [];
+  const currentStep = resolved?.currentStep || null;
+  const nextStep = resolved?.nextStep || null;
+  const signals = resolved?.signals || {};
+  const goal = String(draft?.goal || plan?.goal || '').trim();
+  const taskLabel = String(signals.taskLabel || aiTaskLabel(draft?.task_type || plan?.inferred_task_type || '') || '通用任务').trim();
+  const activeExpertPath = dashboardExpertPathForStep(currentStep?.key || '', signals.taskType || draft?.task_type || plan?.inferred_task_type || '');
+  const completedCount = steps.filter((step) => step.completed).length;
+  const hasContext = Boolean(
+    goal
+    || signals.assetIds?.length
+    || signals.currentModelId
+    || signals.lastTaskId
+    || resolved?.store?.flow_id
+    || completedCount
+  );
+
+  if (!hasContext) {
+    return `
+      <div class="dashboard-flow-card-empty">
+        <div class="dashboard-flow-copy">
+          <span class="hero-eyebrow">当前闭环</span>
+          <h3>工作台还没有正在推进的主线</h3>
+          <p>从一条最短路径开始，系统会把资产、模型和任务上下文持续带到后续步骤，不再让你在各页之间重新填一遍。</p>
+        </div>
+        <div class="dashboard-flow-actions">
+          <button class="primary" type="button" data-dashboard-flow-nav="ai">交给 AI 开始</button>
+          <button class="ghost" type="button" data-dashboard-flow-nav="assets">先整理资产</button>
+        </div>
+      </div>
+    `;
+  }
+
+  const statusLabel = currentStep?.error
+    ? '需重新确认'
+    : nextStep
+      ? `下一步 · ${nextStep.title}`
+      : '当前闭环已到最后一步';
+
+  return `
+    <div class="dashboard-flow-card-main">
+      <div class="dashboard-flow-head">
+        <div class="dashboard-flow-copy">
+          <span class="hero-eyebrow">当前闭环</span>
+          <h3>${esc(resolved?.flow?.title || '当前流程')} · ${esc(currentStep?.title || '当前步骤')}</h3>
+          <p>${esc(currentStep?.description || '当前步骤说明')} ${esc(nextStep ? `完成后会进入 ${nextStep.title}。` : '完成本步后即可收口当前流程。')}</p>
+        </div>
+        <div class="dashboard-flow-status">
+          <span class="badge">${esc(statusLabel)}</span>
+          <span class="dashboard-flow-step-count">第 ${esc(String((currentStep?.index || 0) + 1))} 步 / ${esc(String(steps.length || 0))}</span>
+        </div>
+      </div>
+      <div class="dashboard-flow-metrics">
+        <article>
+          <span>当前目标</span>
+          <strong>${esc(goal || `${taskLabel} 工作流`)}</strong>
+        </article>
+        <article>
+          <span>已带入样例</span>
+          <strong>${esc(String(signals.assetIds?.length || 0))} 个</strong>
+        </article>
+        <article>
+          <span>当前模型</span>
+          <strong>${esc(signals.currentModelId ? truncateMiddle(signals.currentModelId, 10, 8) : '待选择')}</strong>
+        </article>
+        <article>
+          <span>最近任务</span>
+          <strong>${esc(signals.lastTaskId ? truncateMiddle(signals.lastTaskId, 10, 8) : '暂无')}</strong>
+        </article>
+      </div>
+      <div class="dashboard-flow-actions">
+        <button class="primary" type="button" data-dashboard-flow-nav="${esc(activeExpertPath)}" data-dashboard-flow-step="${esc(currentStep?.key || '')}">
+          ${esc(currentStep?.error ? `回到 ${currentStep?.shortTitle || currentStep?.title}` : `继续 ${currentStep?.shortTitle || currentStep?.title || '当前步骤'}`)}
+        </button>
+        <button class="ghost" type="button" data-dashboard-flow-nav="${esc(currentStep?.routePath || 'ai')}">查看流程步骤</button>
+        <button class="ghost" type="button" data-dashboard-flow-nav="ai">交给 AI 引导</button>
+      </div>
+      ${renderWorkflowProgress(resolved)}
+    </div>
+  `;
+}
+
 function bindPageNavButtons(root, ctx, options = {}) {
   root.querySelectorAll('[data-page-nav]').forEach((button) => {
     button.addEventListener('click', () => {
@@ -1863,6 +1955,18 @@ function renderComposerAttachments(attachments = []) {
   `;
 }
 
+function friendlyWorkflowPathLabel(path = '') {
+  const clean = String(path || '').trim();
+  if (!clean) return '';
+  if (clean === 'ai/workflow/upload') return '上传流程';
+  if (clean === 'ai/workflow/train') return '训练流程';
+  if (clean === 'ai/workflow/deploy') return '发布流程';
+  if (clean === 'ai/workflow/results') return '结果流程';
+  if (clean === 'ai/workflow/troubleshoot') return '排障流程';
+  if (clean === 'ai') return 'AI 工作入口';
+  return '';
+}
+
 function renderMessageAttachments(attachments = []) {
   if (!attachments.length) return '';
   return `
@@ -1888,6 +1992,7 @@ function renderInlineActionCard(message, session = null) {
   if (!primaryAction && !message.workflow_context) return '';
   const secondaryActions = Array.isArray(plan?.secondary_actions) ? plan.secondary_actions.slice(0, 2) : [];
   const workflowPath = workflowRouteForAction(primaryAction || {});
+  const workflowLabel = friendlyWorkflowPathLabel(workflowPath);
   return `
     <article class="inline-action-card">
       ${message.workflow_context ? renderWorkflowStepperCompact(message.workflow_context) : ''}
@@ -1909,7 +2014,7 @@ function renderInlineActionCard(message, session = null) {
           ${secondaryActions.map((action) => `<button class="ghost" type="button" data-conversation-action="secondary" data-conversation-secondary="${esc(action.action_id || '')}" data-conversation-session="${esc(session?.session_id || '')}">${esc(action.title || '备选路径')}</button>`).join('')}
         </div>
       ` : ''}
-      ${workflowPath ? `<div class="assistant-chip-row"><span class="assistant-inline-chip">${esc(workflowPath)}</span></div>` : ''}
+      ${workflowLabel ? `<div class="assistant-chip-row"><span class="assistant-inline-chip">${esc(workflowLabel)}</span></div>` : ''}
     </article>
   `;
 }
@@ -1926,7 +2031,7 @@ function renderConversationMessage(message, session = null) {
         ${message.kind === 'typing' ? '<div class="streaming-message"><span></span><span></span><span></span></div>' : ''}
         ${renderMessageAttachments(message.attachments)}
         ${!isUser ? renderInlineActionCard(message, session) : ''}
-        ${message.error ? `<div class="inline-notice error">${esc(message.error)}</div>` : ''}
+        ${message.error ? `<div class="inline-notice ${String(message.error).startsWith('已切换到本地规则引擎') ? 'warning' : 'error'}">${esc(message.error)}</div>` : ''}
       </div>
     </article>
   `;
@@ -2260,7 +2365,7 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
               text: plan.guidance_summary || '智能规划服务暂时不可用，已切到本地规则引擎。',
               plan,
               workflowContext,
-              error: `已回退到本地规则引擎：${error.message}`,
+              error: '已切换到本地规则引擎。可继续当前流程；如果持续失败，再看详细日志。',
             });
             replaceSessionMessage(currentSession.session_id, typingMessage.id, fallbackMessage);
             syncAiPendingConfirmations(plan, currentSession.session_id);
@@ -2275,7 +2380,7 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
               workflow_context: workflowContext,
               last_message_preview: fallbackMessage.text,
             });
-            ctx.toast(`智能规划服务不可用，已回退到本地规则引擎：${error.message}`, 'error');
+            ctx.toast('智能规划服务暂时不可用，已切换到本地规则引擎。', 'error');
           } finally {
             busy = false;
             updateSessionSnapshot();
@@ -2509,7 +2614,7 @@ function createAIWorkflowPage({ kind, title, summary, expertPath, actionLabel, h
               <p class="ai-suggestion-summary">${esc(workflow.currentStep?.description || plan?.guidance_summary || plan?.primary_action?.summary || summary)}</p>
               <div class="ai-suggestion-meta">
                 <span>当前目标：${esc(currentGoal)}</span>
-                <span>推荐 workflow：${esc(recommendedWorkflow || `ai/workflow/${kind}`)}</span>
+                <span>推荐下一步：${esc(friendlyWorkflowPathLabel(recommendedWorkflow || `ai/workflow/${kind}`) || (workflow.nextStep?.title || '继续当前流程'))}</span>
                 <span>已带资产：${esc(draft?.asset_ids?.length ? `${draft.asset_ids.length} 个` : '暂无')}</span>
                 <span>${esc(`本步校验：${workflow.currentStep?.validationMessage || '待确认'}`)}</span>
                 ${(helperLines || []).map((line) => `<span>${esc(line)}</span>`).join('')}
@@ -2530,7 +2635,7 @@ function createAIWorkflowPage({ kind, title, summary, expertPath, actionLabel, h
                   ? pending.map((item) => `
                     <button class="ai-session-list-item" type="button" data-page-nav="${esc(item.workflow_path || item.target_path || 'ai')}">
                       <strong>待确认：${esc(item.title || '-')}</strong>
-                      <span>${esc(item.workflow_path || item.target_path || 'ai')}</span>
+                      <span>${esc(item.summary || friendlyWorkflowPathLabel(item.workflow_path || '') || '继续当前步骤')}</span>
                     </button>
                   `).join('')
                   : ''}
@@ -2538,7 +2643,7 @@ function createAIWorkflowPage({ kind, title, summary, expertPath, actionLabel, h
                   ? recent.map((item) => `
                     <button class="ai-session-list-item" type="button" data-page-nav="${esc(item.workflow_path || item.target_path || 'ai')}">
                       <strong>最近动作：${esc(item.title || '-')}</strong>
-                      <span>${esc(item.workflow_path || item.target_path || 'ai')}</span>
+                      <span>${esc(item.actionSummary || item.summary || friendlyWorkflowPathLabel(item.workflow_path || '') || '继续这条主线')}</span>
                     </button>
                   `).join('')
                   : ''}
@@ -2804,11 +2909,14 @@ function pageDashboard(route, rawCtx) {
           </div>
         </div>
       </section>
+      <section class="card dashboard-flow-card">
+        <div id="dashboardFlowCard">${renderLoading('整理当前工作台闭环...')}</div>
+      </section>
       <section class="card dashboard-entry-card">
         <div class="dashboard-entry-head">
           <div>
-            <h3>推荐动作</h3>
-            <p class="hint">先选一条最短路径，再按需切到下方标签查看资产、模型或任务，不再同时铺开所有区域。</p>
+            <h3>快捷切换</h3>
+            <p class="hint">当前闭环会优先显示在上方；这里仅保留少量直达入口，用于人工切换到资产、模型或任务工作区。</p>
           </div>
           <div class="selection-summary dashboard-focus-summary">
             <strong>当前角色重点</strong>
@@ -2867,8 +2975,146 @@ function pageDashboard(route, rawCtx) {
       const recentAssets = root.querySelector('#recentAssets');
       const recentModels = root.querySelector('#recentModels');
       const recentTasks = root.querySelector('#recentTasks');
+      const dashboardFlowCard = root.querySelector('#dashboardFlowCard');
       let activeDashboardPanel = 'overview';
       let activeDashboardOverviewPanel = 'lanes';
+
+      function updateWorkbenchDraft(patch = {}, { touchStep = '' } = {}) {
+        const currentDraft = readAiWorkflowDraft();
+        const nextDraft = {
+          ...currentDraft,
+          ...patch,
+        };
+        if (patch.asset_ids !== undefined) {
+          nextDraft.asset_ids = mergeCsvValues(currentDraft.asset_ids || [], patch.asset_ids || []);
+        }
+        if (patch.current_model_id !== undefined) {
+          nextDraft.current_model_id = String(patch.current_model_id || '').trim();
+          if (nextDraft.current_model_id) localStorage.setItem(STORAGE_KEYS.focusModelId, nextDraft.current_model_id);
+        }
+        if (patch.task_type !== undefined) nextDraft.task_type = String(patch.task_type || '').trim();
+        if (patch.goal !== undefined) nextDraft.goal = String(patch.goal || '').trim();
+        if (patch.last_task_id !== undefined) {
+          nextDraft.last_task_id = String(patch.last_task_id || '').trim();
+          if (nextDraft.last_task_id) localStorage.setItem(STORAGE_KEYS.lastTaskId, nextDraft.last_task_id);
+        }
+        persistAiWorkflowDraft(nextDraft);
+        const plan = readAiLastPlan();
+        const resolved = touchStep
+          ? WorkflowSessionStore.touchCurrentStep(touchStep, { draft: nextDraft, plan })
+          : WorkflowStateMachine.resolve({ draft: nextDraft, plan });
+        syncWorkflowDraftContext(nextDraft, resolved);
+        return { draft: readAiWorkflowDraft(), plan, resolved };
+      }
+
+      function navigateWithWorkbenchContext({ targetPath, title = '', patch = {}, touchStep = '', action = null } = {}) {
+        const { draft, plan } = updateWorkbenchDraft(patch, { touchStep });
+        rememberAiNavigationAndPrefill({
+          targetPath,
+          title,
+          draft,
+          plan,
+          action: action || {
+            title,
+            path: targetPath,
+            expert_path: targetPath,
+            workflow_path: touchStep ? `ai/workflow/${touchStep}` : workflowRouteForAction({ path: targetPath }),
+            prefill: {
+              taskType: draft.task_type || '',
+              taskModelId: draft.current_model_id || '',
+              taskHint: draft.goal || '',
+              trainingAssetIds: (draft.asset_ids || []).join(', '),
+            },
+          },
+        });
+        ctx.navigate(targetPath);
+      }
+
+      function bindDashboardFlowCard() {
+        if (!dashboardFlowCard) return;
+        dashboardFlowCard.querySelectorAll('[data-dashboard-flow-nav]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const targetPath = button.getAttribute('data-dashboard-flow-nav') || '';
+            const touchStep = button.getAttribute('data-dashboard-flow-step') || '';
+            if (!targetPath) return;
+            navigateWithWorkbenchContext({
+              targetPath,
+              title: '继续当前工作台闭环',
+              touchStep,
+            });
+          });
+        });
+        dashboardFlowCard.querySelectorAll('[data-workflow-progress-step]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const stepKey = button.getAttribute('data-workflow-progress-step') || '';
+            if (!stepKey) return;
+            const { resolved } = updateWorkbenchDraft({}, { touchStep: stepKey });
+            const step = (resolved?.steps || []).find((item) => item.key === stepKey);
+            if (step?.routePath) ctx.navigate(step.routePath);
+          });
+        });
+      }
+
+      function bindRecentContinuations() {
+        root.querySelectorAll('[data-dashboard-asset-nav]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const assetId = button.getAttribute('data-dashboard-asset-id') || '';
+            const targetPath = button.getAttribute('data-dashboard-asset-nav') || 'assets';
+            const targetStep = button.getAttribute('data-dashboard-step') || '';
+            const taskType = button.getAttribute('data-dashboard-task-type') || '';
+            navigateWithWorkbenchContext({
+              targetPath,
+              title: '继续资产主线',
+              touchStep: targetStep,
+              patch: {
+                asset_ids: assetId ? [assetId] : [],
+                task_type: taskType,
+                source_path: 'dashboard',
+              },
+            });
+          });
+        });
+        root.querySelectorAll('[data-dashboard-model-nav]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const modelId = button.getAttribute('data-dashboard-model-id') || '';
+            const targetPath = button.getAttribute('data-dashboard-model-nav') || 'models';
+            const targetStep = button.getAttribute('data-dashboard-step') || '';
+            const taskType = button.getAttribute('data-dashboard-task-type') || '';
+            navigateWithWorkbenchContext({
+              targetPath,
+              title: '继续模型主线',
+              touchStep: targetStep,
+              patch: {
+                current_model_id: modelId,
+                task_type: taskType,
+                source_path: 'dashboard',
+              },
+            });
+          });
+        });
+        root.querySelectorAll('[data-dashboard-task-nav]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const taskId = button.getAttribute('data-dashboard-task-id') || '';
+            const modelId = button.getAttribute('data-dashboard-model-id') || '';
+            const assetId = button.getAttribute('data-dashboard-asset-id') || '';
+            const taskType = button.getAttribute('data-dashboard-task-type') || '';
+            const targetPath = button.getAttribute('data-dashboard-task-nav') || 'results';
+            const targetStep = button.getAttribute('data-dashboard-step') || '';
+            navigateWithWorkbenchContext({
+              targetPath,
+              title: '继续任务主线',
+              touchStep: targetStep,
+              patch: {
+                last_task_id: taskId,
+                current_model_id: modelId,
+                asset_ids: assetId ? [assetId] : [],
+                task_type: taskType,
+                source_path: 'dashboard',
+              },
+            });
+          });
+        });
+      }
 
       function setDashboardOverviewPanel(panel) {
         activeDashboardOverviewPanel = ['lanes', 'real-data'].includes(panel) ? panel : 'lanes';
@@ -2928,6 +3174,18 @@ function pageDashboard(route, rawCtx) {
       });
       try {
         const data = await ctx.get('/dashboard/summary');
+        const dashboardPlan = readAiLastPlan();
+        const dashboardDraft = readAiWorkflowDraft();
+        const dashboardResolved = WorkflowStateMachine.resolve({ draft: dashboardDraft, plan: dashboardPlan });
+        syncWorkflowDraftContext(dashboardDraft, dashboardResolved);
+        if (dashboardFlowCard) {
+          dashboardFlowCard.innerHTML = renderDashboardFlowCard({
+            resolved: dashboardResolved,
+            draft: dashboardDraft,
+            plan: dashboardPlan,
+          });
+          bindDashboardFlowCard();
+        }
         const lanes = data?.lanes || {};
         const hygiene = data?.hygiene || {};
         const realData = data?.real_data || {};
@@ -3007,6 +3265,10 @@ function pageDashboard(route, rawCtx) {
                       </div>
                     </div>
                   </details>
+                  <div class="selection-card-actions">
+                    <button class="ghost" type="button" data-dashboard-asset-nav="tasks" data-dashboard-step="results" data-dashboard-asset-id="${esc(row.id || '')}" data-dashboard-task-type="${esc(row.intended_model_code || '')}">去验证</button>
+                    <button class="ghost" type="button" data-dashboard-asset-nav="${esc(buildTrainingExpertPath(row.intended_model_code || ''))}" data-dashboard-step="train" data-dashboard-asset-id="${esc(row.id || '')}" data-dashboard-task-type="${esc(row.intended_model_code || '')}">加入训练</button>
+                  </div>
                 </article>
               `).join('')}
             </div>
@@ -3040,6 +3302,9 @@ function pageDashboard(route, rawCtx) {
                       </div>
                     </div>
                   </details>
+                  <div class="selection-card-actions">
+                    <button class="ghost" type="button" data-dashboard-model-nav="${esc(row.status === 'RELEASED' ? 'tasks' : 'models')}" data-dashboard-step="${esc(row.status === 'RELEASED' ? 'results' : 'deploy')}" data-dashboard-model-id="${esc(row.id || '')}" data-dashboard-task-type="${esc(row.task_type || '')}">${esc(row.status === 'RELEASED' ? '直接验证' : '去审批发布')}</button>
+                  </div>
                 </article>
               `).join('')}
             </div>
@@ -3073,12 +3338,17 @@ function pageDashboard(route, rawCtx) {
                       </div>
                     </div>
                   </details>
+                  <div class="selection-card-actions">
+                    <button class="ghost" type="button" data-dashboard-task-nav="${esc(row.status === 'SUCCEEDED' ? `results/task/${row.id}` : `tasks/${row.id}`)}" data-dashboard-step="${esc(row.status === 'SUCCEEDED' ? 'results' : 'troubleshoot')}" data-dashboard-task-id="${esc(row.id || '')}" data-dashboard-model-id="${esc(row.model_id || '')}" data-dashboard-asset-id="${esc(row.asset_id || '')}" data-dashboard-task-type="${esc(row.task_type || '')}">${esc(row.status === 'SUCCEEDED' ? '查看结果' : '查看任务')}</button>
+                  </div>
                 </article>
               `).join('')}
             </div>
           `
           : renderEmpty('暂无任务');
+        bindRecentContinuations();
       } catch (error) {
+        if (dashboardFlowCard) dashboardFlowCard.innerHTML = renderError(error.message);
         laneGrid.innerHTML = renderError(error.message);
         realDataGrid.innerHTML = renderError(error.message);
         recentAssets.innerHTML = renderError(error.message);

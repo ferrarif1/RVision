@@ -1,34 +1,0 @@
-[33m⚠️  Warning: 'huggingface-cli download' is deprecated. Use 'hf download' instead.[0m
-/usr/local/lib/python3.11/site-packages/huggingface_hub/file_download.py:945: FutureWarning: `resume_download` is deprecated and will be removed in version 1.0.0. Downloads always resume when possible. If you want to force a new download, use `force_download=True`.
-  warnings.warn(
-Fetching 18 files:   0%|          | 0/18 [00:00<?, ?it/s]Still waiting to acquire lock on /app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/.cache/huggingface/.gitignore.lock (elapsed: 0.1 seconds)
-Downloading 'metal/model.bin' to '/app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/.cache/huggingface/download/metal/mBG94Lz8EYH5gU8b5axgj2RF9Tk=.725b7f996b5a226d922f034a731aefc398652f670dcafc2efd78620509a0fef1.incomplete'
-Downloading 'chat_template.jinja' to '/app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/.cache/huggingface/download/yIUQ6Jg7XpBWXEkozaEkS2ih05g=.dc7bb11927d29f653ba2740f2db2c688fd77592f.incomplete'
-Downloading 'LICENSE' to '/app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/.cache/huggingface/download/DhCjcNQuMpl4FL346qr3tvNUCgY=.7a4a3ea2424c09fbe48d455aed1eaa94d9124835.incomplete'
-Downloading 'README.md' to '/app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/.cache/huggingface/download/Xn7B-BWUGOee2Y6hCZtEhtFu4BE=.f6e25105129ce88f068afff463e0db36024e9ae8.incomplete'
-Downloading 'generation_config.json' to '/app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/.cache/huggingface/download/3EVKVggOldJcKSsGjSdoUCN1AyQ=.86f91466555bd40e3de0b1edee3d5d82f4ccdbfe.incomplete'
-Download complete. Moving file to /app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/chat_template.jinja
-Download complete. Moving file to /app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/LICENSE
-Download complete. Moving file to /app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/README.md
-Download complete. Moving file to /app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/generation_config.json
-Downloading '.gitattributes' to '/app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/.cache/huggingface/download/wPaCkH-WbT7GsmxMKKrNZTV4nSM=.52373fe24473b1aa44333d318f578ae6bf04b49b.incomplete'
-Downloading 'USAGE_POLICY' to '/app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/.cache/huggingface/download/nuppLbVBwlGNavFsJGV4eMxPJec=.b030f63aecc61cbaf2316a7b6401254f4312df74.incomplete'
-Download complete. Moving file to /app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/.gitattributes
-Fetching 18 files:   6%|▌         | 1/18 [00:01<00:24,  1.46s/it]Downloading 'model-00001-of-00002.safetensors' to '/app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/.cache/huggingface/download/aoe4E07IMh7reFyUkVoVk040mQk=.4fbe328ab445455d6f58dc73852b85873bd626986310abd91cd4d2ce3245eaea.incomplete'
-Downloading 'model-00002-of-00002.safetensors' to '/app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/.cache/huggingface/download/Dr_lZJDwE1cnGAQMwA77jJEQIk8=.a18106b209e9ab35c3406db4f6f12a927364a058b21e9d1373d682e20674b303.incomplete'
-Download complete. Moving file to /app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/USAGE_POLICY
-Fetching 18 files:  22%|██▏       | 4/18 [00:01<00:05,  2.76it/s]Downloading 'model.safetensors.index.json' to '/app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/.cache/huggingface/download/yVzAsSxRSINSz-tQbpx-TLpfkLU=.ae08521471ab125be4af84d0e51ecfc245830119.incomplete'
-Download complete. Moving file to /app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/model.safetensors.index.json
-Downloading 'original/config.json' to '/app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/.cache/huggingface/download/original/8_PA_wEVGiVa2goH2H4KQOQpvVY=.bd6a33e55b68b6734c932c44bd98f376d492dad9.incomplete'
-Downloading 'model-00000-of-00002.safetensors' to '/app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/.cache/huggingface/download/rNcDyGZpF6SnrZxn4k3RDjVGER0=.16d0f997dcfc4462089d536bffe51b4bcea2f872f5c430be09ef8ed392312427.incomplete'
-Downloading 'original/dtypes.json' to '/app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/.cache/huggingface/download/original/ZZTepSZYYa8e5qZ7iN-vu9zbj2o=.07e91493fc3ebf901d7d18b1309795b3f5e466aa.incomplete'
-Download complete. Moving file to /app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/original/config.json
-Downloading 'original/model.safetensors' to '/app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/.cache/huggingface/download/original/xGOKKLRSlIhH692hSVvI1-gpoa8=.3340a61d1a0391e8c5b5d3463d18d4c48129a84bbc04a554c762c99020aa06ed.incomplete'
-Download complete. Moving file to /app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/original/dtypes.json
-Downloading 'special_tokens_map.json' to '/app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/.cache/huggingface/download/ahkChHUJFxEmOdq5GDFEmerRzCY=.73bd12e55e2004cdfff088f85092b39dba2ccdd0.incomplete'
-Downloading 'tokenizer.json' to '/app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/.cache/huggingface/download/HgM_lKo9sdSCfRtVg7MMFS7EKqo=.0614fe83cadab421296e664e1f48f4261fa8fef6e03e63bb75c20f38e37d07d3.incomplete'
-Download complete. Moving file to /app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/special_tokens_map.json
-Downloading 'tokenizer_config.json' to '/app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/.cache/huggingface/download/vzaExXFZNBay89bvlQv-ZcI6BTg=.c021cddb0a9dd35b1bf83a9f145be2d9b3757891.incomplete'
-Download complete. Moving file to /app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/tokenizer_config.json
-Fetching 18 files:  28%|██▊       | 5/18 [00:05<00:13,  1.06s/it]
-Download complete. Moving file to /app/.runtime/assistant_llm/downloads/openai__gpt-oss-20b/tokenizer.json
