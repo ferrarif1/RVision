@@ -173,11 +173,18 @@ def _catalog_model_row(repo_id: str, *, force_refresh: bool = False) -> dict[str
     normalized_repo_id = str(repo_id or "").strip()
     if not normalized_repo_id:
         return {}
+    base_row = next(
+        (item for item in (_local_catalog_base().get("models") or []) if str(item.get("repo_id") or "").strip() == normalized_repo_id),
+        {},
+    )
     catalog = get_local_llm_catalog(force_refresh=force_refresh)
-    return next(
+    runtime_row = next(
         (item for item in (catalog.get("models") or []) if str(item.get("repo_id") or "").strip() == normalized_repo_id),
         {},
     )
+    merged = dict(base_row or {})
+    merged.update(runtime_row or {})
+    return merged
 
 
 def _resolve_download_strategy(repo_id: str) -> dict[str, Any]:
@@ -331,6 +338,11 @@ def refresh_local_llm_catalog_cache() -> dict[str, Any]:
 def get_local_llm_catalog(*, force_refresh: bool = False) -> dict[str, Any]:
     _ensure_runtime_dirs()
     runtime_status = get_local_llm_runtime_status()
+    base_models = {
+        str(item.get("repo_id") or "").strip(): dict(item)
+        for item in (_local_catalog_base().get("models") or [])
+        if isinstance(item, dict) and str(item.get("repo_id") or "").strip()
+    }
     if not force_refresh and CATALOG_CACHE_PATH.exists():
         payload = _json_load(CATALOG_CACHE_PATH)
         base_repo_ids = {
@@ -344,7 +356,14 @@ def get_local_llm_catalog(*, force_refresh: bool = False) -> dict[str, Any]:
             if isinstance(item, dict) and str(item.get("repo_id") or "").strip()
         }
         if _catalog_cache_is_fresh(payload) and base_repo_ids.issubset(cached_repo_ids):
-            models = [dict(item) for item in payload.get("models") or []]
+            models = []
+            for item in payload.get("models") or []:
+                if not isinstance(item, dict):
+                    continue
+                repo_id = str(item.get("repo_id") or "").strip()
+                merged = dict(base_models.get(repo_id) or {})
+                merged.update(dict(item))
+                models.append(merged)
             for item in models:
                 target_dir = _repo_target_dir(str(item.get("repo_id") or ""))
                 installed = target_dir.exists() and any(target_dir.iterdir()) if target_dir.exists() else False
@@ -701,6 +720,9 @@ def build_assistant_plan(
     llm_mode: str,
     llm_selection: dict[str, Any] | None,
     api_config: dict[str, Any] | None,
+    workflow_context: dict[str, Any] | None = None,
+    conversation_history: list[dict[str, Any]] | None = None,
+    memory_context: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     task_type = current_task_type
     signals: list[str] = []
@@ -830,6 +852,35 @@ def build_assistant_plan(
     )
     is_local_provider = bool(effective_provider and str(effective_provider.get("mode") or "").strip() == "local")
     ai_context = assemble_ai_context(workflow_scope=workflow_scope, task_type=task_type, goal=goal, compact=is_local_provider)
+    workflow_context = workflow_context if isinstance(workflow_context, dict) else {}
+    safe_history = conversation_history if isinstance(conversation_history, list) else []
+    safe_memory = memory_context if isinstance(memory_context, list) else []
+    history_limit = 2 if is_local_provider else 8
+    memory_limit = 2 if is_local_provider else 8
+    compact_history = [
+        {
+            "role": str(row.get("role") or "").strip(),
+            "text": str(row.get("text") or "").strip(),
+            "attachments": row.get("attachments") if isinstance(row.get("attachments"), list) else [],
+        }
+        for row in safe_history[:history_limit]
+        if isinstance(row, dict) and (str(row.get("text") or "").strip() or isinstance(row.get("attachments"), list))
+    ]
+    compact_memory = [
+        {
+            "title": str(row.get("title") or "").strip(),
+            "summary": str(row.get("summary") or "").strip(),
+            "content": str(row.get("content") or "").strip(),
+            "task_type": str(row.get("task_type") or "").strip(),
+            "model_name": str(row.get("model_name") or "").strip(),
+        }
+        for row in safe_memory[:memory_limit]
+        if isinstance(row, dict) and (
+            str(row.get("title") or "").strip()
+            or str(row.get("summary") or "").strip()
+            or str(row.get("content") or "").strip()
+        )
+    ]
 
     llm_advice = None
     if effective_provider and llm_mode in {"api", "local"}:
@@ -847,6 +898,9 @@ def build_assistant_plan(
                     "approved_model": approved.model_code if approved else None,
                     "selected_llm": {} if is_local_provider else (llm_selection or {}),
                     "workflow_scope": workflow_scope,
+                    "workflow_context": workflow_context,
+                    "conversation_history": compact_history,
+                    "memory_context": compact_memory,
                     "response_style": "compact_json" if is_local_provider else "full_json",
                 },
             )
@@ -881,6 +935,9 @@ def build_assistant_plan(
             for row in ai_context.get("documents") or []
         ],
         "behavior_settings": ai_context.get("behavior") or {},
+        "workflow_context_input": workflow_context,
+        "conversation_history_count": len(compact_history),
+        "memory_context_count": len(compact_memory),
         "asset_summary": [
             {
                 "asset_id": row.id,

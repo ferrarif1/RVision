@@ -57,6 +57,7 @@ export const STORAGE_KEYS = {
   aiMessageMap: namespacedStorageKey('ai_message_map'),
   aiComposerDraftMap: namespacedStorageKey('ai_composer_draft_map'),
   aiActiveSessionId: namespacedStorageKey('ai_active_session_id'),
+  aiMemoryEntries: namespacedStorageKey('ai_memory_entries'),
   workflowSession: namespacedStorageKey('workflow_session'),
 };
 
@@ -105,6 +106,7 @@ const LEGACY_STORAGE_KEYS = {
   aiMessageMap: 'rv_ai_message_map',
   aiComposerDraftMap: 'rv_ai_composer_draft_map',
   aiActiveSessionId: 'rv_ai_active_session_id',
+  aiMemoryEntries: 'rv_ai_memory_entries',
   workflowSession: 'rv_workflow_session',
 };
 

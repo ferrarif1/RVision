@@ -27,6 +27,8 @@ import {
 } from '../ai/workflow.js';
 import {
   appendSessionMessage,
+  buildAiMemoryContext,
+  buildConversationHistoryContext,
   buildAttachmentFromUpload,
   buildMessage,
   clearComposerDraft,
@@ -35,6 +37,7 @@ import {
   listConversationSessions,
   persistActiveAiSessionId,
   persistComposerDraft,
+  readAiMemoryEntries,
   readComposerDraft,
   readSessionMessages,
   removeConversationSession,
@@ -2023,12 +2026,16 @@ function renderConversationMessage(message, session = null) {
   const isUser = message.role === 'user';
   const roleClass = isUser ? 'assistant-message-user' : 'assistant-message-assistant';
   const kindClass = message.kind === 'plan' ? 'assistant-plan-bubble' : message.kind === 'typing' ? 'assistant-message-assistant-muted' : '';
+  const providerUsed = message?.plan?.provider_used;
+  const providerLabel = String(providerUsed?.name || providerUsed?.model_name || '').trim();
+  const providerModel = String(providerUsed?.model_name || '').trim();
   return `
     <article class="assistant-message ${roleClass} ${kindClass}" data-message-id="${esc(message.id)}">
       ${isUser ? '' : '<span class="assistant-message-avatar">AI</span>'}
       <div class="assistant-message-bubble">
         ${message.text ? `<p>${esc(message.text)}</p>` : ''}
         ${message.kind === 'typing' ? '<div class="streaming-message"><span></span><span></span><span></span></div>' : ''}
+        ${!isUser && providerLabel ? `<div class="assistant-chip-row assistant-provider-chip-row"><span class="assistant-inline-chip">${esc(providerLabel)}${providerModel && providerModel !== providerLabel ? ` · ${esc(providerModel)}` : ''}</span></div>` : ''}
         ${renderMessageAttachments(message.attachments)}
         ${!isUser ? renderInlineActionCard(message, session) : ''}
         ${message.error ? `<div class="inline-notice ${String(message.error).startsWith('已切换到本地规则引擎') ? 'warning' : 'error'}">${esc(message.error)}</div>` : ''}
@@ -2037,7 +2044,60 @@ function renderConversationMessage(message, session = null) {
   `;
 }
 
-function renderComposer(draft = {}, busy = false, session = null) {
+function buildConversationProviderOptions(aiSettingsBundle = null, activeProvider = null) {
+  const providers = Array.isArray(aiSettingsBundle?.providers?.providers) ? aiSettingsBundle.providers.providers : [];
+  const localModels = Array.isArray(aiSettingsBundle?.localModels?.models) ? aiSettingsBundle.localModels.models : [];
+  const runtimeModels = new Set(
+    (Array.isArray(aiSettingsBundle?.localRuntime?.models) ? aiSettingsBundle.localRuntime.models : [])
+      .map((item) => String(item || '').trim())
+      .filter(Boolean),
+  );
+  const options = [];
+  const seen = new Set();
+  providers
+    .filter((item) => item && item.enabled)
+    .forEach((item) => {
+      const providerId = String(item.id || '').trim();
+      if (!providerId) return;
+      const modelName = String(item.model_name || '').trim();
+      const isLocal = String(item.mode || '') === 'local' || String(item.provider || '') === 'local_openai_compatible';
+      const runtimeReady = !isLocal || !modelName || runtimeModels.has(modelName);
+      const key = `provider:${providerId}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      options.push({
+        value: key,
+        label: String(item.name || modelName || providerId).trim() || providerId,
+        detail: modelName && modelName !== item.name ? modelName : '',
+        disabled: !runtimeReady,
+        selected: providerId === String(activeProvider?.id || '').trim(),
+      });
+    });
+  localModels
+    .filter((item) => item && (item.runtime_available || runtimeModels.has(String(item.runtime_model_name || '').trim())))
+    .forEach((item) => {
+      const repoId = String(item.repo_id || '').trim();
+      if (!repoId) return;
+      const runtimeModelName = String(item.runtime_model_name || '').trim();
+      const providerMatch = providers.find((provider) => String(provider?.model_name || '').trim() === runtimeModelName);
+      if (providerMatch) return;
+      const key = `local:${repoId}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      options.push({
+        value: key,
+        label: String(item.display_name || repoId).trim() || repoId,
+        detail: runtimeModelName || repoId,
+        disabled: false,
+        selected: runtimeModelName && runtimeModelName === String(activeProvider?.model_name || '').trim(),
+      });
+    });
+  return options;
+}
+
+function renderComposer(draft = {}, busy = false, session = null, activeProvider = null, providerOptions = []) {
+  const providerLabel = String(activeProvider?.name || activeProvider?.model_name || '').trim();
+  const providerModel = String(activeProvider?.model_name || '').trim();
   return `
     <section class="prompt-composer-shell">
       <form class="prompt-composer" id="conversationComposerForm">
@@ -2050,6 +2110,18 @@ function renderComposer(draft = {}, busy = false, session = null) {
         <div class="composer-toolbar">
           <div class="composer-toolbar-left">
             <button class="composer-icon-button" type="button" id="conversationUploadTrigger" title="添加附件">+</button>
+            ${providerLabel ? `<span class="composer-provider-chip" title="当前发送将使用该模型">${esc(providerLabel)}${providerModel && providerModel !== providerLabel ? ` · ${esc(providerModel)}` : ''}</span>` : ''}
+            ${providerOptions.length ? `
+              <label class="composer-model-select-wrap" title="切换后，下一条消息会直接调用新模型">
+                <select id="conversationProviderSelect" class="composer-model-select" ${busy ? 'disabled' : ''}>
+                  ${providerOptions.map((item) => `
+                    <option value="${esc(item.value)}" ${item.selected ? 'selected' : ''} ${item.disabled ? 'disabled' : ''}>
+                      ${esc(item.detail ? `${item.label} · ${item.detail}` : item.label)}${item.disabled ? '（未就绪）' : ''}
+                    </option>
+                  `).join('')}
+                </select>
+              </label>
+            ` : ''}
           </div>
           <button class="primary composer-send-button" id="conversationSendButton" type="submit" ${busy ? 'disabled' : ''}>${busy ? '发送中...' : '发送'}</button>
         </div>
@@ -2104,7 +2176,7 @@ function renderAttachmentPreviewModal(attachment = null, editable = false) {
   `;
 }
 
-function renderConversationWorkspace({ session = null, messages = [], draft = {}, busy = false, previewAttachment = null, editablePreview = false } = {}) {
+function renderConversationWorkspace({ session = null, messages = [], draft = {}, busy = false, previewAttachment = null, editablePreview = false, activeProvider = null, providerOptions = [] } = {}) {
   return `
     <section class="conversation-workspace">
       <div class="main-conversation-view">
@@ -2119,7 +2191,7 @@ function renderConversationWorkspace({ session = null, messages = [], draft = {}
           </div>
         `}
       </div>
-      ${renderComposer(draft, busy, session)}
+      ${renderComposer(draft, busy, session, activeProvider, providerOptions)}
       ${renderAttachmentPreviewModal(previewAttachment, editablePreview)}
     </section>
   `;
@@ -2137,6 +2209,7 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
         let messages = routeSessionId ? readSessionMessages(routeSessionId) : [];
         let composerDraft = readComposerDraft(draftKey);
         let aiSettingsBundle = null;
+        let activeProvider = null;
         let busy = false;
         let previewAttachmentId = '';
         let replaceAttachmentId = '';
@@ -2188,6 +2261,7 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
         function rerender() {
           updateSessionSnapshot();
           const previewAttachment = activePreviewAttachment();
+          const providerOptions = buildConversationProviderOptions(aiSettingsBundle, activeProvider);
           root.innerHTML = renderConversationWorkspace({
             session,
             messages,
@@ -2195,10 +2269,20 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
             busy,
             previewAttachment,
             editablePreview: editablePreviewAttachment(),
+            activeProvider,
+            providerOptions,
           });
           bind();
           const scroller = root.querySelector('.main-conversation-view');
           if (scroller && messages.length) scroller.scrollTop = scroller.scrollHeight;
+        }
+
+        function currentProviderPatch(provider = activeProvider) {
+          return {
+            provider_id: String(provider?.id || '').trim(),
+            model_name: String(provider?.model_name || '').trim(),
+            model_label: String(provider?.name || provider?.model_name || '').trim(),
+          };
         }
 
         async function uploadAttachment(file, replacingId = '') {
@@ -2278,6 +2362,8 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
             session = currentSession;
           }
           const workflowContext = syncAiDraft(text, attachments);
+          const conversationHistory = buildConversationHistoryContext(messages, 8);
+          const memoryContext = buildAiMemoryContext(readAiMemoryEntries(), 8);
           const userMessage = buildMessage({
             role: 'user',
             text,
@@ -2297,6 +2383,7 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
             summary: '正在分析下一步',
             asset_ids: attachments.map((item) => item.asset_id).filter(Boolean),
             last_message_preview: text,
+            ...currentProviderPatch(activeProvider),
           });
           composerDraft = { text: '', attachments: [], mode: 'default', updated_at: new Date().toISOString() };
           persistCurrentDraft();
@@ -2305,7 +2392,7 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
             ctx.navigate(`ai/chat/${encodeURIComponent(currentSession.session_id)}`);
           }
           try {
-            if (!aiSettingsBundle) aiSettingsBundle = await loadAISettingsBundle(ctx).catch(() => null);
+            aiSettingsBundle = await loadAISettingsBundle(ctx).catch(() => aiSettingsBundle);
             const runtimeConfig = buildPlannerRuntime(aiSettingsBundle, inferPlannerScopeHint({
               goal: text,
               assetIds: attachments.map((item) => item.asset_id).filter(Boolean),
@@ -2313,12 +2400,17 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
               currentModelId: '',
               sourcePath: readAiWorkflowDraft()?.source_path || '',
             }));
+            activeProvider = aiSettingsBundle?.providers?.default_provider
+              || (aiSettingsBundle?.providers?.providers || []).find((item) => item?.id === runtimeConfig?.llmSelection?.provider_id)
+              || activeProvider;
             const plan = await ctx.post('/assistant/plan', {
               goal: text,
               asset_ids: attachments.map((item) => item.asset_id).filter(Boolean),
               current_task_type: '',
               current_model_id: '',
               workflow_context: workflowContext,
+              conversation_history: conversationHistory,
+              memory_context: memoryContext,
               llm_mode: runtimeConfig.llmMode,
               llm_selection: runtimeConfig.llmSelection,
               api_config: runtimeConfig.apiConfig,
@@ -2343,6 +2435,9 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
               primary_action: plan.primary_action || null,
               workflow_context: workflowContext,
               last_message_preview: assistantMessage.text,
+              provider_id: String(plan?.provider_used?.provider_id || activeProvider?.id || '').trim(),
+              model_name: String(plan?.provider_used?.model_name || activeProvider?.model_name || '').trim(),
+              model_label: String(plan?.provider_used?.name || activeProvider?.name || activeProvider?.model_name || '').trim(),
             });
             rememberAiSession({
               sessionId: currentSession.session_id,
@@ -2379,6 +2474,7 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
               primary_action: plan.primary_action || null,
               workflow_context: workflowContext,
               last_message_preview: fallbackMessage.text,
+              ...currentProviderPatch(activeProvider),
             });
             ctx.toast('智能规划服务暂时不可用，已切换到本地规则引擎。', 'error');
           } finally {
@@ -2441,6 +2537,7 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
           const textarea = root.querySelector('#conversationComposerInput');
           const fileInput = root.querySelector('#conversationFileInput');
           const replaceInput = root.querySelector('#conversationReplaceInput');
+          const providerSelect = root.querySelector('#conversationProviderSelect');
 
           function autosize() {
             if (!textarea) return;
@@ -2465,6 +2562,33 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
             await sendMessage();
           });
           root.querySelector('#conversationUploadTrigger')?.addEventListener('click', () => fileInput?.click());
+          providerSelect?.addEventListener('change', async () => {
+            const nextValue = String(providerSelect.value || '').trim();
+            if (!nextValue) return;
+            providerSelect.disabled = true;
+            try {
+              if (nextValue.startsWith('provider:')) {
+                const providerId = nextValue.slice('provider:'.length);
+                await ctx.post(`/settings/ai/providers/${encodeURIComponent(providerId)}/default`, {});
+              } else if (nextValue.startsWith('local:')) {
+                const repoId = nextValue.slice('local:'.length);
+                await ctx.post(`/settings/llm/local-models/${encodeURIComponent(repoId)}/activate`, {});
+              }
+              aiSettingsBundle = await loadAISettingsBundle(ctx).catch(() => aiSettingsBundle);
+              activeProvider = aiSettingsBundle?.providers?.default_provider
+                || (aiSettingsBundle?.providers?.providers || []).find((item) => item?.is_default)
+                || activeProvider;
+              if (session?.session_id) {
+                touchConversationSession(session.session_id, currentProviderPatch(activeProvider));
+              }
+              const activeLabel = String(activeProvider?.name || activeProvider?.model_name || '').trim();
+              ctx.toast(activeLabel ? `已切换到 ${activeLabel}` : '已切换模型');
+              rerender();
+            } catch (error) {
+              providerSelect.disabled = false;
+              ctx.toast(error.message || '切换模型失败', 'error');
+            }
+          });
           fileInput?.addEventListener('change', async () => {
             const files = Array.from(fileInput.files || []);
             fileInput.value = '';
@@ -2564,6 +2688,8 @@ function createConversationWorkspacePage({ sessionMode = false } = {}) {
           });
         }
 
+        aiSettingsBundle = await loadAISettingsBundle(ctx).catch(() => null);
+        activeProvider = aiSettingsBundle?.providers?.default_provider || null;
         rerender();
       },
     };
@@ -14763,7 +14889,9 @@ function pageSettings(route, rawCtx) {
                   const job = latestJobByRepo.get(repoId) || null;
                   const provider = localProviderByRepo.get(repoId) || localProviderByRepo.get(String(item.runtime_model_name || '').trim()) || null;
                   const isRunning = ['starting', 'running'].includes(String(job?.status || ''));
-                  const isReady = Boolean(item.installed || item.runtime_available);
+                  const hasRuntimeAlias = Boolean(item.runtime_model_name);
+                  const runtimeNeedsSync = Boolean(hasRuntimeAlias && !item.runtime_available);
+                  const isReady = Boolean(item.runtime_available);
                   const isDefaultProvider = Boolean(provider?.enabled && provider?.is_default);
                   const runtimeTarget = String(provider?.model_name || item.runtime_model_name || repoId || '').trim();
                   const runtimeAvailable = Boolean(item.runtime_available) || runtimeModels.includes(runtimeTarget);
@@ -14777,7 +14905,11 @@ function pageSettings(route, rawCtx) {
                     : (isDefaultProvider && isReady)
                       ? '已接入对话'
                       : isReady
-                        ? '已下载'
+                        ? '已就绪'
+                        : runtimeNeedsSync
+                          ? '待同步到运行时'
+                          : item.installed
+                            ? '仅本地快照'
                         : String(job?.status || '') === 'failed'
                           ? '下载失败'
                           : '未下载';
@@ -14792,7 +14924,7 @@ function pageSettings(route, rawCtx) {
                     </div>
                     <div class="selection-card-meta selection-card-meta--compact">
                       <span>本地快照</span><strong>${esc(item.installed ? formatFileSize(item.local_size_bytes || job?.downloaded_bytes || 0) : (item.runtime_available ? '运行时已安装' : '未准备'))}</strong>
-                      <span>当前状态</span><strong>${esc(job?.progress_label || (runtimeAvailable ? '可直接对话' : isReady ? '可接入对话' : '等待下载'))}</strong>
+                      <span>当前状态</span><strong>${esc(job?.progress_label || (runtimeAvailable ? '可直接对话' : runtimeNeedsSync ? '需同步到运行时' : isReady ? '可接入对话' : '等待下载'))}</strong>
                       <span>接入 Provider</span><strong>${esc(provider?.name || '未接入')}</strong>
                       <span>模型名</span><strong>${esc(runtimeTarget || '-')}</strong>
                     </div>
@@ -14814,13 +14946,13 @@ function pageSettings(route, rawCtx) {
                       </div>
                     ` : ''}
                     <div class="page-hero-actions llm-local-card-actions">
-                      ${!isRunning && !item.runtime_available ? `<button class="ghost" type="button" data-ai-local-download="${esc(repoId)}">${esc(job?.status === 'failed' ? '重新下载' : '下载')}</button>` : ''}
+                      ${!isRunning && !item.runtime_available ? `<button class="ghost" type="button" data-ai-local-download="${esc(repoId)}">${esc(job?.status === 'failed' ? '重新同步' : (runtimeNeedsSync ? '同步到运行时' : '下载'))}</button>` : ''}
                       ${isRunning ? `<button class="ghost" type="button" data-ai-download-cancel="${esc(job?.job_id || '')}">取消</button>` : ''}
                       ${item.installed ? `<button class="ghost" type="button" data-ai-local-open="${esc(repoId)}">打开文件夹</button>` : ''}
                       ${isReady ? `<button class="${isDefaultProvider ? 'ghost' : 'primary'}" type="button" data-ai-local-activate="${esc(repoId)}" ${isDefaultProvider ? 'disabled' : ''}>${esc(isDefaultProvider ? '已接入对话' : '接入对话')}</button>` : ''}
                       ${(item.installed || item.runtime_available) ? `<button class="ghost" type="button" data-ai-local-delete="${esc(repoId)}">${esc(item.installed ? '删除快照' : '移除运行时模型')}</button>` : ''}
                     </div>
-                    ${provider ? `<div class="hint llm-local-provider-note">${esc(runtimeAvailable ? `当前服务已暴露该模型，可直接进入对话。` : `当前将通过 ${provider.base_url || '-'} 上的本地兼容服务使用这版模型；若服务里还没加载这版模型，对话仍不可用。`)}</div>` : item.runtime_available ? `<div class="hint llm-local-provider-note">${esc(`本地推理服务里已存在 ${item.runtime_model_name || runtimeTarget}，可直接接入对话，无需重复下载。`)}</div>` : '<div class="hint llm-local-provider-note">下载完成后会自动接入默认本地对话 Provider。</div>'}
+                    ${provider ? `<div class="hint llm-local-provider-note">${esc(runtimeAvailable ? `当前服务已暴露该模型，可直接进入对话。` : `当前将通过 ${provider.base_url || '-'} 上的本地兼容服务使用这版模型；但运行时还没加载 ${runtimeTarget}，先同步到运行时后才能对话。`)}</div>` : item.runtime_available ? `<div class="hint llm-local-provider-note">${esc(`本地推理服务里已存在 ${item.runtime_model_name || runtimeTarget}，可直接接入对话，无需重复下载。`)}</div>` : runtimeNeedsSync ? `<div class="hint llm-local-provider-note">已下载快照，但这不等于可对话。还需要把 ${esc(item.runtime_model_name || runtimeTarget)} 同步到本地运行时。</div>` : '<div class="hint llm-local-provider-note">下载完成后会自动接入默认本地对话 Provider。</div>'}
                   </article>
                 `;
                 }).join('')}

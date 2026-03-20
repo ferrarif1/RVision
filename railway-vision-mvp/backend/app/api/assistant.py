@@ -30,6 +30,9 @@ class AssistantPlannerRequest(BaseModel):
     llm_mode: str = Field(default="disabled", description="disabled | api | local")
     llm_selection: dict = Field(default_factory=dict, description="当前选择的大模型信息")
     api_config: dict = Field(default_factory=dict, description="OpenAI 兼容 API 配置，只在本次规划时使用")
+    workflow_context: dict = Field(default_factory=dict, description="当前流程上下文")
+    conversation_history: list[dict] = Field(default_factory=list, description="最近的对话历史")
+    memory_context: list[dict] = Field(default_factory=list, description="本地持久化记忆摘要")
 
 
 class LocalLlmDownloadRequest(BaseModel):
@@ -168,6 +171,9 @@ def create_assistant_plan(
         llm_mode=payload.llm_mode,
         llm_selection=payload.llm_selection,
         api_config=payload.api_config,
+        workflow_context=payload.workflow_context,
+        conversation_history=payload.conversation_history,
+        memory_context=payload.memory_context,
     )
     record_audit(
         db,

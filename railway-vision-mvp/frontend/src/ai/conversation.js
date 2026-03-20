@@ -68,6 +68,26 @@ function normalizeSession(session = {}) {
     workflow_context: session.workflow_context ? clone(session.workflow_context) : null,
     last_message_preview: String(session.last_message_preview || '').trim(),
     message_count: Number(session.message_count || 0) || 0,
+    provider_id: String(session.provider_id || '').trim(),
+    model_name: String(session.model_name || '').trim(),
+    model_label: String(session.model_label || '').trim(),
+  };
+}
+
+function normalizeMemoryEntry(entry = {}) {
+  return {
+    id: String(entry.id || '').trim(),
+    title: String(entry.title || '未命名记忆').trim() || '未命名记忆',
+    summary: String(entry.summary || '').trim(),
+    content: String(entry.content || '').trim(),
+    source_session_id: String(entry.source_session_id || '').trim(),
+    source_message_id: String(entry.source_message_id || '').trim(),
+    task_type: String(entry.task_type || '').trim(),
+    asset_ids: Array.isArray(entry.asset_ids) ? entry.asset_ids.map((item) => String(item || '').trim()).filter(Boolean) : [],
+    model_name: String(entry.model_name || '').trim(),
+    model_label: String(entry.model_label || '').trim(),
+    created_at: String(entry.created_at || new Date().toISOString()).trim(),
+    updated_at: String(entry.updated_at || entry.created_at || new Date().toISOString()).trim(),
   };
 }
 
@@ -97,6 +117,37 @@ export function readAiMessageMap() {
 
 export function persistAiMessageMap(value) {
   writeStorageJson(STORAGE_KEYS.aiMessageMap, value && typeof value === 'object' ? value : {});
+}
+
+export function readAiMemoryEntries() {
+  const value = safeStorageJson(STORAGE_KEYS.aiMemoryEntries, []);
+  return (Array.isArray(value) ? value : [])
+    .map(normalizeMemoryEntry)
+    .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))
+    .slice(0, 40);
+}
+
+export function persistAiMemoryEntries(rows) {
+  writeStorageJson(STORAGE_KEYS.aiMemoryEntries, (Array.isArray(rows) ? rows : []).map(normalizeMemoryEntry).slice(0, 40));
+}
+
+export function upsertAiMemoryEntry(entry = {}) {
+  const normalized = normalizeMemoryEntry(entry);
+  if (!normalized.id) return normalized;
+  const next = [
+    normalized,
+    ...readAiMemoryEntries().filter((item) => item.id !== normalized.id),
+  ]
+    .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))
+    .slice(0, 40);
+  persistAiMemoryEntries(next);
+  return normalized;
+}
+
+export function removeAiMemoryEntry(memoryId = '') {
+  const key = String(memoryId || '').trim();
+  if (!key) return;
+  persistAiMemoryEntries(readAiMemoryEntries().filter((item) => item.id !== key));
 }
 
 export function readSessionMessages(sessionId) {
@@ -240,6 +291,69 @@ export function createConversationSession({
 
 export function listConversationSessions() {
   return readAiSessions().map(normalizeSession);
+}
+
+export function saveConversationMemory(sessionId = '', { modelName = '', modelLabel = '' } = {}) {
+  const key = String(sessionId || '').trim();
+  if (!key) return null;
+  const session = listConversationSessions().find((item) => item.session_id === key) || null;
+  const messages = readSessionMessages(key)
+    .filter((item) => item.kind !== 'typing' && String(item.text || '').trim())
+    .slice(-8);
+  if (!session && !messages.length) return null;
+  const assistantSummary = [...messages].reverse().find((item) => item.role === 'assistant' && item.text)?.text || '';
+  const content = messages
+    .map((item) => `${item.role === 'user' ? '用户' : 'AI'}：${String(item.text || '').trim()}`)
+    .filter(Boolean)
+    .join('\n');
+  const existing = readAiMemoryEntries().find((item) => item.source_session_id === key);
+  return upsertAiMemoryEntry({
+    id: existing?.id || `mem-${key}`,
+    title: String(session?.title || '会话记忆').trim() || '会话记忆',
+    summary: String(session?.summary || assistantSummary || content.slice(0, 120) || '已保存当前会话上下文').trim(),
+    content,
+    source_session_id: key,
+    task_type: String(session?.task_type || '').trim(),
+    asset_ids: Array.isArray(session?.asset_ids) ? session.asset_ids : [],
+    model_name: String(modelName || session?.model_name || '').trim(),
+    model_label: String(modelLabel || session?.model_label || '').trim(),
+    created_at: existing?.created_at || new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+}
+
+export function buildConversationHistoryContext(messages = [], limit = 8) {
+  return (Array.isArray(messages) ? messages : [])
+    .filter((item) => item && item.kind !== 'typing' && (String(item.text || '').trim() || (Array.isArray(item.attachments) && item.attachments.length)))
+    .slice(-Math.max(1, limit))
+    .map((item) => ({
+      role: String(item.role || 'assistant').trim() || 'assistant',
+      text: String(item.text || '').trim(),
+      created_at: String(item.created_at || '').trim(),
+      attachments: Array.isArray(item.attachments)
+        ? item.attachments.slice(0, 4).map((attachment) => ({
+          asset_id: String(attachment?.asset_id || '').trim(),
+          name: String(attachment?.name || '').trim(),
+          type: String(attachment?.type || 'file').trim(),
+        }))
+        : [],
+    }));
+}
+
+export function buildAiMemoryContext(entries = [], limit = 8) {
+  return (Array.isArray(entries) ? entries : [])
+    .slice(0, Math.max(1, limit))
+    .map((item) => ({
+      id: String(item.id || '').trim(),
+      title: String(item.title || '').trim(),
+      summary: String(item.summary || '').trim(),
+      content: String(item.content || '').trim(),
+      task_type: String(item.task_type || '').trim(),
+      asset_ids: Array.isArray(item.asset_ids) ? item.asset_ids.slice(0, 8).map((part) => String(part || '').trim()).filter(Boolean) : [],
+      model_name: String(item.model_name || '').trim(),
+      updated_at: String(item.updated_at || '').trim(),
+    }))
+    .filter((item) => item.title || item.summary || item.content);
 }
 
 export function buildMessage({

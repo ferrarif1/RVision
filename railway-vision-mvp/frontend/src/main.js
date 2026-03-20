@@ -3,6 +3,7 @@ import { createRouter } from './core/router.js';
 import { api, apiPost } from './core/api.js';
 import { setNotifier } from './core/notifier.js';
 import { buildDocumentTitle, migrateLegacyStorageKeys, STORAGE_KEYS } from './config/brand.js';
+import { removeAiMemoryEntry, removeConversationSession, saveConversationMemory } from './ai/conversation.js';
 import { persistAiWorkflowDraft, readAiLastPlan, readAiWorkflowDraft } from './ai/runtime.js';
 import { WorkflowNavigationController, WorkflowSessionStore } from './ai/workflow.js';
 import { renderShell, bindShellEvents } from './layout/AppShell.js';
@@ -101,6 +102,10 @@ function clearSession() {
   localStorage.removeItem(STORAGE_KEYS.aiPendingConfirmations);
   localStorage.removeItem(STORAGE_KEYS.aiLastPlan);
   localStorage.removeItem(STORAGE_KEYS.aiWorkflowDraft);
+  localStorage.removeItem(STORAGE_KEYS.aiMessageMap);
+  localStorage.removeItem(STORAGE_KEYS.aiComposerDraftMap);
+  localStorage.removeItem(STORAGE_KEYS.aiActiveSessionId);
+  localStorage.removeItem(STORAGE_KEYS.aiMemoryEntries);
   WorkflowSessionStore.clear();
   localStorage.removeItem(STORAGE_KEYS.assistantApiKey);
 }
@@ -735,6 +740,30 @@ function render() {
   bindShellEvents(root, {
     onNavigate: (path) => router.navigate(path),
     onLogout: logout,
+    onSaveSessionMemory: (sessionId) => {
+      const entry = saveConversationMemory(sessionId);
+      if (!entry) {
+        toast('当前会话还没有可保存的内容', 'error');
+        return;
+      }
+      toast(`已保存记忆：${entry.title}`);
+      render();
+    },
+    onDeleteSession: (sessionId) => {
+      const activeSessionId = String(route.params?.sessionId || '').trim();
+      removeConversationSession(sessionId);
+      toast('会话记录已删除');
+      if (activeSessionId && activeSessionId === String(sessionId || '').trim()) {
+        router.navigate('ai');
+        return;
+      }
+      render();
+    },
+    onDeleteMemory: (memoryId) => {
+      removeAiMemoryEntry(memoryId);
+      toast('记忆已删除');
+      render();
+    },
     onBack: () => router.back(routeView.backPath || 'dashboard'),
     onOpenAiWorkspace: () => {
       primeAIContextFromExpertRoute(route);

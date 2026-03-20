@@ -112,9 +112,32 @@ def test_provider_connection(config: dict[str, Any]) -> dict[str, Any]:
         payload = resp.json()
     models = payload.get("data") if isinstance(payload, dict) else []
     model_count = len(models) if isinstance(models, list) else 0
+    model_name = str(config.get("model_name") or "").strip()
+    model_ids = {
+        str(item.get("id") or item.get("name") or "").strip()
+        for item in (models if isinstance(models, list) else [])
+        if isinstance(item, dict) and str(item.get("id") or item.get("name") or "").strip()
+    }
+    if model_name:
+        if model_count <= 0:
+            return {
+                "ok": False,
+                "message": f"服务在线，但当前没有暴露任何模型，无法使用 {model_name}。",
+                "tested_at": tested_at,
+                "model_count": model_count,
+                "api_root": api_root,
+            }
+        if model_name not in model_ids:
+            return {
+                "ok": False,
+                "message": f"服务在线，但模型 {model_name} 未加载到当前运行时。",
+                "tested_at": tested_at,
+                "model_count": model_count,
+                "api_root": api_root,
+            }
     return {
         "ok": True,
-        "message": "连接成功，可继续作为 AI provider 使用。",
+        "message": "连接成功，当前模型已可用于对话。" if model_name else "连接成功，可继续作为 AI provider 使用。",
         "tested_at": tested_at,
         "model_count": model_count,
         "api_root": api_root,
@@ -130,8 +153,34 @@ def request_planner_completion(*, config: dict[str, Any], system_prompt: str, pa
     timeout = max(5, min(300, int(config.get("timeout") or 45)))
     max_tokens = int(config.get("max_tokens") or 900)
     if mode == "local":
-        timeout = max(timeout, 120)
-        max_tokens = min(max_tokens, 256)
+        timeout = max(timeout, 300)
+        max_tokens = min(max_tokens, 96)
+        compact_payload = {
+            "goal": str(payload.get("goal") or "").strip(),
+            "task_type": str(payload.get("task_type") or "").strip(),
+            "workflow_scope": str(payload.get("workflow_scope") or "").strip(),
+            "workflow_context": payload.get("workflow_context") if isinstance(payload.get("workflow_context"), dict) else {},
+            "recent_user_message": "",
+            "memory_hint": "",
+            "response_style": "compact_json",
+        }
+        history_rows = payload.get("conversation_history") if isinstance(payload.get("conversation_history"), list) else []
+        memory_rows = payload.get("memory_context") if isinstance(payload.get("memory_context"), list) else []
+        recent_user = next(
+            (str(item.get("text") or "").strip() for item in reversed(history_rows) if isinstance(item, dict) and str(item.get("role") or "").strip() == "user" and str(item.get("text") or "").strip()),
+            "",
+        )
+        memory_hint = next(
+            (
+                str(item.get("summary") or item.get("title") or item.get("content") or "").strip()
+                for item in memory_rows
+                if isinstance(item, dict) and str(item.get("summary") or item.get("title") or item.get("content") or "").strip()
+            ),
+            "",
+        )
+        compact_payload["recent_user_message"] = recent_user[:240]
+        compact_payload["memory_hint"] = memory_hint[:240]
+        payload = compact_payload
     body = {
         "model": model_name,
         "messages": [
@@ -139,12 +188,45 @@ def request_planner_completion(*, config: dict[str, Any], system_prompt: str, pa
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],
         "temperature": float(config.get("temperature") or 0.2),
-        "max_tokens": max(64, min(4096, max_tokens)),
+        "max_tokens": max(32, min(4096, max_tokens)),
         "response_format": {"type": "json_object"},
         "stream": False,
     }
     headers = _build_headers(config)
     with httpx.Client(timeout=timeout, follow_redirects=True, trust_env=False) as client:
+        if mode == "local":
+            ollama_root = _strip_v1_root(str(config.get("base_url") or ""), str(config.get("api_path") or "/v1"))
+            prompt = (
+                f"{system_prompt}\n\n"
+                "只返回 JSON，对象只允许包含 summary、risks、suggested_path 三个字段。\n"
+                "summary 要短，risks 是字符串数组，suggested_path 是简短路径提示。\n\n"
+                f"{json.dumps(payload, ensure_ascii=False)}"
+            )
+            generate_resp = client.post(
+                f"{ollama_root}/api/generate",
+                headers={"Content-Type": "application/json"},
+                json={
+                    "model": model_name,
+                    "prompt": prompt,
+                    "stream": False,
+                    "format": "json",
+                    "options": {
+                        "temperature": body["temperature"],
+                        "num_predict": body["max_tokens"],
+                        "num_ctx": 1024,
+                    },
+                },
+            )
+            generate_resp.raise_for_status()
+            data = generate_resp.json()
+            content = data.get("response")
+            if not content:
+                return None
+            try:
+                parsed = json.loads(content)
+            except Exception:
+                parsed = {"summary": str(content).strip()}
+            return normalize_planner_response(parsed)
         try:
             resp = client.post(f"{api_root}/chat/completions", headers=headers, json=body)
             resp.raise_for_status()

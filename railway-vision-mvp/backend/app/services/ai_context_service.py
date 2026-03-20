@@ -33,8 +33,8 @@ def assemble_ai_context(*, workflow_scope: str = "global", task_type: str | None
     doc_rows = list_ai_knowledge_documents().get("documents") or []
     active_docs: list[dict[str, Any]] = []
     excerpts: list[str] = []
-    excerpt_limit = 420 if compact else 1800
-    excerpt_doc_limit = 2 if compact else 4
+    excerpt_limit = 120 if compact else 1800
+    excerpt_doc_limit = 1 if compact else 4
     for row in doc_rows:
         if not row.get("enabled"):
             continue
@@ -56,7 +56,11 @@ def assemble_ai_context(*, workflow_scope: str = "global", task_type: str | None
         if excerpt:
             excerpts.append(f"[{row.get('title')}]\n{excerpt}")
     system_prompt_parts = [str(behavior.get("system_prompt") or "").strip()]
-    system_prompt_parts.append("请只基于当前产品真实能力给建议，并明确区分 AI Workspace 与 Expert Console。")
+    if compact:
+        system_prompt_parts.append("你是平台内的本地规划模型。只输出紧凑 JSON，不要解释。")
+        system_prompt_parts.append("建议必须基于当前产品真实能力，优先给下一步动作。")
+    else:
+        system_prompt_parts.append("请只基于当前产品真实能力给建议，并明确区分 AI Workspace 与 Expert Console。")
     if behavior.get("strict_document_mode"):
         system_prompt_parts.append("严格按系统文档和已知能力边界回答，不要编造不存在的功能。")
     if behavior.get("prefer_workflow_jump"):
@@ -65,7 +69,7 @@ def assemble_ai_context(*, workflow_scope: str = "global", task_type: str | None
         system_prompt_parts.append(f"当前推断任务类型：{task_type}。")
     if goal:
         system_prompt_parts.append(f"当前用户目标：{goal}。")
-    if excerpts:
+    if excerpts and not compact:
         if compact:
             system_prompt_parts.append("系统文档摘录：\n" + "\n\n".join(excerpts[:excerpt_doc_limit]))
         else:

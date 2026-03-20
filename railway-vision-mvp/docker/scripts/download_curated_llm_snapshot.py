@@ -50,6 +50,7 @@ def run_ollama_pull(*, status_path: Path, log_path: Path, base_payload: dict, ba
     )
     latest_downloaded = 0
     latest_total = 0
+    event_error = ""
     with log_path.open("a", encoding="utf-8") as log_file:
         log_file.write(f"[{now_iso()}] start ollama pull {runtime_model}\n")
         running_payload = dict(base_payload)
@@ -67,6 +68,21 @@ def run_ollama_pull(*, status_path: Path, log_path: Path, base_payload: dict, ba
                         event = json.loads(line)
                     except Exception:
                         continue
+                    if str(event.get("error") or "").strip():
+                        event_error = str(event.get("error") or "").strip()
+                        failed_payload = dict(base_payload)
+                        failed_payload.update(
+                            {
+                                "status": "failed",
+                                "finished_at": now_iso(),
+                                "error": event_error,
+                                "downloaded_bytes": latest_downloaded,
+                                "total_bytes": latest_total,
+                                "runtime_ready": False,
+                            }
+                        )
+                        write_status(status_path, failed_payload)
+                        return 1
                     latest_downloaded = int(event.get("completed") or latest_downloaded or 0)
                     latest_total = int(event.get("total") or latest_total or 0)
                     progress_pct = 0
@@ -101,6 +117,22 @@ def run_ollama_pull(*, status_path: Path, log_path: Path, base_payload: dict, ba
             write_status(status_path, failed_payload)
             return 1
 
+    runtime_ready = ollama_model_ready(base_url, runtime_model)
+    if not runtime_ready:
+        failed_payload = dict(base_payload)
+        failed_payload.update(
+            {
+                "status": "failed",
+                "finished_at": now_iso(),
+                "error": f"{runtime_model} 未出现在运行时模型列表中",
+                "downloaded_bytes": latest_downloaded,
+                "total_bytes": latest_total,
+                "runtime_ready": False,
+            }
+        )
+        write_status(status_path, failed_payload)
+        return 1
+
     succeeded_payload = dict(base_payload)
     succeeded_payload.update(
         {
@@ -110,7 +142,7 @@ def run_ollama_pull(*, status_path: Path, log_path: Path, base_payload: dict, ba
             "total_bytes": latest_total,
             "progress_pct": 100,
             "progress_label": "已完成",
-            "runtime_ready": ollama_model_ready(base_url, runtime_model),
+            "runtime_ready": runtime_ready,
         }
     )
     write_status(status_path, succeeded_payload)

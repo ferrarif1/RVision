@@ -1,6 +1,6 @@
 import { PERMISSIONS } from '../core/api.js';
 import { BRAND_NAME } from '../config/brand.js';
-import { listConversationSessions } from '../ai/conversation.js';
+import { listConversationSessions, readAiMemoryEntries } from '../ai/conversation.js';
 
 const ROLE_LABELS = {
   platform_admin: '平台管理员',
@@ -137,6 +137,7 @@ function renderConversationSidebar(state, routeView) {
   const route = state.route || {};
   const activeSessionId = String(route.params?.sessionId || '').trim();
   const sessions = listConversationSessions().slice(0, 18);
+  const memories = readAiMemoryEntries().slice(0, 6);
   const workflowItems = [
     { path: 'ai/workflow/upload', title: '上传流程' },
     { path: 'ai/workflow/train', title: '训练流程' },
@@ -159,6 +160,20 @@ function renderConversationSidebar(state, routeView) {
               <span>${esc(item.last_message_preview || item.summary || item.workflow_context?.current_step_title || '等待输入')}</span>
             </button>
           `).join('') : '<div class="conversation-empty">还没有会话</div>'}
+        </div>
+      </div>
+      <div class="conversation-sidebar-section">
+        <span class="conversation-sidebar-label">记忆</span>
+        <div class="conversation-memory-list">
+          ${memories.length ? memories.map((item) => `
+            <article class="conversation-memory-item">
+              <div class="conversation-memory-copy">
+                <strong>${esc(item.title || '未命名记忆')}</strong>
+                <span>${esc(item.summary || item.content || '已保存的本地记忆')}</span>
+              </div>
+              <button class="ghost conversation-memory-delete" type="button" data-delete-memory="${esc(item.id)}">删除</button>
+            </article>
+          `).join('') : '<div class="conversation-empty">还没有记忆</div>'}
         </div>
       </div>
       <div class="conversation-sidebar-section">
@@ -192,6 +207,7 @@ export function renderShell({ state, routeView, contentHtml, commandPalette }) {
   const visibleSections = buildVisibleSections(can, routeView.mode || 'expert');
 
   if (routeView.mode === 'ai') {
+    const activeSessionId = String(state.route?.params?.sessionId || '').trim();
     return `
       <div class="conversation-app-shell">
         ${renderConversationSidebar(state, routeView)}
@@ -202,6 +218,8 @@ export function renderShell({ state, routeView, contentHtml, commandPalette }) {
               <div class="breadcrumb">${renderBreadcrumb(routeView)}</div>
             </div>
             <div class="conversation-topbar-actions">
+              ${activeSessionId ? `<button class="ghost" type="button" data-save-session-memory="${esc(activeSessionId)}">保存记忆</button>` : ''}
+              ${activeSessionId ? `<button class="ghost" type="button" data-delete-session="${esc(activeSessionId)}">删除会话</button>` : ''}
               <button id="openExpertConsoleBtnTop" class="ghost" type="button">工作台</button>
               <button class="ghost" type="button" data-nav="settings">设置</button>
             </div>
@@ -275,6 +293,9 @@ export function bindShellEvents(root, {
   onCommandExecute,
   onOpenAiWorkspace,
   onOpenExpertConsole,
+  onSaveSessionMemory,
+  onDeleteSession,
+  onDeleteMemory,
 }) {
   root.querySelectorAll('[data-nav]').forEach((btn) => {
     btn.addEventListener('click', () => onNavigate(btn.getAttribute('data-nav')));
@@ -301,5 +322,14 @@ export function bindShellEvents(root, {
       const idx = Number(btn.getAttribute('data-command-index') || 0);
       onCommandExecute(idx);
     });
+  });
+  root.querySelectorAll('[data-save-session-memory]').forEach((btn) => {
+    btn.addEventListener('click', () => onSaveSessionMemory?.(btn.getAttribute('data-save-session-memory') || ''));
+  });
+  root.querySelectorAll('[data-delete-session]').forEach((btn) => {
+    btn.addEventListener('click', () => onDeleteSession?.(btn.getAttribute('data-delete-session') || ''));
+  });
+  root.querySelectorAll('[data-delete-memory]').forEach((btn) => {
+    btn.addEventListener('click', () => onDeleteMemory?.(btn.getAttribute('data-delete-memory') || ''));
   });
 }

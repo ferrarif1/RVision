@@ -1,5 +1,5 @@
 {
-  "refreshed_at": "2026-03-19T23:57:12.944745+00:00",
+  "refreshed_at": "2026-03-20T00:50:41.500858+00:00",
   "ranking_policy": "按当前通用能力、推理能力、多语言能力、本地部署热度和工程可获得性人工编排。运行时会自动刷新 Hugging Face 官方元数据。",
   "last_updated": "2026-03-14",
   "models": [
@@ -20,6 +20,9 @@
       "context_window": "128K",
       "quant_hint": "建议优先 4bit / 8bit 部署",
       "official_url": "https://huggingface.co/openai/gpt-oss-20b",
+      "runtime_aliases": {
+        "ollama": "gpt-oss:20b"
+      },
       "runtime_metadata": {
         "downloads": 7468776,
         "likes": 4469,

@@ -14,7 +14,10 @@
       "recommended_for": "默认本地助手、复杂规划、工作流代理",
       "context_window": "128K",
       "quant_hint": "建议优先 4bit / 8bit 部署",
-      "official_url": "https://huggingface.co/openai/gpt-oss-20b"
+      "official_url": "https://huggingface.co/openai/gpt-oss-20b",
+      "runtime_aliases": {
+        "ollama": "gpt-oss:20b"
+      }
     },
     {
       "rank": 2,

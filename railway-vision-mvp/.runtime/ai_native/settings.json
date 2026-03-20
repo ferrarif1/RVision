@@ -57,7 +57,7 @@
       "mode": "local",
       "base_url": "http://host.docker.internal:11434",
       "api_path": "/v1",
-      "model_name": "openai/gpt-oss-20b",
+      "model_name": "gpt-oss:20b",
       "format_type": "openai_compatible",
       "organization": "",
       "project": "",
@@ -71,11 +71,11 @@
         "global"
       ],
       "created_at": "2026-03-19T12:57:49.872590+00:00",
-      "updated_at": "2026-03-19T23:59:13.132696+00:00",
+      "updated_at": "2026-03-20T01:59:56.322495+00:00",
       "last_test_result": {
-        "ok": true,
-        "message": "连接成功，可继续作为 AI provider 使用。",
-        "tested_at": "2026-03-19T23:59:13.109345+00:00",
+        "ok": false,
+        "message": "服务在线，但当前没有暴露任何模型，无法使用 gpt-oss:20b。",
+        "tested_at": "2026-03-20T00:35:50.714496+00:00",
         "model_count": 0,
         "api_root": "http://host.docker.internal:11434/v1"
       },
@@ -92,5 +92,5 @@
     "allow_auto_prefill": true,
     "updated_at": null
   },
-  "updated_at": "2026-03-19T23:59:13.132741+00:00"
+  "updated_at": "2026-03-20T01:59:56.324849+00:00"
 }
